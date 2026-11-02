@@ -1,10 +1,10 @@
 # Goal
-# Used when mode_pregenerated is false.
+# The goal picks its type. Regular wave: height and period, positions left empty.
 # Wave height H in meters and wave period in seconds.
 float64 height
 float64 period
 # Absolute wavemaker positions in meters, sampled at this fixed interval.
-# Used when mode_pregenerated is true.
+# Pregenerated: positions and sample_interval, height and period left at 0.
 float64[] positions
 float64 sample_interval
 ---

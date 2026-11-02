@@ -99,7 +99,6 @@ public:
       std::vector<double>{});
     declare_parameter<std::vector<double>>("wavemaker_transfer_gain_values", std::vector<double>{});
 
-    declare_parameter<bool>("mode_pregenerated", false);
     declare_parameter<double>("flap_attachment_height", 0.0);
     declare_parameter<double>("hinge_height", 0.0);
     declare_parameter<double>("actuator_upright_angle_deg", 0.0);
@@ -168,7 +167,8 @@ public:
       {"wavemaker_upright_is_minimum", "upright_is_minimum"},
       {"wavemaker_minimum", "travel_minimum_m"},
       {"wavemaker_maximum", "travel_maximum_m"},
-      {"wavemaker_mode_pregenerated", "mode_pregenerated"},
+      {"wavemaker_mode_pregenerated", ""},  // removed 2026-10-30: the goal picks its type
+      {"mode_pregenerated", ""},            // removed 2026-10-30: the goal picks its type
       {"wavemaker_id", ""},  // removed, it was not used
     };
     const auto & overrides = get_node_parameters_interface()->get_parameter_overrides();
@@ -188,7 +188,6 @@ public:
     driver_address_ = get_parameter("driver_address").as_string();
     wavemaker_position_offset_ = get_parameter("upright_position_m").as_double();
     upright_is_minimum_ = get_parameter("upright_is_minimum").as_bool();
-    mode_pregenerated_ = get_parameter("mode_pregenerated").as_bool();
     water_depth_ = get_parameter("water_depth").as_double();
     wavemaker_transfer_gain_ = get_parameter("wavemaker_transfer_gain").as_double();
     gain_periods_ = get_parameter("wavemaker_transfer_gain_periods").as_double_array();
@@ -799,13 +798,18 @@ private:
         start_position, goal_position_minimum_, goal_position_maximum_);
       return false;
     }
-    if (mode_pregenerated_) {
-      if (goal.positions.empty() || !std::isfinite(goal.sample_interval) ||
-        goal.sample_interval <= 0.0)
-      {
+    // The goal picks its type: positions -> pregenerated, otherwise a regular wave.
+    goal_pregenerated_ = !goal.positions.empty();
+    if (goal_pregenerated_) {
+      if (goal.height != 0.0 || goal.period != 0.0) {
         RCLCPP_WARN(
           get_logger(),
-          "Pregenerated mode:  goal requires positions and a positive sample_interval");
+          "Goal has both positions and height/period; send one or the other, rejecting");
+        return false;
+      }
+      if (!std::isfinite(goal.sample_interval) || goal.sample_interval <= 0.0) {
+        RCLCPP_WARN(
+          get_logger(), "Pregenerated goal needs a positive sample_interval, rejecting");
         return false;
       }
       for (const double position : goal.positions) {
@@ -831,17 +835,12 @@ private:
       }
       return accept_peak(pregenerated_.peak_velocity(), pregenerated_.peak_acceleration());
     }
-    if (!mode_pregenerated_ && !goal.positions.empty()) {
-      RCLCPP_WARN(
-        get_logger(),
-        "Received a pregenerated goal (positions), but mode_pregenerated is false; "
-        "relaunch with mode_pregenerated:=true, rejecting");
-      return false;
-    }
     if (!std::isfinite(goal.height) || !std::isfinite(goal.period) ||
       goal.height <= 0.0 || goal.period <= 0.0)
     {
-      RCLCPP_WARN(get_logger(), "Received goal with non-positive height or period, rejecting");
+      RCLCPP_WARN(
+        get_logger(),
+        "Received goal with non-positive height or period and no positions, rejecting");
       return false;
     }
     if (min_period_s_ > 0.0 && goal.period < min_period_s_) {
@@ -951,7 +950,7 @@ private:
 
   bool sample_goal(double elapsed, double & position, double & velocity) const
   {
-    if (mode_pregenerated_) {
+    if (goal_pregenerated_) {
       return pregenerated_.sample(elapsed, position, velocity);
     }
     trajectory_.sample(elapsed, position, velocity);
@@ -1391,7 +1390,7 @@ private:
   rig_controller::WaveTrajectory trajectory_;
   rig_controller::PregeneratedWaveTrajectory pregenerated_;
   double wavemaker_position_offset_{0.0};
-  bool mode_pregenerated_{false};
+  bool goal_pregenerated_{false};  // type of the accepted goal, set in prepare_goal
   double flap_attachment_height_{0.0};
   double hinge_height_{0.0};
   double water_depth_{0.0};

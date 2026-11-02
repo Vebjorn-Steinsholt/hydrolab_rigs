@@ -104,7 +104,8 @@ Type the commands as shown; the sudoers rule matches them exactly.
 3. `ros2 launch` escalates to SIGTERM after 20 s (`run.sh` sets `sigterm_timeout`), and systemd
    kills whatever is left after `TimeoutStopSec`.
 
-**Idle auto-stop.** After 2 h without a running wave, the web server does step 1 itself and exits,
+**Idle auto-stop.** After 2 h without motion (a wave, a `play_dat` goal or a return to
+upright), the web server does step 1 itself and exits,
 and the launch shuts down with it; the service then ends on its own (`inactive`). The page warns 10
 minutes before, with a **Keep running** button. See *Web page* in the top-level README.
 
@@ -150,6 +151,85 @@ journalctl -u wavemaker@ladertanken -b --no-pager -o cat | grep -E "ERROR|WARN|d
    warning appears after 5 min, Keep running restarts the count, and at the timeout everything
    stops and the launch exits.
 5. Reboot the Pi. `systemctl status wavemaker@ladertanken` reports `inactive (dead)`.
+
+### Goal type per goal and `play_dat` (TODO 26; written 2026-11-01, first run planned 2026-11-02)
+
+Checks the change that lets every goal pick its type (`mode_pregenerated` removed) and
+`play_dat` running next to the web page. Keep a hand near the e-stop: these are the first goals
+from this code on the drive. Run `play_dat` on the Pi (ssh), where the workspace is built; from
+another machine it needs `ROS_DOMAIN_ID=1` too.
+
+0. **Code on the Pi.** The changes must be committed and pushed on `feat/oscillator` first. On
+   the Pi:
+
+   ```bash
+   cd ~/ros_ws/src/ros2_wavemakers && git fetch && git checkout feat/oscillator && git pull
+   git log --oneline -1                      # the commit you expect
+   cd ~/ros_ws && colcon build
+   ```
+
+   Expected: `Summary: ... packages finished`, no failures.
+1. **Start.** `sudo systemctl start wavemaker@ladertanken`, then:
+
+   ```bash
+   journalctl -u wavemaker@ladertanken -b --no-pager -o cat | grep -E "ERROR|was removed|renamed"
+   ```
+
+   Expected: no output. "Parameter mode_pregenerated was removed" means a yaml file or launch
+   command still sets it. The page at `http://ladertanken-rpi.local:8080/` shows *idle*.
+2. **Regular wave from the page** (the bridge's goal, now without the mode parameter): height
+   0.02 m, period 1.0 s, Start. Expected: the wave runs and the plot follows. Stop: the page
+   shows "Stopped, holding position." Then Return to upright.
+3. **Test file and dry run** (on the Pi):
+
+   ```bash
+   source ~/ros_ws/install/setup.bash
+   export ROS_DOMAIN_ID=1
+   python3 ~/ros_ws/src/ros2_wavemakers/rig_controller/test/make_test_dat.py /tmp/test_runs.dat
+   ros2 run rig_controller play_dat /tmp/test_runs.dat --min-m -0.146 --max-m 0.146 \
+     --max-velocity-mps 0.54 --dry-run
+   ```
+
+   Expected: `6 runs, 67.5 s, max |x| 0.020 m, peak speed 0.157 m/s`, then runs 0-5, all
+   `regular`, status `OK`, exit 0. (±0.146 m is ±275° at 0.00053 m/deg; 0.02 m at the
+   attachment is about ±38° at the drive.)
+4. **One run with the page open:**
+
+   ```bash
+   ros2 run rig_controller play_dat /tmp/test_runs.dat --min-m -0.146 --max-m 0.146 \
+     --max-velocity-mps 0.54 --runs 1 --ros-args -r __ns:=/wavemakers/ladertanken
+   ```
+
+   Expected: after the 3 s gap, `run 1 (regular): 8.0 s, max 0.0200 m, 0.126 m/s`; the paddle
+   ramps up, makes 8 waves of 1.0 s and stops at upright; the page plots it (the status stays
+   *idle*, it shows the bridge's state); exit 0. In the journal: no "Rejecting goal".
+5. **Stop on the page during a run.** Start `--runs 3` (12 s) as above and press Stop after a few
+   seconds. Expected: the paddle stops and holds; `play_dat` logs `run 3: ended with status 5;
+   stopping` and exits 5; the journal shows the bridge's `Stop: 1 goal(s) canceling`. Return to
+   upright from the page.
+6. **Soft stop during a run.** Start `--runs 3` again and press the soft stop button. Expected:
+   the paddle halts, `play_dat` logs `ended with status 6` and exits 5, the journal shows the
+   soft stop. While the button is pressed a new `play_dat` exits 4 ("goal rejected"). Release,
+   Return to upright, and `--runs 1` plays again.
+7. **All runs and Ctrl-C.** Play the whole file (no `--runs`, about 68 s) and watch for 2-3 runs,
+   then Ctrl-C. Expected: the paddle stops within a moment, `play_dat` exits 130, the journal
+   shows the cancel.
+8. **Idle timer counts `play_dat`.** Stop the service and launch by hand with a short timeout:
+
+   ```bash
+   sudo systemctl stop wavemaker@ladertanken
+   source ~/ros_ws/install/setup.bash
+   export ROS_DOMAIN_ID=1
+   ros2 launch wavemaker_bringup lab.launch.py idle_timeout_s:=900
+   ```
+
+   Note the time. After about 4 min, play the whole file (68 s) in a second ssh session.
+   Expected: no idle warning at 5 min (the run resets the count); the warning appears about
+   5 min after the run *ended*. Press Keep running (or Ctrl-C the launch) and start the
+   service again.
+
+If all of this passes, merge `feat/oscillator` into `master` (TODO 26). Note the date and any
+deviation here.
 
 ## Oscillator
 

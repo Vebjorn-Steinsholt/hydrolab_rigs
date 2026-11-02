@@ -312,7 +312,7 @@ and a `return_to_upright` with the new parameter file ends at 0.09976 m (`status
   | `wavemaker_upright_position_m` | `upright_position_m` |
   | `wavemaker_upright_is_minimum` | `upright_is_minimum` |
   | `wavemaker_minimum` / `wavemaker_maximum` | `travel_minimum_m` / `travel_maximum_m` (goal travel limits; not the actuator's `min_position_m` / `max_position_m`) |
-  | `wavemaker_mode_pregenerated` | `mode_pregenerated` (also the launch argument) |
+  | `wavemaker_mode_pregenerated` | `mode_pregenerated` (also the launch argument); removed 2026-10-30, each goal picks its type |
   | `wavemaker_id` | removed (unused) |
   | `wavemaker_type` | unchanged, wavemakers only |
 

@@ -42,8 +42,10 @@ None at the moment.
 - [ ] **25. The start blend always lasts one wave period.** (`rig_controller/src/wave_trajectory.cpp`)
   Far from the first wave position with a short period, the start is too fast and the goal is rejected. Use enough whole periods to stay under `return_to_upright_max_velocity_mps`.
 
-- [ ] **26. Goal type is chosen by a parameter, and the bridge only starts regular waves.**
-  Choose per goal (non-empty `positions` → pregenerated) or name the configured mode in the rejection. Decide whether the web page needs pregenerated waves.
+- [x] **26. Goal type is chosen by a parameter.** (`controller_node.cpp`, `play_dat.py`)
+  `mode_pregenerated` fixes at launch whether the controller takes regular waves or position lists, so playing a `.dat` file needs a relaunch, and a regular wave sent in pregenerated mode is rejected with "goal requires positions", which does not name the mode. Choose per goal instead (non-empty `positions` → pregenerated), remove `mode_pregenerated` (add it to the rename table as removed) and the relaunch from `play_dat.py`'s usage text, the launch files and `fake_controller.py --pregenerated`.
+  Decided 2026-10-29: the web page and the bridge start regular waves only; pregenerated motion is for `play_dat.py` (and other CLI clients). The bridge needs no change.
+  Done 2026-10-30: each goal picks its type (non-empty `positions` → pregenerated; positions together with height/period, or no sample_interval, are rejected); `mode_pregenerated` and `wavemaker_mode_pregenerated` are in the rename table as removed, so a leftover setting fails configure. Removed from `wavemakers.yaml`, `wavemakers.launch.py`, `bridge.launch.py`; `fake_controller.py` lost `--pregenerated`; `MoveRig.action`, README, OSCILLATOR.md and `play_dat.py` usage updated. `play_dat` now runs under `lab.launch.py` with the page open: the plot, Stop on the page and the soft stop act on its goals, and the web server's idle auto-stop counts every controller setpoint as motion. Tests: new `EachGoalPicksItsType`, `GoalWithPositionsAndWaveIsRejected` and removed-name cases in `test_controller_node`; all gtests pass; checked against `fake_controller` (play_dat, a regular goal and a both-types goal on one node) and the idle timer (`idle_timeout_s:=12`, 20 s run: shutdown 12 s after the run, not during). Not yet run on the rig: checklist in `rpi/README.md`, *Rig test* → *Goal type per goal and `play_dat`*; merge `feat/oscillator` into `master` after it passes.
 
 - [ ] **27. A regular wave from the terminal runs until it is cancelled.**
   In bridge mode the heartbeat covers a lost client; from the terminal nothing does. Consider an optional `duration` in `MoveRig.action`.
@@ -208,3 +210,78 @@ Expected: `Summary: N tests, 0 errors, 0 failures`.
 
 - Whether `return_to_upright` should become a go-to-position to the upright with default
   limits (the service stays for compatibility). Decide after step 4.
+
+### Rig-agnostic configuration
+
+Make adding a rig (a future carriage, or others) a matter of one yaml file, plus an `Actuator`
+class only when the rig uses a new drive family. The drive is already chosen by config
+(`drive_name`); the rig name and the way a goal becomes a trajectory are not.
+
+**When:** after `feat/oscillator` is merged into `master`, which waits until the current lab use
+ends (end of the week of 2026-10-26). On its own branch.
+
+#### Decisions (2026-10-28)
+
+- Three separate settings, none inferred from another:
+  - **drive** (`drive_name`): how setpoints reach the hardware. Already done.
+  - **rig** (`rig`): a name only. It gives the action and topic names (`move_<rig>`,
+    `<rig>_setpoint`, ...) and nothing else.
+  - **motion model** (`motion_model`): how a goal becomes a trajectory.
+- No list of allowed rig names anywhere in the code.
+- Rig-neutral renames of `upright`, `return_to_upright`, `wavemaker_transfer_gain` and
+  `wavemaker_position_offset_` are left out for now: they break configs, the service and the web
+  page. Revisit if a third rig makes the names confusing.
+
+#### Today
+
+The rig name is checked against `wavemaker` / `oscillator` in `controller_node.cpp` (`on_configure`),
+`bridge_node.cpp`, `rig_web/launch/web.launch.py`, `rig_web/launch/demo.launch.py`, `RIG_TEXTS` in
+`rig_web/scripts/web_server.py` and the `case` in `rpi/run.sh` / `rpi/stop.sh`. The motion is
+picked from `rig_ == "wavemaker"` plus `wavemaker_type` in `controller_node.cpp` (configure
+checks, the gain table, `trajectory_.configure()`) and `geometry.type == "oscillator"` in
+`wave_trajectory.cpp`.
+
+#### Steps
+
+- [ ] **1. Motion model.** Replace `wavemaker_type` with `motion_model`: `piston`, `flap` or
+  `stroke` (H is the peak-to-peak travel, no wave theory; today's oscillator). Add
+  `{"wavemaker_type", "motion_model"}` to the rename table so old configs fail with a clear
+  message. Each model's parameter checks (depth, hinge, attachment height, gain table) run only
+  for the models that use them; the gain table and `water_depth` only for `piston` and `flap`.
+  `WavemakerGeometry::type` takes the same three values. Update `wavemakers.yaml` and
+  `oscillator.yaml`. Tests: `test_wave_trajectory.cpp` (stroke ignores depth and gain),
+  `test_controller_node.cpp` (each model's rejections; an unknown model fails configure; the old
+  name is rejected).
+- [ ] **2. Free rig name.** `rig` must be a valid ROS name token (letters, digits, `_`, not
+  starting with a digit); drop the enum checks in the controller and the bridge. Move the web
+  texts into the rig's yaml under the web server (`machine`, `motion`, `a_motion`, `title`,
+  `height_label`, ...), with generic defaults ("rig", "motion") so a new rig works without
+  touching `web_server.py`. `web.launch.py` and `demo.launch.py` take the namespace directly
+  instead of deriving it from the rig. Tests: a controller and bridge configured with
+  `rig: carriage` publish `carriage_setpoint` and serve `move_carriage`.
+- [ ] **3. One launch file.** A generic `rig.launch.py` (controller, bridge, lifecycle manager
+  with `attempt_respawn_reconnection: False`, soft stop, web) taking `config` (yaml path) and
+  `namespace`. `lab.launch.py` and `oscillator.launch.py` become thin wrappers, or go. On the
+  Pi, `run.sh` / `stop.sh` read `LAUNCH_CONFIG` and `NAMESPACE` from the unit's
+  `/etc/default/<unit>` file instead of a `case` per rig; the units stay one per rig, so
+  `refuse_if_busy.sh` and the sudoers lines do not change.
+- [ ] **4. Docs:** a short "Adding a rig" section in README.md: the yaml keys every rig needs,
+  the three settings above, and when a new `Actuator` is needed.
+- [ ] **5. Rig test** on the ladertanken Pi, both rigs through the services: start, a wave from
+  the page, `systemctl stop`, and the mutual exclusion (`rpi/README.md`, *Rig test* and
+  *Oscillator → Rig test*).
+
+Later, with [Go to position](#go-to-position): oscillate around the position the rig is at when
+the goal arrives, not only around `upright_position_m` (a carriage moves somewhere first, then
+oscillates). Today a goal must start from upright.
+
+Unit tests (no hardware):
+
+```bash
+cd ~/ros_ws
+colcon build --packages-up-to rig_controller rig_web
+colcon test --packages-select rig_controller
+colcon test-result --verbose
+```
+
+Expected: `Summary: N tests, 0 errors, 0 failures`.

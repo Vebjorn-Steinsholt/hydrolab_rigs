@@ -94,7 +94,6 @@ before connecting to hardware. Changes take effect at the next `configure`.
 | `hinge_height` | Flap only: height of the flap's hinge above the tank floor, m (default 0.0). Must be below `water_depth`. Used in the wave transfer function (Dean & Dalrymple) and to scale the stroke from the waterline to the attachment point. |
 | `upright_position_m` | Paddle position at upright (the mean position), m. Returns go here; waves oscillate around it. |
 | `upright_is_minimum` | `true`: the wave runs from upright to one side only. `false`: symmetric around upright. |
-| `mode_pregenerated` | `true`: goals carry sampled `positions`. `false`: goals carry `height` and `period`. Can be overridden with the launch argument of the same name (terminal mode only). |
 | `wavemaker_transfer_gain` | Measured / target wave height for regular waves (default 1.0 = linear theory). The stroke is divided by it; to correct from wave-probe data, new gain = old gain × measured / target. Not applied to pregenerated waves. Can be overridden for one run with the launch argument of the same name. |
 
 ### Actuator and limits
@@ -187,17 +186,20 @@ busy PC.
 
 Launch arguments of `wavemakers.launch.py`: `wavemaker`, `with_bridge` (default `false`),
 `enable_lifecycle_manager` (default `false`) and `bond_timeout` (default `4.0`, passed to the
-lifecycle manager and to both nodes), `water_depth` (see below), `wavemaker_transfer_gain` and
-`mode_pregenerated`. The last three override the values in `wavemakers.yaml` for that
-run; empty (the default) keeps the yaml value.
-`bridge.launch.py` sets the first three for you, defaults `bond_timeout` to `1.0`, and
-always sets `mode_pregenerated` to `false`, because the bridge only sends regular waves.
+lifecycle manager and to both nodes), `water_depth` (see below) and `wavemaker_transfer_gain`.
+The last two override the values in `wavemakers.yaml` for that run; empty (the default) keeps the
+yaml value.
+`bridge.launch.py` sets the first three for you and defaults `bond_timeout` to `1.0`.
 `lab.launch.py` passes on `water_depth` and `wavemaker_transfer_gain`.
 
+Every launch takes both goal types: each goal picks its own (see *Action* below), so playing a
+`.dat` file with `play_dat` needs no relaunch. `mode_pregenerated` was removed on 2026-10-30; a
+yaml file or launch command that still sets it makes configure fail with "was removed".
+
 ```bash
-# terminal mode, pregenerated goals (e.g. .dat files), with a measured gain
+# terminal mode with a measured gain
 ros2 launch wavemaker_bringup wavemakers.launch.py wavemaker:=ladertanken \
-  mode_pregenerated:=true wavemaker_transfer_gain:=0.92
+  wavemaker_transfer_gain:=0.92
 ```
 
 ### Water depth
@@ -267,10 +269,11 @@ messages, a live plot of setpoint and measured position, Return to upright, and 
 - The server listens on all interfaces (`host` parameter, default `0.0.0.0`) without a login:
   anyone who can reach the port can run the wavemaker. Keep it on the lab network.
 - Only Python's standard library and rclpy are needed, so it also runs on a Raspberry Pi.
-- **Idle auto-stop.** After 2 h without a running wave, the server shuts the bridge and controller
+- **Idle auto-stop.** After 2 h without motion, the server shuts the bridge and controller
   down through the lifecycle manager (which disables the drive) and exits, and the launch shuts
-  down with it. On a lab Pi the service then ends; start it again to continue. Only a running wave
-  counts as activity, not an open page or other clicks. For the last 10 minutes the page shows a
+  down with it. On a lab Pi the service then ends; start it again to continue. Motion is anything the
+  controller drives: a wave from the page, a `play_dat` goal or a return to upright (any setpoint
+  it publishes); an open page or other clicks do not count. For the last 10 minutes the page shows a
   warning with the stop time and a **Keep running** button, which restarts the 2 h. Set the time
   with the `idle_timeout_s` launch argument of `lab.launch.py` or `web.launch.py` (0 turns it
   off).
@@ -299,7 +302,10 @@ All names are under `/wavemakers/<wavemaker>/`.
 
 ### Action `move_wavemaker` (`rig_interfaces/action/MoveRig`)
 
-Regular wave (`mode_pregenerated: false`). `height` is the wave height H (crest to
+Each goal picks its type: `positions` empty means a regular wave, otherwise a pregenerated
+one. A goal with both `positions` and `height`/`period` is rejected.
+
+Regular wave (`positions` empty). `height` is the wave height H (crest to
 trough) in m and `period` is in s; the controller converts it to a paddle stroke with the
 wave transfer function. The wave runs until it is cancelled.
 
@@ -311,7 +317,7 @@ ros2 action send_goal --feedback /wavemakers/ladertanken/move_wavemaker \
 For ladertanken (flap, 1.0 m depth, 1.30 m attachment, 0.00053 m/deg) this is about ±1.2° at the
 drive. Recalculate if those values change.
 
-Pregenerated (`mode_pregenerated: true`): absolute paddle positions in m at a fixed
+Pregenerated (`height` and `period` left at 0): absolute paddle positions in m at a fixed
 `sample_interval` in s. The goal succeeds after the last sample.
 
 ```bash

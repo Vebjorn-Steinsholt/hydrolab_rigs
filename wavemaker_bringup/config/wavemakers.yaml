@@ -31,7 +31,6 @@
     wavemaker_type: "flap"
     upright_position_m: 0.0  # Upright oscillation center [m]
     upright_is_minimum: false
-    mode_pregenerated: false
     water_depth: 1.0         
     flap_attachment_height: 1.30
     hinge_height: 0.09  # pivot above the floor, wall below closed (2026-10-20)
@@ -59,7 +58,6 @@
     wavemaker_type: "piston"
     travel_minimum_m: 0.0
     travel_maximum_m: 0.5
-    mode_pregenerated: false
     water_depth: 1.0
     # flap_attachment_height omitted — fine, piston never checks it
     drive_motion: "linear"
@@ -75,7 +73,6 @@
     travel_maximum_m: 0.5
     upright_position_m: 0.0
     upright_is_minimum: false
-    mode_pregenerated: false
     water_depth: 1.5
     flap_attachment_height: 1.95   # must be > water_depth (1.5)
     hinge_height: 0.5

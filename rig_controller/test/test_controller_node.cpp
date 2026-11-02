@@ -179,7 +179,7 @@ rclcpp::NodeOptions with_soft_stop_released(const std::string & ns, rclcpp::Node
   return options;
 }
 
-rclcpp::NodeOptions node_options(const std::string & ns, bool pregenerated)
+rclcpp::NodeOptions node_options(const std::string & ns)
 {
   return with_soft_stop_released(ns, rclcpp::NodeOptions()
            .arguments({"--ros-args", "-r", "__ns:=" + ns})
@@ -188,7 +188,6 @@ rclcpp::NodeOptions node_options(const std::string & ns, bool pregenerated)
       rclcpp::Parameter("travel_minimum_m", 0.0),
       rclcpp::Parameter("travel_maximum_m", 0.5),
       rclcpp::Parameter("upright_position_m", 0.25),
-      rclcpp::Parameter("mode_pregenerated", pregenerated),
       rclcpp::Parameter("water_depth", 1.0),
       rclcpp::Parameter("flap_attachment_height", 0.0),
       rclcpp::Parameter("actuator_upright_angle_deg", 0.0),
@@ -204,7 +203,6 @@ rclcpp::NodeOptions angular_node_options(const std::string & ns)
       rclcpp::Parameter("travel_minimum_m", 0.2),
       rclcpp::Parameter("travel_maximum_m", 0.3),
       rclcpp::Parameter("upright_position_m", 0.25),
-      rclcpp::Parameter("mode_pregenerated", true),
       rclcpp::Parameter("water_depth", 1.0),
       rclcpp::Parameter("flap_attachment_height", 0.0),
       rclcpp::Parameter("actuator_upright_angle_deg", 0.0),
@@ -225,7 +223,6 @@ rclcpp::NodeOptions one_sided_node_options(const std::string & ns)
       rclcpp::Parameter("travel_maximum_m", 0.5),
       rclcpp::Parameter("upright_position_m", 0.25),
       rclcpp::Parameter("upright_is_minimum", true),
-      rclcpp::Parameter("mode_pregenerated", false),
       rclcpp::Parameter("water_depth", 1.0),
       rclcpp::Parameter("flap_attachment_height", 1.3),
       rclcpp::Parameter("actuator_upright_angle_deg", 0.0),
@@ -289,7 +286,7 @@ bool wait_for_soft_stop_release(rclcpp::Executor & executor, const ControllerNod
 
 // Creates a controller whose fake drive accepts at most max_velocity_mps.
 std::shared_ptr<ControllerNode> speed_limited_node(
-  const std::string & ns, bool pregenerated, double max_velocity_mps,
+  const std::string & ns, double max_velocity_mps,
   const std::vector<rclcpp::Parameter> & overrides = {})
 {
   auto factory = [max_velocity_mps](rclcpp_lifecycle::LifecycleNode &) {
@@ -297,7 +294,7 @@ std::shared_ptr<ControllerNode> speed_limited_node(
       actuator->max_velocity = max_velocity_mps;
       return actuator;
     };
-  auto options = node_options(ns, pregenerated);
+  auto options = node_options(ns);
   options.append_parameter_override("return_to_upright_max_velocity_mps", 0.05);
   for (const auto & parameter : overrides) {
     options.append_parameter_override(parameter.get_name(), parameter.get_parameter_value());
@@ -308,7 +305,7 @@ std::shared_ptr<ControllerNode> speed_limited_node(
 // Configures and activates node, sends one goal, cancels it if accepted, deactivates the node
 // and reports whether the controller accepted the goal.
 bool goal_accepted(
-  const std::shared_ptr<ControllerNode> & node, const std::string & ns, bool pregenerated,
+  const std::shared_ptr<ControllerNode> & node, const std::string & ns,
   const MoveRig::Goal & goal, const std::string & action = "move_wavemaker")
 {
   EXPECT_EQ(
@@ -319,7 +316,7 @@ bool goal_accepted(
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "speed_limit_client", node_options(ns, pregenerated));
+    "speed_limit_client", node_options(ns));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, action);
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -340,11 +337,11 @@ bool goal_accepted(
 
 // Like goal_accepted() on a fresh speed_limited_node().
 bool goal_accepted_with_speed_limit(
-  const std::string & ns, bool pregenerated, double max_velocity_mps,
+  const std::string & ns, double max_velocity_mps,
   const MoveRig::Goal & goal, const std::vector<rclcpp::Parameter> & overrides = {})
 {
   return goal_accepted(
-    speed_limited_node(ns, pregenerated, max_velocity_mps, overrides), ns, pregenerated, goal);
+    speed_limited_node(ns, max_velocity_mps, overrides), ns, goal);
 }
 
 class ControllerNodeTest : public ::testing::Test
@@ -382,7 +379,7 @@ struct ReturnToUprightRig
         fake->update_period = update_period_ms;
         return actuator;
       };
-    auto options = node_options(ns, false);
+    auto options = node_options(ns);
     options.append_parameter_override("return_to_upright_timeout_margin_s", 0.2);
     options.append_parameter_override("return_to_upright_max_velocity_mps", max_velocity_mps);
     node = std::make_shared<ControllerNode>(options, factory);
@@ -395,7 +392,7 @@ struct ReturnToUprightRig
         lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
     }
 
-    client_node = std::make_shared<rclcpp::Node>("return_client", node_options(ns, false));
+    client_node = std::make_shared<rclcpp::Node>("return_client", node_options(ns));
     client = client_node->create_client<ReturnToUpright>("return_to_upright");
     action_client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
     executor.add_node(node->get_node_base_interface());
@@ -428,7 +425,7 @@ TEST_F(ControllerNodeTest, LifecycleConfigureActivateDeactivate)
       fake = actuator.get();
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/lifecycle_test", false), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/lifecycle_test"), factory);
 
   auto state = node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE);
   ASSERT_EQ(state.id(), lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -452,7 +449,7 @@ TEST_F(ControllerNodeTest, PregeneratedActionCompletesAndKeepsActuatorEnabled)
       fake = actuator.get();
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/completion_test", true), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/completion_test"), factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -461,7 +458,7 @@ TEST_F(ControllerNodeTest, PregeneratedActionCompletesAndKeepsActuatorEnabled)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>("completion_client",
-    node_options("/completion_test", true));
+    node_options("/completion_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -493,7 +490,7 @@ TEST_F(ControllerNodeTest, PregeneratedGoalBlendsFromMeasuredPosition)
       fake->actual_position = 0.30;
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/pregenerated_blend_test", true),
+  auto node = std::make_shared<ControllerNode>(node_options("/pregenerated_blend_test"),
     factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
@@ -503,7 +500,7 @@ TEST_F(ControllerNodeTest, PregeneratedGoalBlendsFromMeasuredPosition)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "pregenerated_blend_client", node_options("/pregenerated_blend_test", true));
+    "pregenerated_blend_client", node_options("/pregenerated_blend_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -541,7 +538,7 @@ TEST_F(ControllerNodeTest, CancelledActionHaltsAndAcceptsNextGoal)
       fake = actuator.get();
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/cancel_test", false), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/cancel_test"), factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -550,7 +547,7 @@ TEST_F(ControllerNodeTest, CancelledActionHaltsAndAcceptsNextGoal)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>("cancel_client",
-    node_options("/cancel_test", false));
+    node_options("/cancel_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -612,7 +609,7 @@ TEST_F(ControllerNodeTest, SinusoidalGoalBlendsFromMeasuredPosition)
       fake->actual_position = 0.30;
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/smooth_start_test", false), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/smooth_start_test"), factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -621,7 +618,7 @@ TEST_F(ControllerNodeTest, SinusoidalGoalBlendsFromMeasuredPosition)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "smooth_start_client", node_options("/smooth_start_test", false));
+    "smooth_start_client", node_options("/smooth_start_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -675,7 +672,7 @@ TEST_F(ControllerNodeTest, UprightMinimumWaveformNeverCommandsBehindUpright)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "upright_minimum_client", node_options("/upright_minimum_test", false));
+    "upright_minimum_client", node_options("/upright_minimum_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -719,7 +716,7 @@ TEST_F(ControllerNodeTest, SymmetricGoalOscillatesAroundUpright)
       fake->actual_position = 0.25;
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/symmetric_test", false), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/symmetric_test"), factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -728,7 +725,7 @@ TEST_F(ControllerNodeTest, SymmetricGoalOscillatesAroundUpright)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "symmetric_client", node_options("/symmetric_test", false));
+    "symmetric_client", node_options("/symmetric_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -777,7 +774,7 @@ TEST_F(ControllerNodeTest, AngularDriveLimitsOverrideWavemakerMeterBounds)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "angular_limits_client", node_options("/angular_limits_test", true));
+    "angular_limits_client", node_options("/angular_limits_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -1036,7 +1033,7 @@ TEST_F(ControllerNodeTest, DriverFaultReleasesResourcesAndAllowsReconfigure)
       ++factory_calls;
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/driver_fault_test", false), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/driver_fault_test"), factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -1079,7 +1076,7 @@ TEST_F(ControllerNodeTest, SetpointWriteFailureAbortsGoalAndDeactivates)
       fake->stops_seen = &stops;
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/write_failure_test", true), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/write_failure_test"), factory);
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
@@ -1088,7 +1085,7 @@ TEST_F(ControllerNodeTest, SetpointWriteFailureAbortsGoalAndDeactivates)
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "write_failure_client", node_options("/write_failure_test", true));
+    "write_failure_client", node_options("/write_failure_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -1127,7 +1124,7 @@ TEST_F(ControllerNodeTest, ConfigureFailsWhenReturnSpeedExceedsDriveMaximum)
       actuator->max_velocity = 0.05;  // below the default return speed of 0.1 m/s
       return actuator;
     };
-  auto node = std::make_shared<ControllerNode>(node_options("/return_speed_test", false), factory);
+  auto node = std::make_shared<ControllerNode>(node_options("/return_speed_test"), factory);
   EXPECT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
@@ -1139,12 +1136,12 @@ TEST_F(ControllerNodeTest, RegularWaveAboveDriveSpeedIsRejected)
   MoveRig::Goal fast;
   fast.height = 0.1;
   fast.period = 1.0;
-  EXPECT_FALSE(goal_accepted_with_speed_limit("/fast_wave_test", false, 0.06, fast));
+  EXPECT_FALSE(goal_accepted_with_speed_limit("/fast_wave_test", 0.06, fast));
 
   MoveRig::Goal slow;
   slow.height = 0.002;
   slow.period = 10.0;
-  EXPECT_TRUE(goal_accepted_with_speed_limit("/slow_wave_test", false, 0.06, slow));
+  EXPECT_TRUE(goal_accepted_with_speed_limit("/slow_wave_test", 0.06, slow));
 }
 
 TEST_F(ControllerNodeTest, PregeneratedGoalAboveDriveSpeedIsRejected)
@@ -1152,12 +1149,48 @@ TEST_F(ControllerNodeTest, PregeneratedGoalAboveDriveSpeedIsRejected)
   MoveRig::Goal fast;  // 0.01 m per 0.1 s = 0.1 m/s
   fast.positions = {0.25, 0.26};
   fast.sample_interval = 0.1;
-  EXPECT_FALSE(goal_accepted_with_speed_limit("/fast_samples_test", true, 0.06, fast));
+  EXPECT_FALSE(goal_accepted_with_speed_limit("/fast_samples_test", 0.06, fast));
 
   MoveRig::Goal slow;  // 0.01 m per 0.5 s = 0.02 m/s
   slow.positions = {0.25, 0.26};
   slow.sample_interval = 0.5;
-  EXPECT_TRUE(goal_accepted_with_speed_limit("/slow_samples_test", true, 0.06, slow));
+  EXPECT_TRUE(goal_accepted_with_speed_limit("/slow_samples_test", 0.06, slow));
+}
+
+TEST_F(ControllerNodeTest, EachGoalPicksItsType)
+{
+  // No parameter picks the type: the same node accepts a regular wave and a pregenerated goal
+  // (goal_accepted() configures and activates it each time, hence the cleanup between).
+  auto node = speed_limited_node("/goal_type_test", 0.06);
+  MoveRig::Goal regular;
+  regular.height = 0.002;
+  regular.period = 10.0;
+  EXPECT_TRUE(goal_accepted(node, "/goal_type_test", regular));
+
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CLEANUP).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
+  MoveRig::Goal pregenerated;
+  pregenerated.positions = {0.25, 0.26};
+  pregenerated.sample_interval = 0.5;
+  EXPECT_TRUE(goal_accepted(node, "/goal_type_test", pregenerated));
+}
+
+TEST_F(ControllerNodeTest, GoalWithPositionsAndWaveIsRejected)
+{
+  MoveRig::Goal both;
+  both.height = 0.002;
+  both.period = 10.0;
+  both.positions = {0.25, 0.26};
+  both.sample_interval = 0.5;
+  EXPECT_FALSE(goal_accepted_with_speed_limit("/both_types_test", 0.06, both));
+
+  MoveRig::Goal no_interval;
+  no_interval.positions = {0.25, 0.26};
+  EXPECT_FALSE(goal_accepted_with_speed_limit("/no_interval_test", 0.06, no_interval));
+
+  MoveRig::Goal empty;  // neither positions nor height and period
+  EXPECT_FALSE(goal_accepted_with_speed_limit("/empty_goal_test", 0.06, empty));
 }
 
 TEST_F(ControllerNodeTest, ConfigureFailsForInvalidTransferGain)
@@ -1165,7 +1198,7 @@ TEST_F(ControllerNodeTest, ConfigureFailsForInvalidTransferGain)
   for (const double gain : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
       std::numeric_limits<double>::infinity()})
   {
-    auto options = node_options("/transfer_gain_test", false);
+    auto options = node_options("/transfer_gain_test");
     options.append_parameter_override("wavemaker_transfer_gain", gain);
     auto node = std::make_shared<ControllerNode>(
       options, [](rclcpp_lifecycle::LifecycleNode &) {return std::make_unique<FakeActuator>();});
@@ -1184,10 +1217,10 @@ TEST_F(ControllerNodeTest, TransferGainScalesRequiredStroke)
   fast.period = 1.0;
   EXPECT_FALSE(
     goal_accepted_with_speed_limit(
-      "/gain_low_test", false, 0.06, fast, {rclcpp::Parameter("wavemaker_transfer_gain", 1.0)}));
+      "/gain_low_test", 0.06, fast, {rclcpp::Parameter("wavemaker_transfer_gain", 1.0)}));
   EXPECT_TRUE(
     goal_accepted_with_speed_limit(
-      "/gain_high_test", false, 0.06, fast, {rclcpp::Parameter("wavemaker_transfer_gain", 4.0)}));
+      "/gain_high_test", 0.06, fast, {rclcpp::Parameter("wavemaker_transfer_gain", 4.0)}));
 }
 
 TEST_F(ControllerNodeTest, ConfigureFailsForInvalidGainTable)
@@ -1213,7 +1246,7 @@ TEST_F(ControllerNodeTest, ConfigureFailsForInvalidGainTable)
     {"NaN value", {1.0, 2.0}, {1.0, nan}},
   })
   {
-    auto options = node_options("/gain_table_test", false);
+    auto options = node_options("/gain_table_test");
     options.append_parameter_override("wavemaker_transfer_gain_periods", table.periods);
     options.append_parameter_override("wavemaker_transfer_gain_values", table.values);
     auto node = std::make_shared<ControllerNode>(
@@ -1239,24 +1272,24 @@ TEST_F(ControllerNodeTest, GainTableScalesRequiredStroke)
 
   EXPECT_FALSE(
     goal_accepted_with_speed_limit(
-      "/gain_table_low_test", false, 0.06, fast, table({0.5, 2.0}, {1.0, 1.0})));
+      "/gain_table_low_test", 0.06, fast, table({0.5, 2.0}, {1.0, 1.0})));
   EXPECT_TRUE(
     goal_accepted_with_speed_limit(
-      "/gain_table_high_test", false, 0.06, fast, table({0.5, 2.0}, {4.0, 4.0})));
+      "/gain_table_high_test", 0.06, fast, table({0.5, 2.0}, {4.0, 4.0})));
   // Interpolated: halfway between 1 at 0.5 s and 7 at 1.5 s gives 4 at 1 s.
   EXPECT_TRUE(
     goal_accepted_with_speed_limit(
-      "/gain_table_between_test", false, 0.06, fast, table({0.5, 1.5}, {1.0, 7.0})));
+      "/gain_table_between_test", 0.06, fast, table({0.5, 1.5}, {1.0, 7.0})));
   // Outside the table the nearest end value applies: 1 s is below 2 s, so the gain is 4.
   EXPECT_TRUE(
     goal_accepted_with_speed_limit(
-      "/gain_table_clamped_test", false, 0.06, fast, table({2.0, 3.0}, {4.0, 4.0})));
+      "/gain_table_clamped_test", 0.06, fast, table({2.0, 3.0}, {4.0, 4.0})));
 
   // The table replaces wavemaker_transfer_gain instead of multiplying it.
   auto replaces = table({0.5, 2.0}, {1.0, 1.0});
   replaces.emplace_back("wavemaker_transfer_gain", 4.0);
   EXPECT_FALSE(
-    goal_accepted_with_speed_limit("/gain_table_replaces_test", false, 0.06, fast, replaces));
+    goal_accepted_with_speed_limit("/gain_table_replaces_test", 0.06, fast, replaces));
 }
 
 TEST_F(ControllerNodeTest, WaterDepthChangeTakesEffectAtNextConfigure)
@@ -1265,14 +1298,14 @@ TEST_F(ControllerNodeTest, WaterDepthChangeTakesEffectAtNextConfigure)
   MoveRig::Goal goal;
   goal.height = 0.02;
   goal.period = 10.0;
-  auto node = speed_limited_node("/water_depth_test", false, 0.06);
-  EXPECT_TRUE(goal_accepted(node, "/water_depth_test", false, goal));
+  auto node = speed_limited_node("/water_depth_test", 0.06);
+  EXPECT_TRUE(goal_accepted(node, "/water_depth_test", goal));
 
   ASSERT_EQ(
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CLEANUP).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
   ASSERT_TRUE(node->set_parameter(rclcpp::Parameter("water_depth", 0.2)).successful);
-  EXPECT_FALSE(goal_accepted(node, "/water_depth_test", false, goal));
+  EXPECT_FALSE(goal_accepted(node, "/water_depth_test", goal));
 }
 
 TEST_F(ControllerNodeTest, PublishesSetpointInActuatorUnits)
@@ -1340,7 +1373,6 @@ TEST_F(ControllerNodeTest, LadertankenAcceptsEveryLabWave)
     rclcpp::Parameter("wavemaker_type", "flap"),
     rclcpp::Parameter("upright_position_m", 0.0),
     rclcpp::Parameter("upright_is_minimum", false),
-    rclcpp::Parameter("mode_pregenerated", false),
     rclcpp::Parameter("water_depth", 1.0),
     rclcpp::Parameter("flap_attachment_height", 1.3),
     rclcpp::Parameter("drive_motion", "angular"),
@@ -1357,7 +1389,7 @@ TEST_F(ControllerNodeTest, LadertankenAcceptsEveryLabWave)
     node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE).id(),
     lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
 
-  auto client_node = std::make_shared<rclcpp::Node>("lab_waves_client", node_options(ns, false));
+  auto client_node = std::make_shared<rclcpp::Node>("lab_waves_client", node_options(ns));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -1435,7 +1467,7 @@ TEST_F(ControllerNodeTest, DriveNameSelectsTheActuator)
 {
   // The default factory, not a fake: configure builds the actuator, activate would open its link.
   const auto configured = [](const std::vector<rclcpp::Parameter> & parameters) {
-      auto options = node_options("/drive_name_test", false);
+      auto options = node_options("/drive_name_test");
       for (const auto & parameter : parameters) {
         options.append_parameter_override(parameter.get_name(), parameter.get_parameter_value());
       }
@@ -1462,7 +1494,9 @@ TEST_F(ControllerNodeTest, DriveNameSelectsTheActuator)
   // An otherwise valid config with an old name is rejected rather than the name ignored.
   for (const auto & old_name : {
     rclcpp::Parameter("actuator_type", "linmot"),
-    rclcpp::Parameter("actuator_drive_type", "linear")})
+    rclcpp::Parameter("actuator_drive_type", "linear"),
+    rclcpp::Parameter("mode_pregenerated", false),
+    rclcpp::Parameter("wavemaker_mode_pregenerated", false)})
   {
     auto renamed = linmot;
     renamed.push_back(old_name);
@@ -1482,7 +1516,7 @@ TEST_F(ControllerNodeTest, RigNamesTheActionAndTopics)
       return std::make_unique<FakeActuator>();
     };
 
-  auto options = node_options("/rig_name_test", false);
+  auto options = node_options("/rig_name_test");
   options.append_parameter_override("rig", "oscillator");
   auto node = std::make_shared<ControllerNode>(options, fake);
   ASSERT_EQ(
@@ -1503,7 +1537,7 @@ TEST_F(ControllerNodeTest, RigNamesTheActionAndTopics)
   EXPECT_EQ(topics.count("/rig_name_test/wavemaker_setpoint"), 0u);
   EXPECT_EQ(topics.count("/rig_name_test/move_wavemaker/_action/feedback"), 0u);
 
-  auto bogus_options = node_options("/rig_bogus_test", false);
+  auto bogus_options = node_options("/rig_bogus_test");
   bogus_options.append_parameter_override("rig", "bogus");
   auto bogus = std::make_shared<ControllerNode>(bogus_options, fake);
   EXPECT_EQ(
@@ -1523,7 +1557,7 @@ TEST_F(ControllerNodeTest, OldParameterNamesFailConfigure)
 
   // As a parameter override.
   for (const char * old_name : {"wavemaker_minimum", "wavemaker_id"}) {
-    auto options = node_options("/old_name_test", false);
+    auto options = node_options("/old_name_test");
     options.append_parameter_override(old_name, old_name == std::string("wavemaker_id") ?
       rclcpp::ParameterValue("ladertanken") : rclcpp::ParameterValue(-0.1));
     EXPECT_EQ(configured(options), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED) <<
@@ -1536,14 +1570,14 @@ TEST_F(ControllerNodeTest, OldParameterNamesFailConfigure)
     std::ofstream file(path);
     file << "/**:\n  ros__parameters:\n    wavemaker_upright_position_m: 0.25\n";
   }
-  auto options = node_options("/old_name_file_test", false);
+  auto options = node_options("/old_name_file_test");
   options.arguments({"--ros-args", "-r", "__ns:=/old_name_file_test", "--params-file", path});
   EXPECT_EQ(configured(options), lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
   std::remove(path.c_str());
 
   // The new names configure.
   EXPECT_EQ(
-    configured(node_options("/new_name_test", false)),
+    configured(node_options("/new_name_test")),
     lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
 }
 
@@ -1557,7 +1591,7 @@ std::shared_ptr<ControllerNode> oscillator_node(
   const std::vector<rclcpp::Parameter> & overrides = {}, double max_acceleration_mps2 =
   std::numeric_limits<double>::infinity())
 {
-  auto options = node_options(ns, false);
+  auto options = node_options(ns);
   for (const auto & parameter : std::vector<rclcpp::Parameter>{
       rclcpp::Parameter("rig", "oscillator"),
       rclcpp::Parameter("travel_minimum_m", 0.005),
@@ -1670,7 +1704,7 @@ TEST_F(ControllerNodeTest, OscillatorGoalMovesTheStrokeAndSendsAccelerationCap)
   fake->follow_setpoints = true;
 
   auto client_node = std::make_shared<rclcpp::Node>(
-    "oscillator_client", node_options("/oscillator_goal_test", false));
+    "oscillator_client", node_options("/oscillator_goal_test"));
   auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_oscillator");
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
@@ -1706,12 +1740,12 @@ TEST_F(ControllerNodeTest, GoalAboveDriveAccelerationIsRejected)
   // 190 mm at 0.5 s needs about 15 m/s^2; the fake drive allows 1 m/s^2.
   EXPECT_FALSE(
     goal_accepted(
-      oscillator_node("/fast_oscillator_test", nullptr, {}, 1.0), "/fast_oscillator_test", false,
+      oscillator_node("/fast_oscillator_test", nullptr, {}, 1.0), "/fast_oscillator_test",
       regular_goal(0.19, 0.5), "move_oscillator"));
   // 10 mm at 2 s needs about 0.05 m/s^2.
   EXPECT_TRUE(
     goal_accepted(
-      oscillator_node("/slow_oscillator_test", nullptr, {}, 1.0), "/slow_oscillator_test", false,
+      oscillator_node("/slow_oscillator_test", nullptr, {}, 1.0), "/slow_oscillator_test",
       regular_goal(0.01, 2.0), "move_oscillator"));
 }
 
@@ -1721,21 +1755,21 @@ TEST_F(ControllerNodeTest, GoalAboveMaxGoalAccelerationIsRejected)
   // 190 mm at 0.5 s: about 15 m/s^2.
   EXPECT_FALSE(
     goal_accepted(
-      oscillator_node("/rig_limit_fast_test", nullptr, limit), "/rig_limit_fast_test", false,
+      oscillator_node("/rig_limit_fast_test", nullptr, limit), "/rig_limit_fast_test",
       regular_goal(0.19, 0.5), "move_oscillator"));
   // 190 mm at 0.62 s: 9.76 m/s^2 in the steady sine, but 10.85 m/s^2 in the start blend.
   EXPECT_FALSE(
     goal_accepted(
-      oscillator_node("/rig_limit_blend_test", nullptr, limit), "/rig_limit_blend_test", false,
+      oscillator_node("/rig_limit_blend_test", nullptr, limit), "/rig_limit_blend_test",
       regular_goal(0.19, 0.62), "move_oscillator"));
   EXPECT_TRUE(
     goal_accepted(
-      oscillator_node("/rig_limit_slow_test", nullptr, limit), "/rig_limit_slow_test", false,
+      oscillator_node("/rig_limit_slow_test", nullptr, limit), "/rig_limit_slow_test",
       regular_goal(0.01, 2.0), "move_oscillator"));
   // 0 (the default) switches the check off.
   EXPECT_TRUE(
     goal_accepted(
-      oscillator_node("/rig_limit_off_test", nullptr), "/rig_limit_off_test", false,
+      oscillator_node("/rig_limit_off_test", nullptr), "/rig_limit_off_test",
       regular_goal(0.19, 0.5), "move_oscillator"));
 }
 
@@ -1744,10 +1778,10 @@ TEST_F(ControllerNodeTest, GoalBelowMinPeriodIsRejected)
   const std::vector<rclcpp::Parameter> limit{rclcpp::Parameter("min_period_s", 0.2)};
   EXPECT_FALSE(
     goal_accepted(
-      oscillator_node("/short_period_test", nullptr, limit), "/short_period_test", false,
+      oscillator_node("/short_period_test", nullptr, limit), "/short_period_test",
       regular_goal(0.002, 0.15), "move_oscillator"));
   EXPECT_TRUE(
     goal_accepted(
-      oscillator_node("/long_period_test", nullptr, limit), "/long_period_test", false,
+      oscillator_node("/long_period_test", nullptr, limit), "/long_period_test",
       regular_goal(0.002, 0.25), "move_oscillator"));
 }

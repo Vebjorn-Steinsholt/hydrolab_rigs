@@ -16,8 +16,10 @@ Every open page counts: the wave keeps running while any one of them is alive.
 The page also shows the log of every node in the wavemaker's namespace (controller, bridge,
 lifecycle manager, this server), read from /rosout.
 
-After idle_timeout_s (default 2 h) without a running wave, the server shuts the managed nodes
-down through the lifecycle manager and exits; the launch files end the whole launch when it does.
+After idle_timeout_s (default 2 h) without motion, the server shuts the managed nodes down
+through the lifecycle manager and exits; the launch files end the whole launch when it does.
+Motion is a running wave from the bridge or any setpoint the controller publishes, so goals from
+play_dat and returns to upright count too.
 For the last idle_warning_s the page shows a warning with a Keep running button, which restarts
 the count. Set idle_timeout_s to 0 to turn this off.
 
@@ -132,7 +134,7 @@ class WebNode(Node):
         self._log_prefix = self.get_namespace().strip('/').replace('/', '.')
         self._last_ack = -math.inf
         self._t0 = time.monotonic()
-        self._last_activity = time.monotonic()  # end of the last wave, or Keep running
+        self._last_activity = time.monotonic()  # last motion (wave or setpoint), or Keep running
         self._idle_warned = False
         self._auto_stopping = False
 
@@ -184,6 +186,11 @@ class WebNode(Node):
     def _on_sample(self, kind, msg):
         now = self._now()
         with self._lock:
+            if kind == 'setpoint':
+                # The controller publishes setpoints only while it moves the paddle, for any
+                # goal (bridge or play_dat) or a return to upright: that is activity.
+                self._last_activity = time.monotonic()
+                self._idle_warned = False
             self._sample_count += 1
             self._samples.append((self._sample_count, now, kind, msg.data))
             while self._samples and self._samples[0][1] < now - PLOT_WINDOW_S:

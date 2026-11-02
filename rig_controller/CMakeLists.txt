@@ -54,6 +54,11 @@ install(PROGRAMS test/fake_controller.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME fake_controller
 )
+# Plays pregenerated motion files (.dat) as move_<rig> goals (see the script's docstring).
+install(PROGRAMS src/play_dat.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME play_dat
+)
 install(PROGRAMS src/soft_stop.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME soft_stop

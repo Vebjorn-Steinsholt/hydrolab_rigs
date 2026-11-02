@@ -19,7 +19,8 @@
   <depend>linmot_serial_driver</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
-  <exec_depend>rclpy</exec_depend>  <!-- fake_controller test tool -->
+  <exec_depend>rclpy</exec_depend>  <!-- fake_controller test tool, play_dat -->
+  <exec_depend>action_msgs</exec_depend>  <!-- play_dat -->
   <exec_depend>python3-gpiozero</exec_depend>  <!-- soft_stop -->
   <exec_depend>python3-lgpio</exec_depend>     <!-- soft_stop, Pi 5 backend -->
 

@@ -7,9 +7,9 @@ default, or oscillator; the topics are named after the rig the same way):
   - accepts one goal at a time and rejects goals while one is running ("busy"),
   - runs a regular wave until it is cancelled, sending feedback at 10 Hz and the setpoint and
     a slightly lagging "measured" position on <rig>_setpoint / <rig>_position at 50 Hz,
-  - with --pregenerated, as mode_pregenerated: true, plays goals with positions and
-    sample_interval instead: blends from the held position to the first sample, interpolates
-    linearly and succeeds at the last sample,
+  - plays a goal with positions and sample_interval instead (each goal picks its type, as in
+    the real controller): blends from the held position to the first sample, interpolates
+    linearly and succeeds at the last sample; a goal with both is rejected,
   - holds its position after a cancel, and serves return_to_upright (back to 0 in 1.5 s),
   - optionally rejects every goal (--reject) or aborts a goal after N s (--abort-after).
 
@@ -18,8 +18,6 @@ Do not run it next to the real controller: both would serve the same action.
     source ~/ros_ws/install/setup.bash
     ros2 run rig_controller fake_controller --ros-args -r __ns:=/wavemakers/ladertanken
     ros2 run rig_controller fake_controller --abort-after 5 \
-      --ros-args -r __ns:=/wavemakers/ladertanken
-    ros2 run rig_controller fake_controller --pregenerated \
       --ros-args -r __ns:=/wavemakers/ladertanken
     ros2 run rig_controller fake_controller --rig oscillator \
       --ros-args -r __ns:=/oscillators/sloshing
@@ -59,11 +57,10 @@ def quintic(u):
 
 class FakeController(Node):
 
-    def __init__(self, reject, abort_after, pregenerated, rig='wavemaker'):
+    def __init__(self, reject, abort_after, rig='wavemaker'):
         super().__init__('controller')
         self._reject = reject
         self._abort_after = abort_after
-        self._pregenerated = pregenerated
         self._busy = False
         self._position = 0.0     # last setpoint, held after a stop
         self._lock = threading.Lock()
@@ -80,8 +77,7 @@ class FakeController(Node):
             cancel_callback=self._on_cancel,
             callback_group=ReentrantCallbackGroup())
         self.get_logger().info(
-            f'Fake controller ready (rig={rig}, reject={reject}, abort_after={abort_after}, '
-            f'pregenerated={pregenerated})')
+            f'Fake controller ready (rig={rig}, reject={reject}, abort_after={abort_after})')
 
     def _on_goal(self, goal):
         with self._lock:
@@ -91,12 +87,14 @@ class FakeController(Node):
             if self._busy:
                 self.get_logger().warn('Rejecting goal: another goal is running')
                 return GoalResponse.REJECT
-            if self._pregenerated:
-                if (len(goal.positions) == 0 or not math.isfinite(goal.sample_interval) or
-                        goal.sample_interval <= 0.0):
+            if len(goal.positions) > 0:
+                if goal.height != 0.0 or goal.period != 0.0:
                     self.get_logger().warn(
-                        'Rejecting goal: pregenerated goal requires positions and a positive '
-                        'sample_interval')
+                        'Rejecting goal: both positions and height/period; send one or the other')
+                    return GoalResponse.REJECT
+                if not math.isfinite(goal.sample_interval) or goal.sample_interval <= 0.0:
+                    self.get_logger().warn(
+                        'Rejecting goal: pregenerated goal needs a positive sample_interval')
                     return GoalResponse.REJECT
                 if not all(math.isfinite(p) for p in goal.positions):
                     self.get_logger().warn('Rejecting goal: positions must be finite')
@@ -105,7 +103,7 @@ class FakeController(Node):
                 self.get_logger().warn('Rejecting goal: height and period must be > 0')
                 return GoalResponse.REJECT
             self._busy = True
-        if self._pregenerated:
+        if len(goal.positions) > 0:
             self.get_logger().info(
                 f'Accepted pregenerated goal: {len(goal.positions)} samples at '
                 f'{goal.sample_interval} s ({self._samples_duration(goal):.1f} s)')
@@ -193,7 +191,8 @@ class FakeController(Node):
         result = MoveRig.Result()
         feedback = MoveRig.Feedback()
         origin = self._position
-        motion = (self._pregenerated_motion if self._pregenerated else self._regular_motion)(
+        pregenerated = len(goal.positions) > 0
+        motion = (self._pregenerated_motion if pregenerated else self._regular_motion)(
             goal, origin)
         start = time.monotonic()
         cycle = 0
@@ -244,16 +243,12 @@ def main():
         '--abort-after', type=float, default=None, metavar='SECONDS',
         help='abort each goal after this many seconds (simulates a fault)')
     parser.add_argument(
-        '--pregenerated', action='store_true',
-        help='serve pregenerated goals (positions, sample_interval), as '
-             'mode_pregenerated: true')
-    parser.add_argument(
         '--rig', choices=['wavemaker', 'oscillator'], default='wavemaker',
         help='names the action and topics (move_<rig>, <rig>_setpoint, <rig>_position)')
     args = parser.parse_args(remove_ros_args(sys.argv)[1:])
 
     rclpy.init(args=sys.argv)
-    node = FakeController(args.reject, args.abort_after, args.pregenerated, args.rig)
+    node = FakeController(args.reject, args.abort_after, args.rig)
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     try:
