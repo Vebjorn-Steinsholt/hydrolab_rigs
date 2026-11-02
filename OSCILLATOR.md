@@ -116,7 +116,7 @@ Serial Monitor first: only one program can have the port open.
 
   ```bash
   arduino --upload --board arduino:avr:uno --port /dev/ttyACM0 \
-    ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge/linmot_serial_bridge.ino
+    ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge/linmot_serial_bridge.ino
   ```
 
 - [x] Run `link_test.py` with motion (2026-10-22: all checks passed, 301 of 300 feedbacks,
@@ -125,7 +125,7 @@ Serial Monitor first: only one program can have the port open.
   LinMot-Talk open and connected to switch the drive off (the rig has no e-stop). (rig)
 
   ```bash
-  cd ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge
+  cd ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge
   python3 link_test.py --move           # add --home if the drive is not homed
   ```
 
@@ -155,8 +155,8 @@ Serial Monitor first: only one program can have the port open.
 
   ```bash
   arduino --upload --board arduino:avr:uno --port /dev/ttyACM0 \
-    ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge/linmot_serial_bridge.ino
-  cd ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge
+    ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge/linmot_serial_bridge.ino
+  cd ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge
   python3 link_test.py --move           # add --home if the drive is not homed
   ```
 
@@ -192,8 +192,8 @@ Serial Monitor first: only one program can have the port open.
 
     ```bash
     arduino --upload --board arduino:avr:uno --port /dev/ttyACM0 \
-      ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge/linmot_serial_bridge.ino
-    cd ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge
+      ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge/linmot_serial_bridge.ino
+    cd ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge
     python3 link_test.py --move           # add --home if the drive is not homed
     ```
 
@@ -212,7 +212,7 @@ Serial Monitor first: only one program can have the port open.
   Replace it with the file from the repo, so the PC has `/dev/linmot_bridge` too:
 
   ```bash
-  sudo cp ~/ros_ws/src/ros2_wavemakers/rpi/99-linmot-bridge.rules /etc/udev/rules.d/
+  sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/99-linmot-bridge.rules /etc/udev/rules.d/
   sudo udevadm control --reload-rules && sudo udevadm trigger
   ls -l /dev/linmot_bridge                                   # → ttyACM0
   udevadm info -q property -n /dev/linmot_bridge | grep ID_MM_DEVICE_IGNORE   # → 1
@@ -483,7 +483,7 @@ belongs in `play_dat.py` (item at the end).
   needed either way.
 
   ```bash
-  sudo cp ~/ros_ws/src/ros2_wavemakers/rpi/99-linmot-bridge.rules /etc/udev/rules.d/
+  sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/99-linmot-bridge.rules /etc/udev/rules.d/
   sudo udevadm control --reload-rules && sudo udevadm trigger
   ls -l /dev/linmot_bridge
   ```

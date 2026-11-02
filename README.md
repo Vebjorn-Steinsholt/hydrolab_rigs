@@ -1,6 +1,7 @@
-# ROS 2 Wavemakers
+# Hydrolab rigs
 
-ROS 2 (Jazzy) packages for controlling the Hydrolab wavemakers. A lifecycle controller node generates
+ROS 2 (Jazzy) packages for controlling the Hydrolab rigs: the wavemakers and the sloshing
+oscillator (`OSCILLATOR.md`). On a wavemaker, a lifecycle controller node generates
 the paddle motion and sends it to a Rexroth IndraDrive through a Moxa MGate 5101-PBM-MN
 Modbus TCP / PROFIBUS gateway.
 

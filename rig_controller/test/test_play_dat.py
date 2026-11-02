@@ -4,7 +4,7 @@ Tests for src/play_dat.py, without a controller.
 Covers file reading, run splitting, the run table, measuring, the checks and the command line
 (dry run). play() is not tested here; use fake_controller.
 
-    cd ~/ros_ws/src/ros2_wavemakers
+    cd ~/ros_ws/src/hydrolab_rigs
     python3 -m pytest rig_controller/test/test_play_dat.py -v
 
 PLAY_DAT=<path> tests another copy of play_dat.py.

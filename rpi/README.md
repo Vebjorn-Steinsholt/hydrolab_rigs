@@ -33,7 +33,7 @@ Before you start, as the wavemaker user:
 Install the unit:
 
 ```bash
-sudo cp ~/ros_ws/src/ros2_wavemakers/rpi/wavemaker@.service /etc/systemd/system/
+sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/wavemaker@.service /etc/systemd/system/
 sudo systemctl daemon-reload
 systemd-analyze verify wavemaker@ladertanken.service     # no output = OK
 ```
@@ -79,6 +79,27 @@ After a `git pull`:
 - **`run.sh` or `stop.sh` changed:** nothing to do; the unit runs them from the repository.
 
 Then stop and start the service; a running service keeps the old code.
+
+### Repository renamed to `hydrolab_rigs` (once per Pi, 2026-11)
+
+The repository was `ros2_wavemakers`; the units now run the scripts from
+`~/ros_ws/src/hydrolab_rigs`. On a Pi still cloned under the old name, after the rename is merged
+into `master` (only the units that are installed):
+
+```bash
+sudo systemctl stop wavemaker@ladertanken oscillator@ladertanken
+cd ~/ros_ws/src && mv ros2_wavemakers hydrolab_rigs && cd hydrolab_rigs
+git remote set-url origin https://github.com/Vebjorn-Steinsholt/hydrolab_rigs.git
+git checkout master && git pull
+sudo cp rpi/wavemaker@.service rpi/oscillator@.service /etc/systemd/system/
+sudo systemctl daemon-reload
+cd ~/ros_ws && rm -rf build install log && colcon build
+sudo systemctl start wavemaker@ladertanken
+systemctl status wavemaker@ladertanken --no-pager | head -3
+```
+
+Expected: `Summary: 7 packages finished`, then `active (running)` and the page shows *idle*. The
+clean build is needed because CMake's cache in `build/` records the old source path.
 
 ## Use
 
@@ -163,7 +184,7 @@ another machine it needs `ROS_DOMAIN_ID=1` too.
    the Pi:
 
    ```bash
-   cd ~/ros_ws/src/ros2_wavemakers && git fetch && git checkout feat/oscillator && git pull
+   cd ~/ros_ws/src/hydrolab_rigs && git fetch && git checkout feat/oscillator && git pull
    git log --oneline -1                      # the commit you expect
    cd ~/ros_ws && colcon build
    ```
@@ -185,7 +206,7 @@ another machine it needs `ROS_DOMAIN_ID=1` too.
    ```bash
    source ~/ros_ws/install/setup.bash
    export ROS_DOMAIN_ID=1
-   python3 ~/ros_ws/src/ros2_wavemakers/rig_controller/test/make_test_dat.py /tmp/test_runs.dat
+   python3 ~/ros_ws/src/hydrolab_rigs/rig_controller/test/make_test_dat.py /tmp/test_runs.dat
    ros2 run rig_controller play_dat /tmp/test_runs.dat --min-m -0.146 --max-m 0.146 \
      --max-velocity-mps 0.54 --dry-run
    ```
@@ -255,14 +276,14 @@ In addition to the wavemaker install above, as user `ladertanken` with the Uno p
 
 ```bash
 # Uno: fixed name /dev/linmot_bridge, ModemManager kept off it
-sudo cp ~/ros_ws/src/ros2_wavemakers/rpi/99-linmot-bridge.rules /etc/udev/rules.d/
+sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/99-linmot-bridge.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger && sudo udevadm settle
 ls -l /dev/linmot_bridge                # → /dev/linmot_bridge -> ttyACM0
 id | grep -o dialout                    # → dialout (else: sudo usermod -aG dialout ladertanken, log in again)
 
 # Both units (the wavemaker's has the ExecStartPre check too)
-sudo cp ~/ros_ws/src/ros2_wavemakers/rpi/oscillator@.service \
-        ~/ros_ws/src/ros2_wavemakers/rpi/wavemaker@.service /etc/systemd/system/
+sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/oscillator@.service \
+        ~/ros_ws/src/hydrolab_rigs/rpi/wavemaker@.service /etc/systemd/system/
 sudo systemctl daemon-reload
 systemd-analyze verify oscillator@ladertanken.service wavemaker@ladertanken.service   # no output = OK
 ```

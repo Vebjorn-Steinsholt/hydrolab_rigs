@@ -32,7 +32,7 @@ release LinMot-Talk's control. Then check everything the settings are for (the s
 LinMot-Talk open to switch the drive off, the rig has no e-stop):
 
 ```bash
-cd ~/ros_ws/src/ros2_wavemakers/firmware/linmot_serial_bridge
+cd ~/ros_ws/src/hydrolab_rigs/firmware/linmot_serial_bridge
 python3 link_test.py --move --home
 ```
 
