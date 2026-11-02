@@ -231,6 +231,14 @@ another machine it needs `ROS_DOMAIN_ID=1` too.
 If all of this passes, merge `feat/oscillator` into `master` (TODO 26). Note the date and any
 deviation here.
 
+**Run 2026-11-02 on ladertanken, commit `e096801`: all steps passed.** Step 1: no errors since
+the 12:46 start (older F2026/F2074/PROFIBUS lines in `journalctl -b` were from 26-28 October).
+Step 3 printed the expected table. Steps 5-7 exited 5, 5 (then 4 while held) and 130. Step 8:
+launch up 13:02:44, whole file played 13:06:43 to about 13:07:50 (run 5 started 13:07:42, about
+1 s later than the file's 57.4 s after run 0), no warning at 13:07:44, warning at 13:12:50, 5 min
+after the run ended. With a hand-started launch the warning is only in that terminal and on the
+page, not in `journalctl`.
+
 ## Oscillator
 
 The sloshing oscillator (LinMot drive behind an Arduino Uno, see `OSCILLATOR.md`) runs on the

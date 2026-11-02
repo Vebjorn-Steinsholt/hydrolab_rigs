@@ -578,7 +578,7 @@ belongs in `play_dat.py` (item at the end).
 
 ### Merge
 
-- [ ] Merge `feat/oscillator` into master once G is far enough along.
+- [x] Merge `feat/oscillator` into master once G is far enough along (merged 2026-11-02, after the rig test in `rpi/README.md`).
 - [x] On the lab Pi, remove `build/` and `install/` of `wavemaker_controller` and rebuild. The
   wavemaker runs with its topic names unchanged (`rig` defaults to `wavemaker`); its parameters
   have the new names from step R and `drive_name: indradrive` is required, so any parameter file
