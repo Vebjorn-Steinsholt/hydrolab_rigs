@@ -3,10 +3,10 @@ Launch one wavemaker controller, optionally with the bridge and the Nav2 lifecyc
 
 Terminal use (experienced users): the controller only, lifecycle stepped by hand.
     ros2 launch wavemaker_bringup wavemakers.launch.py wavemaker:=ladertanken
-    ros2 launch wavemaker_bringup wavemakers.launch.py wavemaker:=ladertanken \
-      wavemaker_mode_pregenerated:=true      # for pregenerated goals (e.g. .dat files)
+Each goal picks its type: height and period for a regular wave, positions for a pregenerated
+one (e.g. play_dat), so both work without a relaunch.
 
-Bridge use (normal users): use wavemaker_bridge.launch.py, which includes this file with
+Bridge use (normal users): use bridge.launch.py, which includes this file with
 with_bridge:=true and the lifecycle manager on.
 """
 
@@ -30,21 +30,18 @@ def _launch_setup(context):
     bond_timeout = float(context.launch_configurations['bond_timeout'])
     water_depth = context.launch_configurations['water_depth']
     transfer_gain = context.launch_configurations['wavemaker_transfer_gain']
-    pregenerated = context.launch_configurations['wavemaker_mode_pregenerated']
     # Values given at launch override the ones in wavemakers.yaml; empty keeps the yaml value.
     overrides = {}
     if water_depth:
         overrides['water_depth'] = float(water_depth)
     if transfer_gain:
         overrides['wavemaker_transfer_gain'] = float(transfer_gain)
-    if pregenerated:
-        overrides['wavemaker_mode_pregenerated'] = pregenerated == 'true'
     namespace = f'wavemakers/{wavemaker}'
 
     actions = [
         LifecycleNode(
-            package='wavemaker_controller',
-            executable='wavemaker_node',
+            package='rig_controller',
+            executable='controller_node',
             namespace=namespace,
             name='controller',
             parameters=[config_file, {'bond_timeout': bond_timeout}, overrides],
@@ -56,15 +53,15 @@ def _launch_setup(context):
     if with_bridge:
         actions.append(
             LifecycleNode(
-                package='wavemaker_controller',
-                executable='wavemaker_bridge',
+                package='rig_controller',
+                executable='bridge_node',
                 namespace=namespace,
-                name='wavemaker_bridge',
+                name='bridge',
                 parameters=[{'bond_timeout': bond_timeout}],
                 output='screen',
             )
         )
-        managed_nodes.append('wavemaker_bridge')
+        managed_nodes.append('bridge')
 
     if enable_lifecycle_manager:
         # The manager configures and activates the nodes in order and, if any of them stops
@@ -74,13 +71,17 @@ def _launch_setup(context):
             Node(
                 package='nav2_lifecycle_manager',
                 executable='lifecycle_manager',
-                name='lifecycle_manager_wavemaker',
+                name='lifecycle_manager',
                 namespace=namespace,
                 output='screen',
                 parameters=[{
                     'autostart': True,
                     'node_names': managed_nodes,
                     'bond_timeout': bond_timeout,
+                    # After a fault the nodes stay down. Nav2 would otherwise bring them back up
+                    # within seconds (respawn reconnection), switching the drive on again without
+                    # anyone asking. Restart the service instead.
+                    'attempt_respawn_reconnection': False,
                 }],
             )
         )
@@ -100,7 +101,7 @@ def generate_launch_description():
             'with_bridge',
             default_value='false',
             choices=['true', 'false'],
-            description='Also start wavemaker_bridge (normally via wavemaker_bridge.launch.py)',
+            description='Also start bridge_node (normally via bridge.launch.py)',
         ),
         DeclareLaunchArgument(
             'enable_lifecycle_manager',
@@ -124,14 +125,6 @@ def generate_launch_description():
             default_value='',
             description='Measured / target wave height for regular waves; empty uses the value '
                         'in wavemakers.yaml',
-        ),
-        DeclareLaunchArgument(
-            'wavemaker_mode_pregenerated',
-            default_value='',
-            choices=['', 'true', 'false'],
-            description='true: goals carry positions and sample_interval (terminal use only; '
-                        'the bridge sends regular waves); empty uses the value in '
-                        'wavemakers.yaml',
         ),
         OpaqueFunction(function=_launch_setup),
     ])

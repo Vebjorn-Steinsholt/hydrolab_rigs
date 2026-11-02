@@ -9,6 +9,7 @@ User=%i
 WorkingDirectory=/home/%i
 Environment=WAVEMAKER=%i PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
 EnvironmentFile=/etc/default/wavemaker
+ExecStartPre=/home/%i/ros_ws/src/ros2_wavemakers/rpi/refuse_if_busy.sh oscillator@%i
 ExecStart=/home/%i/ros_ws/src/ros2_wavemakers/rpi/run.sh
 ExecStop=/home/%i/ros_ws/src/ros2_wavemakers/rpi/stop.sh
 

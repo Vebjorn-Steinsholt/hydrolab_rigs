@@ -38,7 +38,7 @@ both files; gaps in the numbering are the items kept there.
 - [ ] **5. Make the gateway switch the drive off if the PC or the node dies.** (rig; MGate configuration)
   The MGate keeps sending the last outputs (Drive On, Drive Start, last target) if Modbus writes stop. Our driver only sets control word 0 while its process is alive.
   - On the MGate's output module, set a fault value timeout of about 500 ms (it must ride out the ~210 ms gateway stalls; see *Verified so far*) with fault value 0 (MGate manual p. 28). Test by killing the controller while the drive is enabled; the drive must switch off.
-  - The fault timeout relies on writes every cycle; the matching code change (`write_only_dirty` default) is item 5 in [TODO.md](TODO.md).
+  - The fault timeout relies on writes every cycle; the matching code change is done: `write_only_dirty` defaults to `false` in `IndraDriveActuator` (2026-10-27).
 
 - [ ] **34. Spring balance matches the water depth.** (rig; mechanical, for whoever owns the mechanics)
   The blue ropes run over a pulley to large springs whose tension counteracts the water pressure on the flap, so the motor is stable at upright. The water's moment on the flap grows roughly with depth cubed (1.0 m ≈ 2.5 × 0.73 m), so the tension must be reset whenever the water level changes, together with `water_depth` in `wavemakers.yaml`.
@@ -95,7 +95,7 @@ Kept as a record of physical checks already done.
 - Wavemaker type, flap attachment height and water depth match `wavemakers.yaml`.
 - Drive limits −550° / 500° are configured in IndraWorks and are kept there by decision (2026-10-07); the controller's ±275° is the travel limit (±200° until 2026-10-20).
 - No mechanical end stops. The lab waves above have been run on this hardware at 1 m depth (Pål Lader, 2026-10-08), which by linear theory needs about ±9.3 cm at the flap top; the earlier ±5 cm figure (2026-10-07) was too low.
-- `wavemaker_upright_position_m` matches the physical upright: 0.0 m for ladertanken.
+- `upright_position_m` matches the physical upright: 0.0 m for ladertanken.
 - Activation caused no physical motion.
 - Small position oscillation at standstill (the servo holding position) is accepted; it shows as larger velocity oscillation, but the controller only uses position. Measured below ±0.5° (≈ ±0.27 mm on ladertanken), well inside the 2 mm return-to-upright tolerance (≈ 3.8°).
 - The flap was disconnected for the first motor tests (2026-10-07) and reconnected for the lab waves (2026-10-08).
@@ -205,7 +205,7 @@ Measured above 1 the waves came out too high, and the higher gain shrinks the ne
 4. For each run, send the wave and let it run long enough to fill the analysis window (next
    section), then stop it:
    ```bash
-   ros2 action send_goal $NS/move_wavemaker wavemaker_interfaces/action/MoveWavemaker \
+   ros2 action send_goal $NS/move_wavemaker rig_interfaces/action/MoveRig \
      "{height: 0.026, period: 1.0}"                 # Ctrl-C cancels
    ```
    The controller rejects a wave that would exceed the travel or speed limits; that period and
@@ -312,9 +312,9 @@ ros2 lifecycle set $NS/controller activate          # enables the drive
 ros2 run rqt_plot rqt_plot $NS/wavemaker_setpoint/data $NS/wavemaker_position/data
 
 # small slow wave, then stop
-ros2 action send_goal --feedback $NS/move_wavemaker wavemaker_interfaces/action/MoveWavemaker \
+ros2 action send_goal --feedback $NS/move_wavemaker rig_interfaces/action/MoveRig \
   "{height: 0.0001, period: 10.0}"                # Ctrl-C cancels
-ros2 service call $NS/return_to_upright wavemaker_interfaces/srv/ReturnToUpright "{requester: 'cli', tolerance: 0.0}"
+ros2 service call $NS/return_to_upright rig_interfaces/srv/ReturnToUpright "{requester: 'cli', tolerance: 0.0}"
 
 # finish
 ros2 lifecycle set $NS/controller deactivate        # disables the drive
@@ -324,7 +324,7 @@ Bridge (the web page's role played from the terminal), with the controller activ
 
 ```bash
 ros2 launch wavemaker_bringup wavemakers.launch.py wavemaker:=ladertanken with_bridge:=true
-# configure + activate the controller, then the bridge ($NS/wavemaker_bridge)
+# configure + activate the controller, then the bridge ($NS/bridge)
 ros2 topic pub -r 5 $NS/heartbeat std_msgs/msg/Bool "{data: true}"
 ros2 topic echo $NS/wavemaker_message
 ros2 topic pub --once -w 1 $NS/height std_msgs/msg/Float64 "{data: 0.0001}"
@@ -333,5 +333,5 @@ ros2 topic pub --once -w 1 $NS/start std_msgs/msg/Bool "{data: true}"
 ros2 topic pub --once -w 1 $NS/stop std_msgs/msg/Bool "{data: true}"
 ```
 
-Without hardware, run `ros2 run wavemaker_controller fake_controller --ros-args -r __ns:=$NS`
+Without hardware, run `ros2 run rig_controller fake_controller --ros-args -r __ns:=$NS`
 instead of the controller (options `--reject`, `--abort-after SECONDS`).

@@ -1,0 +1,2 @@
+# LinMot-Talk drive configurations: one 400 KB line each, so no text diffs.
+*.lmc binary

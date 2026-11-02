@@ -1,0 +1,14 @@
+# LinMot serial-to-CAN bridge for the sloshing oscillator: Arduino Uno R3, USB ID 2341:0043.
+#
+# - ModemManager must not probe it: its AT commands and DTR toggling reset the Uno, so an
+#   activation right after plugging in fails with "the drive does not answer on CAN".
+# - /dev/linmot_bridge stays the same across USB ports and when the Uno is replaced (the by-id
+#   path contains the board's serial number). Only one Uno R3 may be plugged in.
+#
+# Install (see OSCILLATOR.md, step F):
+#   sudo cp 99-linmot-bridge.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   ls -l /dev/linmot_bridge
+ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0043", ENV{ID_MM_DEVICE_IGNORE}="1"
+# The symlink only for the serial port, not for the board's USB device node.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0043", SYMLINK+="linmot_bridge"

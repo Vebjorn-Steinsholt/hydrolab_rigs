@@ -9,9 +9,9 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>wavemaker_controller</exec_depend>
+  <exec_depend>rig_controller</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend>
-  <exec_depend>wavemaker_web</exec_depend>
+  <exec_depend>rig_web</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

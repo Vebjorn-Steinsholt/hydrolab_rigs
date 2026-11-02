@@ -1,0 +1,18 @@
+# Goal
+# The goal picks its type. Regular wave: height and period, positions left empty.
+# Wave height H in meters and wave period in seconds.
+float64 height
+float64 period
+# Absolute wavemaker positions in meters, sampled at this fixed interval.
+# Pregenerated: positions and sample_interval, height and period left at 0.
+float64[] positions
+float64 sample_interval
+---
+# Result
+bool success
+string message
+---
+# Feedback
+float64 desired_position
+float64 actual_position
+float64 elapsed_time

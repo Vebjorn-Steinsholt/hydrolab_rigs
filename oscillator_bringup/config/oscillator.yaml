@@ -1,0 +1,29 @@
+# LinMot sloshing oscillator (OSCILLATOR.md). Values from the C + D rig test, 2026-10-23.
+/oscillators/sloshing/controller:
+  ros__parameters:
+    rig: oscillator
+    drive_name: linmot
+    drive_motion: linear
+    serial_port: /dev/linmot_bridge   # udev rule rpi/99-linmot-bridge.rules
+    upright_position_m: 0.1
+    # Goal travel, 15 mm inside the steel box (hard stops at 0 and 200 mm): from 50 mm strokes the
+    # slide overshot the setpoint by ~3 mm at each end with margins 1.2 / 5.0 (2026-10-23).
+    travel_minimum_m: 0.015
+    travel_maximum_m: 0.185
+    min_position_m: 0.005             # the bridge firmware's limits
+    max_position_m: 0.195
+    max_acceleration_mps2: 20.0
+    # The drive's speed and acceleration limits per goal, as multiples of the motion's peaks.
+    # 1.2 / 5.0 halved the lag (~100 ms instead of ~200 ms) but made the rig hum mechanically and
+    # overshoot the setpoint by ~3 mm at each end; 1.0 / 1.0 is quiet up to 100 mm at 2 s
+    # (2026-10-23, OSCILLATOR.md step G).
+    positioning_velocity_margin: 1.0
+    positioning_acceleration_margin: 1.0
+    max_goal_acceleration_mps2: 9.81
+    min_period_s: 0.2
+    return_to_upright_max_velocity_mps: 0.1
+    step_timeout_ms: 2000
+
+/oscillators/sloshing/bridge:
+  ros__parameters:
+    rig: oscillator                   # topic names: oscillator_state, oscillator_message

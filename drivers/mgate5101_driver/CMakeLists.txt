@@ -38,7 +38,7 @@ target_link_libraries(poll_rate_probe PRIVATE mgate5101)
 # test_mapping is self-contained.
 # test_driver removed from build: requires the Python stub server
 # (tests/stub_server.py, listens on 127.0.0.1:1502) and is not needed
-# to consume this driver from wavemaker_controller. Source kept in
+# to consume this driver from rig_controller. Source kept in
 # tests/ for reference; run manually with the stub if ever needed.
 enable_testing()
 

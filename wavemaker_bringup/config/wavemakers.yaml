@@ -1,5 +1,6 @@
 /wavemakers/ladertanken/controller:
   ros__parameters:
+    drive_name: "indradrive"
     driver_address: "192.168.1.70"
     driver_port: 502
     driver_unit_id: 1
@@ -28,14 +29,12 @@
     step_timeout_ms: 10000
 
     wavemaker_type: "flap"
-    wavemaker_id: "ladertanken"
-    wavemaker_upright_position_m: 0.0  # Upright oscillation center [m]
-    wavemaker_upright_is_minimum: false
-    wavemaker_mode_pregenerated: false
+    upright_position_m: 0.0  # Upright oscillation center [m]
+    upright_is_minimum: false
     water_depth: 1.0         
     flap_attachment_height: 1.30
     hinge_height: 0.09  # pivot above the floor, wall below closed (2026-10-20)
-    actuator_drive_type: "angular"
+    drive_motion: "angular"
     actuator_upright_angle_deg: 0.0
     actuator_lead_m_per_degree: 0.00053  # 5.3 cm flap change per 100 deg [m/deg]
     # Measured / target wave height (regular waves only); the stroke is divided by it.
@@ -55,31 +54,29 @@
 
 /wavemakers/lilletanken/controller:
   ros__parameters:
+    drive_name: "indradrive"
     wavemaker_type: "piston"
-    wavemaker_id: "lilletanken"
-    wavemaker_minimum: 0.0
-    wavemaker_maximum: 0.5
-    wavemaker_mode_pregenerated: false
+    travel_minimum_m: 0.0
+    travel_maximum_m: 0.5
     water_depth: 1.0
     # flap_attachment_height omitted — fine, piston never checks it
-    actuator_drive_type: "linear"
+    drive_motion: "linear"
     min_position_m: 0.0
     max_position_m: 0.5
     wavemaker_transfer_gain: 1.0  # see ladertanken
 
 /wavemakers/mclab/controller:
   ros__parameters:
+    drive_name: "indradrive"
     wavemaker_type: "flap"
-    wavemaker_id: "mclab"
-    wavemaker_minimum: 0.0
-    wavemaker_maximum: 0.5
-    wavemaker_upright_position_m: 0.0
-    wavemaker_upright_is_minimum: false
-    wavemaker_mode_pregenerated: false
+    travel_minimum_m: 0.0
+    travel_maximum_m: 0.5
+    upright_position_m: 0.0
+    upright_is_minimum: false
     water_depth: 1.5
     flap_attachment_height: 1.95   # must be > water_depth (1.5)
     hinge_height: 0.5
-    actuator_drive_type: "linear"
+    drive_motion: "linear"
     min_position_m: 0.0
     max_position_m: 0.5
     wavemaker_transfer_gain: 1.0  # see ladertanken

@@ -1,0 +1,22 @@
+[Unit]
+Description=Sloshing oscillator on %i's Pi (oscillator.launch.py)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=%i
+WorkingDirectory=/home/%i
+Environment=RIG=oscillator PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
+EnvironmentFile=/etc/default/oscillator
+ExecStartPre=/home/%i/ros_ws/src/ros2_wavemakers/rpi/refuse_if_busy.sh wavemaker@%i
+ExecStart=/home/%i/ros_ws/src/ros2_wavemakers/rpi/run.sh
+ExecStop=/home/%i/ros_ws/src/ros2_wavemakers/rpi/stop.sh
+
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=45
+Restart=no
+
+# No [Install] section on purpose: the unit cannot be enabled, so it never starts at boot.
+# The drive is switched on, and homes if needed, as soon as oscillator.launch.py runs.
