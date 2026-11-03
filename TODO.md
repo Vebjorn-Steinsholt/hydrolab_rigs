@@ -42,6 +42,13 @@ the items kept there, and finished items, which are removed (see the git history
      ```
   4. Rollback if it fails: `mv ~/ros_ws/src/hydrolab_rigs ~/ros_ws/src/ros2_wavemakers`, `sudo cp ~/unit_backup/* /etc/systemd/system/ && sudo systemctl daemon-reload`, check out the previous commit (`git reflog`) and rebuild.
 
+- [ ] **38. Rig test of `generate_waves`. (rig)** (`rig_controller/src/generate_waves.py`, README *Generating motion files*)
+  Unit tests and `play_dat --dry-run` pass (2026-11-03); not yet played on the rig. After item 37, on ladertanken.
+  1. Pi on the branch with the generator (`git pull`, `colcon build`), the same commit as the PC that generates. Measure the water depth; `WATER_DEPTH` in `/etc/default/wavemaker` set to it, service restarted.
+  2. On the PC, a small test matrix: two small regular runs (1.0 s 1/60, 1.5 s 1/40), one near the limits (1.3 s, H 0.171 m), one irregular run (Hs 0.03 m, Tp 1.2 s, 120 s, seed 1), 60 s pauses. Generate with `--water-depth` equal to the Pi's, check the `.png`, copy the `.dat` and `.csv` together to the Pi.
+  3. On the Pi, in `tmux`: `play_dat --dry-run` with the printed limits, then play run by run (`--runs 0`, ...) with the service running and the page open. Stop on the page during one run, and the soft stop during another: both must stop the paddle.
+  4. Pass: every run accepted, no faults; the page's plot of each run matches the `.png`; measured H of the regular runs within the gain table's scatter (~6 %) of the target at calibrated periods; measured Hs of the irregular run noted (no pass limit yet).
+
 
 ## Medium
 
@@ -60,6 +67,12 @@ the items kept there, and finished items, which are removed (see the git history
 
 - [ ] **22. `cancel_all_goals` can report `SERVER_UNAVAILABLE` right after configure.** (`rig_controller/src/controller_node.cpp`)
   `action_server_is_ready()` is false until discovery completes; wait up to about 1 s before replying.
+
+- [ ] **39. `generate_waves` records how a file was made.** (`rig_controller/src/generate_waves.py`)
+  A file is only right for the depth, yaml and generator it was made with, and a pregenerated goal carries positions only, so neither `play_dat` nor the controller can tell. Write `<output>.txt` next to the `.dat`: wavemaker, water depth (and whether it was overridden), dt, the git commit of the repository (with `-dirty` if it has local changes), the date and the command line. Needed to interpret probe data and to regenerate a run.
+
+- [ ] **40. `play_dat` takes its limits from `wavemakers.yaml`.** (`rig_controller/src/play_dat.py`)
+  `--min-m`, `--max-m` and `--max-velocity-mps` are typed by hand, separately from the limits `generate_waves` used; a typo gives a misleading dry-run OK (the controller still enforces its own limits). Give `play_dat` the wavemaker's name and read the limits as `generate_waves.load_wavemaker` does (share that code rather than copy it); keep the three options as overrides. The oscillator needs the same from `oscillator.yaml`.
 
 ## Low
 
@@ -337,3 +350,30 @@ Files must play with `play_dat --rig oscillator` and be accepted by the controll
   upright 0.1 m); speed the LinMot's `max_velocity_mps` (default 2.0, not in the yaml);
   acceleration the lower of `max_goal_acceleration_mps2` (9.81) and the drive's
   `max_acceleration_mps2` (20).
+
+### Trigger output
+
+A hardware signal for external equipment (data acquisition, cameras) that follows the runs of a
+motion file. The generators already write a `trigger` channel (1 during each run, 0 at rest, as
+`make_test_dat.py`); nothing reads it: `play_dat` sends only positions, and the controller and
+the Pi have no trigger output.
+
+**When:** not started. First find out what the lab's acquisition needs.
+
+#### Open
+
+- **Who uses it, and what does it expect?** A level (high while recording) or an edge (a pulse
+  at start); voltage and connector.
+- **When is it on?** During the run (today's channel); from when the waves reach the model until
+  they have passed (needs the paddle-to-model distance and the group velocity; irregular runs need
+  a rule, e.g. at Tp); or a pulse at the start of each run.
+- **How does it leave the Pi, in step with the paddle?**
+  - The controller switches a GPIO output at goal start and end, or plays a trigger array with
+    the positions: accurate to the control cycle; changes the action, the controller and wiring.
+  - `play_dat` switches a GPIO output when a goal is accepted and finished: simpler, accurate to
+    tens of milliseconds.
+  - No hardware trigger: record continuously and align afterwards from the `<rig>_setpoint` and
+    position topics or the run table's times.
+
+Until then the generator keeps writing 1 during each run; changing the channel has no effect on
+the rig.

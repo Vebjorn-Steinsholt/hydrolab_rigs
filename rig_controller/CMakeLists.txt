@@ -59,6 +59,15 @@ install(PROGRAMS src/play_dat.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME play_dat
 )
+# Generates motion files (.dat + run table) for play_dat (see the script's docstring).
+install(PROGRAMS src/generate_waves.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME generate_waves
+)
+# generate_waves imports play_dat; the program above is installed without .py, so not importable.
+install(FILES src/play_dat.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(PROGRAMS src/soft_stop.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME soft_stop

@@ -23,6 +23,9 @@
   <exec_depend>action_msgs</exec_depend>  <!-- play_dat -->
   <exec_depend>python3-gpiozero</exec_depend>  <!-- soft_stop -->
   <exec_depend>python3-lgpio</exec_depend>     <!-- soft_stop, Pi 5 backend -->
+  <exec_depend>python3-numpy</exec_depend>       <!-- play_dat, generate_waves -->
+  <exec_depend>python3-yaml</exec_depend>        <!-- generate_waves -->
+  <exec_depend>python3-matplotlib</exec_depend>  <!-- generate_waves plot -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

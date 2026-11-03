@@ -300,12 +300,93 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 
 ## Generating motion files
 
-> **In progress** (`feat/wave-generation`): regular waves are being implemented in
-> `rig_controller/src/generate_waves.py`; irregular waves are decided below but not started.
+> **Not yet tested on the rig** (`feat/wave-generation`). Regular and irregular waves work and
+> pass the unit tests and `play_dat --dry-run`.
 
-`generate_waves.py` turns a test matrix into a motion file (`.dat`) and its run table (`.csv`)
-for one wavemaker, ready for `play_dat`. Wavemakers only; the oscillator gets a separate
-generator later ([TODO.md](TODO.md), *Oscillator motion generator*).
+`generate_waves` (`rig_controller/src/generate_waves.py`) turns a test matrix into a motion file for one wavemaker,
+ready for `play_dat`. Wavemakers only; the oscillator gets a separate generator later
+([TODO.md](TODO.md), *Oscillator motion generator*).
+
+### Test matrix
+
+A CSV, one row per run, played top to bottom; a repeat is just another row. Each row fills the
+columns of its `kind` and leaves the others empty:
+
+```csv
+kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,1.0,,1/60,30,,,,,,3,30
+regular,1.2,,1/40,30,,,,,,3,30
+regular,1.3,0.171,,30,,,,,,3,30
+irregular,,,,,0.04,1.2,3.3,300,1,5,60
+```
+
+| Column | Kind | Meaning |
+|---|---|---|
+| `kind` | both | `regular` (default if empty) or `irregular` |
+| `period_s` | regular | Wave period T [s] |
+| `height_m` or `steepness` | regular | Wave height H [m], **or** the steepness as `1/x` (H/λ = 1/x, e.g. `1/60`); exactly one. Other forms (`60`, `0.0167`) are refused, so they cannot be misread |
+| `n_periods` | regular | Length of the run in periods, ramps included |
+| `hs_m`, `tp_s` | irregular | Significant wave height Hs [m] and peak period Tp [s] |
+| `gamma` | irregular | JONSWAP peak enhancement; empty = 3.3, 1.0 = Pierson–Moskowitz |
+| `duration_s` | irregular | Length of the run [s], ramps included; whole samples (any whole second at 20 ms) |
+| `seed` | irregular | Random phases; the same seed gives the identical run, another seed another realisation |
+| `n_ramp` | both | Ramp at each end, in periods (regular) or peak periods (irregular) |
+| `pause_s` | both | Rest after the run, at least 1 s; in practice long enough for the tank to calm |
+
+With steepness rows, H follows from the wavelength, so it depends on the water depth: generate
+with the depth of the session (`--water-depth`).
+
+### Generate
+
+```bash
+source ~/ros_ws/install/setup.bash
+cd ~/wave_sessions          # the folder with the test matrix
+ros2 run rig_controller generate_waves ladertanken session.csv -o session_waves
+```
+
+File names are relative to the current folder, for the test matrix and for `-o`; from elsewhere
+give full paths (`~/wave_sessions/session.csv -o ~/wave_sessions/session_waves`). It writes:
+
+- `session_waves.dat`: the motion file for `play_dat`.
+- `session_waves.csv`: the run table: per run its start and end, the parameters, H and 1/x
+  (regular), the paddle amplitude or its standard deviation and peak (irregular), and `skipped`
+  with the reason for a run that does not fit the wavemaker.
+- `session_waves.png`: paddle position and speed over the whole file, with the wavemaker's
+  limits dashed and the runs numbered as in the run table.
+
+and prints a summary and the `play_dat` command with this wavemaker's limits:
+
+```
+session_waves.dat: 4 runs, 0 skipped, 9.3 min
+ros2 run rig_controller play_dat session_waves.dat --min-m -0.14575 --max-m 0.14575 --max-velocity-mps 0.7632
+```
+
+**Give `-o` a different name from the test matrix:** `-o session` would overwrite `session.csv`
+with the run table.
+
+| Option | Use |
+|---|---|
+| `--water-depth 0.95` | The depth of this session instead of the yaml's; warns when the gain table was measured at another depth |
+| `--dt 0.01` | Sample interval [s], whole milliseconds; default 0.02 |
+| `--show` | Also open the plot in a window |
+| `--no-plot` | Do not write the `.png` |
+| `--config <file>` | Another `wavemakers.yaml`; default the installed one, else the repository's |
+| `--max-velocity-mps` | Required for linear drives (lilletanken, mclab), whose speed limit is not known from the yaml yet (TODO item 19) |
+
+### Check and play
+
+Look at the `.png`, then let `play_dat` read the file without moving anything. Source the
+workspace first; the file name is relative to the current folder:
+
+```bash
+source ~/ros_ws/install/setup.bash
+ros2 run rig_controller play_dat session_waves.dat --min-m -0.14575 --max-m 0.14575 \
+  --max-velocity-mps 0.7632 --dry-run
+```
+
+To play it, drop `--dry-run` and add `--ros-args -r __ns:=/wavemakers/ladertanken`, with the
+controller running (the wavemaker service or `lab.launch.py`); `--runs 2-3` plays only some runs.
+See `play_dat --help`.
 
 ### Compatibility
 
@@ -319,13 +400,8 @@ generator later ([TODO.md](TODO.md), *Oscillator motion generator*).
 - **With `wavemakers.yaml`:** the geometry and limits are read from the wavemaker's block. The
   type, water depth, geometry and limits must be stated there; the generator refuses to fall back
   on the controller's generic defaults for them.
-
-### Test matrix
-
-A CSV with one row per run, played in file order (repeats are just more rows). A regular run
-gives the period and either the wave height `height_m` or the steepness in the faculty's notation,
-`1/x` (H/λ = 1/x, e.g. `1/60`); other forms of steepness are refused so that `60` cannot be
-misread. The run table records both H and 1/x for every run.
+- **Trigger:** channel 1 of the file is 1 during each run and 0 at rest. Nothing plays it yet
+  ([TODO.md](TODO.md), *Trigger output*).
 
 ### Irregular waves (decided 2026-11-03)
 
@@ -335,15 +411,21 @@ misread. The run table records both H and 1/x for every run.
 | Amplitudes | Fixed by the spectrum, random phases only | The generated Hs is exact, and a seed reproduces the run exactly |
 | Reproducibility | A `seed` per run in the test matrix and the run table | Re-running a sea state must give the same motion as the probe data |
 | Frequency spacing | Δf = 1 / duration, synthesised by inverse FFT | No repetition within a run; fast for 30-minute runs |
-| Frequency band | About 0.5 fp to 3 fp, adjustable | Below it the paddle needs a large stroke for little wave; above it speed and acceleration grow |
+| Frequency band | 0.5 fp to 3 fp (`F_MIN_FACTOR`, `F_MAX_FACTOR` in the script) | Below it the paddle needs a large stroke for little wave; above it speed and acceleration grow |
+| Hs | Scaled over the generated band only | The generated waves have exactly the requested Hs; the cut tails carry no energy |
 | Transfer function | The regular-wave paddle amplitude per frequency | Same physics and gain as regular waves, nothing new to keep in step |
-| Gain table | Applied per frequency, clamped outside the table | Calibrated with regular waves, so an approximation for irregular seas; recorded in the run table |
+| Gain table | Applied per frequency, clamped outside the table | Calibrated with regular waves, so an approximation for irregular seas |
 | Second-order correction | Not included | Needs further theory; regular waves do not have it either |
 
-Irregular runs keep the same contract as regular ones: ramps over a few Tp, ending exactly at
-upright, and the same checks; a sea state whose peaks do not fit is skipped. Rows in the test
-matrix get a `kind` column (`regular` or `irregular`) so one file can mix both in the order the
-session needs.
+The peaks of an irregular run depend on the seed: a sea state that fits with one seed can be
+skipped with another, and the run table gives the paddle's peak for each.
+
+### Tests
+
+```bash
+cd ~/ros_ws/src/hydrolab_rigs
+python3 -m pytest rig_controller/test/test_generate_waves.py -v
+```
 
 ## Interfaces
 
