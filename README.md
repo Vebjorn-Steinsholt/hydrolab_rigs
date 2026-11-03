@@ -70,7 +70,8 @@ see each other's nodes.
 | ladertanken | `ladertanken-rpi` | `ladertanken` | 1 |
 
 Log in with `ssh ladertanken@ladertanken-rpi.local`. Do not use the old Raspberry Pi default user
-`pi`.
+`pi`. On a Windows lab computer, the files in [windows/](windows/README.md) start and stop the rigs
+with a double-click.
 
 Set the lab's domain on the Pi and on every computer that should talk to it, for example in
 `~/.bashrc`: `export ROS_DOMAIN_ID=1`. Do not use the default domain 0: any other ROS user on the

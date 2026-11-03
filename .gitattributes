@@ -1,2 +1,5 @@
 # LinMot-Talk drive configurations: one 400 KB line each, so no text diffs.
 *.lmc binary
+
+# cmd.exe needs CRLF: with LF only, goto and call can miss labels.
+*.bat text eol=crlf
