@@ -45,7 +45,8 @@ def write_yaml(path, name, params):
     return str(path)
 
 
-PISTON = {'wavemaker_type': 'piston', 'water_depth': 1.0, 'drive_motion': 'linear',
+PISTON = {'drive_name': 'indradrive', 'wavemaker_type': 'piston', 'water_depth': 1.0,
+          'drive_motion': 'linear',
           'travel_minimum_m': -0.2, 'travel_maximum_m': 0.2}
 
 
@@ -102,8 +103,8 @@ def test_unknown_wavemaker_lists_names():
         gw.load_wavemaker('nosuchtank', CONFIG)
 
 
-@pytest.mark.parametrize('key', ['wavemaker_type', 'water_depth', 'travel_minimum_m',
-                                 'travel_maximum_m'])
+@pytest.mark.parametrize('key', ['drive_name', 'wavemaker_type', 'water_depth',
+                                 'travel_minimum_m', 'travel_maximum_m'])
 def test_missing_required_key_is_named(tmp_path, key):
     params = {k: v for k, v in PISTON.items() if k != key}
     with pytest.raises(ValueError, match=key):
@@ -412,7 +413,10 @@ def test_main_end_to_end(tmp_path, capsys):
     ])
     out = str(tmp_path / 'session')
     assert gw.main(['ladertanken', matrix, '-o', out, '--config', CONFIG]) == 0
-    assert '2 runs, 0 skipped' in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert '2 runs, 0 skipped' in printed
+    # the short play_dat form (item 40): limits from the yaml by name
+    assert f'play_dat {out}.dat ladertanken --dry-run' in printed
     with open(out + '.csv', newline='') as f:
         table = list(csv.DictReader(f))
     assert [r['kind'] for r in table] == ['regular', 'irregular']

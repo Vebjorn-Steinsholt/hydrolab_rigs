@@ -14,17 +14,22 @@ import csv
 import importlib.util
 import os
 import pathlib
+import sys
 
 import numpy as np
 import pytest
 
 PLAY_DAT = os.environ.get(
     'PLAY_DAT', str(pathlib.Path(__file__).resolve().parents[1] / 'src' / 'play_dat.py'))
+sys.path.insert(0, str(pathlib.Path(PLAY_DAT).resolve().parent))  # play_dat imports rig_limits
 _spec = importlib.util.spec_from_file_location('play_dat', PLAY_DAT)
 pd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pd)
 
 DT_S = 0.01
+REPO = pathlib.Path(__file__).resolve().parents[2]
+WAVEMAKERS = str(REPO / 'wavemaker_bringup' / 'config' / 'wavemakers.yaml')
+OSCILLATOR = str(REPO / 'oscillator_bringup' / 'config' / 'oscillator.yaml')
 
 
 # ---------------------------------------------------------------- helpers
@@ -485,3 +490,91 @@ def test_main_table_for_another_file(tmp_path, capsys):
 
 def test_main_bad_runs_argument(tmp_path):
     assert dry_run(tmp_path, '--runs', '7') == 2
+
+
+# ---------------------------------------------------------------- limits from the yaml (item 40)
+# Written before the change (sketch.md); they fail until play_dat takes the rig name.
+
+def test_name_takes_the_limits_from_the_yaml(tmp_path, capsys):
+    assert dry_run(tmp_path, limits=('ladertanken', '--config', WAVEMAKERS)) == 0
+    out = capsys.readouterr().out
+    assert 'limits from wavemakers.yaml (ladertanken): -0.14575..+0.14575 m, 0.7632 m/s' in out
+    assert 'namespace /wavemakers/ladertanken' in out
+    assert out.count(' OK') == 3
+
+
+def test_name_after_the_options(tmp_path, capsys):
+    """The name works anywhere, not only straight after the file (parse_intermixed_args)."""
+    assert dry_run(tmp_path, 'ladertanken', limits=('--config', WAVEMAKERS)) == 0
+    assert 'limits from wavemakers.yaml (ladertanken)' in capsys.readouterr().out
+
+
+def test_option_overrides_one_value(tmp_path, capsys):
+    assert dry_run(tmp_path, limits=('ladertanken', '--config', WAVEMAKERS,
+                                     '--max-m', '0.1')) == 0
+    out = capsys.readouterr().out
+    assert '--max-m overridden: -0.14575..+0.10000 m, 0.7632 m/s' in out
+
+
+def test_override_is_checked_against(tmp_path, capsys):
+    # three_runs peaks at 0.05 m: a 0.04 m override flags it, nothing moves
+    x, _ = three_runs()
+    path = write_motion(tmp_path / 'a.dat', [x])
+    assert pd.main(['play_dat', str(path), 'ladertanken', '--config', WAVEMAKERS,
+                    '--max-m', '0.04']) == 1
+    assert 'travel' in capsys.readouterr().out
+
+
+def test_without_name_or_limits_is_an_error(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        dry_run(tmp_path, limits=())
+    assert exit_info.value.code == 2
+    assert 'give the rig name' in capsys.readouterr().err
+
+
+def test_without_name_and_one_limit_missing_is_an_error(tmp_path):
+    with pytest.raises(SystemExit):
+        dry_run(tmp_path, limits=('--min-m', '-0.1', '--max-m', '0.1'))
+
+
+def test_old_form_says_where_its_limits_came_from(tmp_path, capsys):
+    assert dry_run(tmp_path) == 0
+    assert 'limits from the command line: -0.10000..+0.10000 m, 0.5400 m/s' in \
+        capsys.readouterr().out
+
+
+def test_linear_drive_needs_the_speed(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        dry_run(tmp_path, limits=('lilletanken', '--config', WAVEMAKERS))
+    assert 'TODO item 19' in capsys.readouterr().err
+
+
+def test_linear_drive_with_the_speed(tmp_path, capsys):
+    assert dry_run(tmp_path, limits=('lilletanken', '--config', WAVEMAKERS,
+                                     '--max-velocity-mps', '0.5')) == 0
+    assert '--max-velocity-mps overridden' in capsys.readouterr().out
+
+
+def test_unknown_name_is_an_error(tmp_path, capsys):
+    assert dry_run(tmp_path, limits=('nosuchtank', '--config', WAVEMAKERS)) == 2
+    assert 'ladertanken' in capsys.readouterr().err
+
+
+def test_oscillator_upright_from_the_yaml(tmp_path, capsys):
+    # three_runs relative to upright 0.1: 0.05..0.15 m, inside 0.015..0.185
+    assert dry_run(tmp_path, limits=('sloshing', '--rig', 'oscillator',
+                                     '--config', OSCILLATOR)) == 0
+    out = capsys.readouterr().out
+    assert 'upright +0.1000 m' in out
+    assert 'namespace /oscillators/sloshing' in out
+    assert out.count(' OK') == 3
+
+
+def test_with_namespace():
+    import rig_limits
+    limits = rig_limits.load_limits('wavemaker', 'ladertanken', WAVEMAKERS)
+    assert pd.with_namespace(['play_dat'], limits) == [
+        'play_dat', '--ros-args', '-r', '__ns:=/wavemakers/ladertanken']
+    explicit = ['play_dat', '--ros-args', '-r', '__ns:=/x']
+    assert pd.with_namespace(explicit, limits) == explicit
+    assert pd.with_namespace(['play_dat'], None) == ['play_dat']
