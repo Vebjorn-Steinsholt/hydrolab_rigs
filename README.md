@@ -25,6 +25,7 @@ Modbus TCP / PROFIBUS gateway.
 - [Running a wavemaker](#running-a-wavemaker)
   - [Water depth](#water-depth)
   - [Web page](#web-page)
+- [Generating motion files](#generating-motion-files)
 - [Interfaces](#interfaces)
 - [How a motion runs](#how-a-motion-runs)
 - [Faults and stopping](#faults-and-stopping)
@@ -296,6 +297,53 @@ so the demo cannot reach other computers or the real controller. Open the addres
 ros2 launch rig_web demo.launch.py
 ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-stop
 ```
+
+## Generating motion files
+
+> **In progress** (`feat/wave-generation`): regular waves are being implemented in
+> `rig_controller/src/generate_waves.py`; irregular waves are decided below but not started.
+
+`generate_waves.py` turns a test matrix into a motion file (`.dat`) and its run table (`.csv`)
+for one wavemaker, ready for `play_dat`. Wavemakers only; the oscillator gets a separate
+generator later ([TODO.md](TODO.md), *Oscillator motion generator*).
+
+### Compatibility
+
+- **With `play_dat`:** the file and run table are in the format `play_dat` reads, and the
+  generator reads every file back with `play_dat`'s own functions before it finishes.
+- **With the controller:** the wave physics is the controller's own (dispersion relation,
+  transfer function, transfer gain, flap scaling to the attachment point), so a run in a file and
+  the same H and T sent as a regular goal give the same stroke. Each run is checked against the
+  controller's position, speed and acceleration limits for that wavemaker; a run that does not fit
+  is listed in the run table as `skipped`, with the reason, and left out of the file.
+- **With `wavemakers.yaml`:** the geometry and limits are read from the wavemaker's block. The
+  type, water depth, geometry and limits must be stated there; the generator refuses to fall back
+  on the controller's generic defaults for them.
+
+### Test matrix
+
+A CSV with one row per run, played in file order (repeats are just more rows). A regular run
+gives the period and either the wave height `height_m` or the steepness in the faculty's notation,
+`1/x` (H/λ = 1/x, e.g. `1/60`); other forms of steepness are refused so that `60` cannot be
+misread. The run table records both H and 1/x for every run.
+
+### Irregular waves (decided 2026-11-03)
+
+| Decision | Choice | Why |
+|---|---|---|
+| Spectrum | JONSWAP with Hs, Tp, γ (γ = 1 is Pierson–Moskowitz) | The standard in model testing; one formula covers both |
+| Amplitudes | Fixed by the spectrum, random phases only | The generated Hs is exact, and a seed reproduces the run exactly |
+| Reproducibility | A `seed` per run in the test matrix and the run table | Re-running a sea state must give the same motion as the probe data |
+| Frequency spacing | Δf = 1 / duration, synthesised by inverse FFT | No repetition within a run; fast for 30-minute runs |
+| Frequency band | About 0.5 fp to 3 fp, adjustable | Below it the paddle needs a large stroke for little wave; above it speed and acceleration grow |
+| Transfer function | The regular-wave paddle amplitude per frequency | Same physics and gain as regular waves, nothing new to keep in step |
+| Gain table | Applied per frequency, clamped outside the table | Calibrated with regular waves, so an approximation for irregular seas; recorded in the run table |
+| Second-order correction | Not included | Needs further theory; regular waves do not have it either |
+
+Irregular runs keep the same contract as regular ones: ramps over a few Tp, ending exactly at
+upright, and the same checks; a sea state whose peaks do not fit is skipped. Rows in the test
+matrix get a `kind` column (`regular` or `irregular`) so one file can mix both in the order the
+session needs.
 
 ## Interfaces
 

@@ -312,3 +312,28 @@ colcon test-result --verbose
 ```
 
 Expected: `Summary: N tests, 0 errors, 0 failures`.
+
+### Oscillator motion generator
+
+A generator of motion files for the sloshing oscillator, separate from the wavemakers'
+`rig_controller/src/generate_waves.py`, which reads only `wavemakers.yaml` and refuses other rigs.
+Files must play with `play_dat --rig oscillator` and be accepted by the controller.
+
+**When:** after the wavemaker generator works. Not started.
+
+#### Decided (2026-11-03)
+
+- Its own script, not a branch in `generate_waves.py`: the input is a stroke, not a wave height,
+  so the test matrices differ.
+- Same file contract as the wavemakers: `play_dat`'s `.dat` layout and run table, checked by
+  reading the file back with `play_dat`'s own functions.
+
+#### Differences from the wavemaker generator
+
+- Config `oscillator_bringup/config/oscillator.yaml`, key `/oscillators/<name>/controller`.
+- No wave physics: amplitude = H / 2 (H is the stroke; `WaveTrajectory::configure`, type
+  `oscillator`). No transfer gain.
+- Limits: positions absolute within `travel_minimum_m`..`travel_maximum_m` (0.015..0.185 m,
+  upright 0.1 m); speed the LinMot's `max_velocity_mps` (default 2.0, not in the yaml);
+  acceleration the lower of `max_goal_acceleration_mps2` (9.81) and the drive's
+  `max_acceleration_mps2` (20).
