@@ -16,10 +16,49 @@ the items kept there, and finished items, which are removed (see the git history
 
 - [ ] **38. Rig test of `generate_waves`. (rig)** (`rig_controller/src/generate_waves.py`, README *Generating motion files*)
   Unit tests and `play_dat --dry-run` pass (2026-11-03). 2026-11-04: two small regular runs generated on the Pi and played on ladertanken (`rpi/README.md`, *`play_dat` limits from the yaml*); still open: the steps below, above all the irregular run.
-  1. Pi on the branch with the generator (`git pull`, `colcon build`). Measure the water depth; `WATER_DEPTH` in `/etc/default/wavemaker` set to it, service restarted.
-  2. A small test matrix: two small regular runs (1.0 s 1/60, 1.5 s 1/40), one near the limits (1.3 s, H 0.171 m), one irregular run (Hs 0.03 m, Tp 1.2 s, 120 s, seed 1), 60 s pauses. Copy it to the Pi and generate there, as in README *On the Pi*, with `--water-depth` equal to `WATER_DEPTH` (`generate_waves` reads the yaml's depth otherwise); copy the `.png` back and check it.
-  3. On the Pi, in `tmux`: `play_dat <file> ladertanken --dry-run`, then play run by run (`--runs 0`, ...) with the service running and the page open; `limits match the controller` before the first run. Stop on the page during one run, and the soft stop during another: both must stop the paddle.
-  4. Pass: every run accepted, no faults; the page's plot of each run matches the `.png`; measured H of the regular runs within the gain table's scatter (~6 %) of the target at calibrated periods; measured Hs of the irregular run noted (no pass limit yet).
+  **Planned 2026-11-05**, on ladertanken, Pi on `master` (merged 2026-11-04, `91f4412` or later). Keep a hand near the e-stop.
+  1. Pi up to date and the water depth set. Measure the depth first; below, 0.95 stands for the measured value:
+     ```bash
+     ssh ladertanken@ladertanken-rpi.local
+     cd ~/ros_ws/src/hydrolab_rigs && git status --short && git checkout master && git pull
+     git log --oneline -1                      # 91f4412 or later
+     cd ~/ros_ws && colcon build
+     sudoedit /etc/default/wavemaker           # WATER_DEPTH=0.95, no comment on that line
+     sudo systemctl stop wavemaker@ladertanken && sudo systemctl start wavemaker@ladertanken
+     journalctl -u wavemaker@ladertanken -b --no-pager -o cat | grep -E "ERROR|water_depth"
+     ```
+     Expected: no `ERROR`; the page shows *idle*.
+  2. Matrix and file, on the Pi in `tmux` (`tmux attach` after a dropped connection). Runs 0-1 regular, 2 near the limits, 3 irregular, 60 s pauses:
+     ```bash
+     tmux
+     source ~/ros_ws/install/setup.bash
+     export ROS_DOMAIN_ID=1
+     D=0.95                                    # the same as WATER_DEPTH
+     mkdir -p ~/wave_sessions/2026-11-05_item38 && cd ~/wave_sessions/2026-11-05_item38
+     cat > matrix.csv <<'EOF'
+     kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+     regular,1.0,,1/60,30,,,,,,3,60
+     regular,1.5,,1/40,30,,,,,,3,60
+     regular,1.3,0.171,,30,,,,,,3,60
+     irregular,,,,,0.03,1.2,3.3,120,1,5,60
+     EOF
+     ros2 run rig_controller generate_waves ladertanken matrix.csv -o item38 --water-depth $D
+     ```
+     Expected: `4 runs, 0 skipped, 7.9 min` (checked on the PC at 0.95 and 1.0 m). Run 2 is close to the travel limit, 0.144 of 0.146 m at 0.95 m and 0.132 m at 1.0 m; at a shallower depth it may be skipped, and `item38.csv` says why: note it and go on. On the PC (Command Prompt or Linux), look at the plot:
+     ```bash
+     scp ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05_item38/item38.png .
+     ```
+  3. Dry run, then each run in full with the page open (the measurements of step 5 come from these):
+     ```bash
+     ros2 run rig_controller play_dat item38.dat ladertanken --dry-run
+     ros2 run rig_controller play_dat item38.dat ladertanken --runs 0
+     ros2 run rig_controller play_dat item38.dat ladertanken --runs 1
+     ros2 run rig_controller play_dat item38.dat ladertanken --runs 2
+     ros2 run rig_controller play_dat item38.dat ladertanken --runs 3
+     ```
+     Expected: the dry run lists runs 0-2 `regular` and run 3 `irregular`, all `OK`; each play logs `limits match the controller`, then `run N (...)`, and exits 0. Run 3 is the first irregular run on the rig: watch its start ramp and that it ends at upright. Note the clock time of each run for the probe data.
+  4. Stops, after the tank has calmed: `--runs 0` and Stop on the page after a few waves (expected: the paddle holds, `play_dat` exits 5); Return to upright. `--runs 1` and the soft stop (expected: the paddle halts, exit 5; while held, a new `play_dat` exits 4); release, Return to upright.
+  5. Pass: every run accepted, no faults; the page's plot of each run matches the `.png`; measured H of the regular runs within the gain table's scatter (~6 %) of the target at calibrated periods; measured Hs of the irregular run noted (no pass limit yet). Afterwards copy the session folder off the Pi (`scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05_item38 .`) and record the result in `rpi/README.md`.
 ## Medium
 
 - [ ] **16. Test and document the bridge.** (`rig_controller/test/`, `README.md`)
@@ -71,6 +110,31 @@ the items kept there, and finished items, which are removed (see the git history
 
 - [ ] **36. Soft stop timeout logged once at startup.** (`controller_node.cpp`, `soft_stop.py`; rig)
   On the Pi, about 1 s after `Managed nodes are active`, the controller logs `No Soft stop message received for over 200 ms; treating as stopped` once (2026-10-16), then works normally. Most likely load while all nodes start; harmless before the first wave, but it is logged as an error on every normal start. If it ever appears mid-session, `soft_stop_timeout_s` (0.2 s) is too tight for the Pi. Decide: raise the timeout, or skip the check until the soft stop has published steadily for a moment. 2026-10-22, on the PC with the LinMot actuator: logged 13 ms after an activation that blocked for about 0.8 s, with `ros2 topic pub` publishing at 20 Hz throughout. Both times it follows a blocking `on_activate`, so the soft stop subscription is probably not served during activation (the liveness check runs in `fault_timer_`, in the default callback group with the lifecycle services); check that before changing the timeout. 2026-10-23, LinMot: logged 2 ms after an activation that blocked for 21 s while homing, `ros2 topic pub` at 20 Hz throughout; goals worked right after. The blocking length makes no difference, which fits the callback-group explanation, not the timeout. Confirmed 2026-10-23 on the Pi with `oscillator.launch.py`: `soft_stop` published at 13:14:40.70 (starting stopped) and 13:14:47.77 (released), but the controller logged `Soft stop connected` only at 13:15:01.60, when the 21 s homing activation ended, together with `has not published within 5 s of configure`. The controller does not serve the soft stop subscription while `on_activate` blocks, although it already has its own callback group (`soft_stop_callback_group_`) and `main()` uses a `MultiThreadedExecutor`. Why is still open; a lead: the group and subscription are created in `on_configure`, after `spin()` started. Fix the cause (or do not block `on_activate`), not the timeout. 2026-10-26: also logged while the controller was `inactive` after a failed activation (the drive did not answer on CAN), minutes after the fault; harmless (goals are refused), probably the same cause.
+
+- [ ] **41. `generate_waves` warns about the gain table at the yaml's own depth.** (`rig_controller/src/generate_waves.py`, `main()`)
+  Any `--water-depth` prints `warning: the gain table is for 1.0 m, not ... m`, also when it equals the yaml's depth (found 2026-11-04: "for 1.0 m, not 1.0 m"). Warn only when the two differ: `if wm.gain_periods and args.water_depth != wm.water_depth:`. Add a test that `--water-depth` equal to the yaml's prints no warning.
+
+- [ ] **42. `rig_limits.default_config_path` falls back to a path that does not exist when installed.** (`rig_controller/src/rig_limits.py`)
+  Without the bringup package installed (`wavemaker_bringup`, `oscillator_bringup`), the fallback builds the path from the file's own location: right from the source tree (`src/../../wavemaker_bringup/config`), but from `install/rig_controller/lib/rig_controller/` it points into `install/rig_controller/`, so `play_dat <file> <name>` and `generate_waves` without `--config` fail with a missing-file error that does not say why. Found by reading the code 2026-11-04, when the development PC's workspace had `rig_controller` built without the bringup packages; not yet hit in practice. Workaround: `colcon build --packages-up-to rig_controller wavemaker_bringup oscillator_bringup`.
+  Sketch: fall back to the repository only when ROS is not sourced (running from the source tree, as the tests do); sourced but the package missing is an error that says what to do. `PackageNotFoundError` is a `LookupError`; `FileNotFoundError` is an `OSError`, which `play_dat` and `fake_controller` already catch.
+  ```python
+  def default_config_path(rig: str) -> str:
+      """The installed yaml when the workspace is sourced, else the repository's copy."""
+      _, package, filename = RIGS[rig]
+      try:
+          from ament_index_python.packages import get_package_share_directory
+      except ImportError:  # not sourced: running from the source tree
+          share = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', package)
+      else:
+          try:
+              share = get_package_share_directory(package)
+          except LookupError:  # PackageNotFoundError
+              raise FileNotFoundError(
+                  f'{package} is not installed, so there is no {filename}: build it '
+                  f'(colcon build --packages-up-to {package}) or give --config') from None
+      return os.path.join(share, 'config', filename)
+  ```
+  `generate_waves` calls `default_config_path()` while building its parser (`parser.add_argument('--config', default=default_config_path())`), so it would now fail even with `--config`: make the default `None`, then `config = args.config or default_config_path()` after parsing, and use `config` in `load_wavemaker` and in the printed command's `--config` comparison. Tests: with `ament_index_python` importable and the package missing, the error names the package and `--config` (monkeypatch `get_package_share_directory` to raise `PackageNotFoundError`); `generate_waves ... --config <file>` works with the same patch.
 
 ## Planned features (all rigs)
 
