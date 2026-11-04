@@ -5,8 +5,7 @@ limits from wavemakers.yaml. The goal is compatibility: every file plays with pl
 every run is accepted by the controller on that wavemaker.
 
 The wave physics is the controller's (wave_math.cpp, WaveTrajectory::configure), so a run in a
-file and the same H and T sent as a regular goal give the same stroke. The old MATLAB WaveGen
-scripts are background only, not a design to follow.
+file and the same H and T sent as a regular goal give the same stroke. 
 
 Contract with play_dat.py
   .dat (read_motion)
