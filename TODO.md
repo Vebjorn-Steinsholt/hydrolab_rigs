@@ -14,35 +14,6 @@ the items kept there, and finished items, which are removed (see the git history
 
 ## High
 
-- [ ] **37. Move the ladertanken Pi to the renamed repository. (rig)** (`rpi/README.md`, *Repository renamed to `hydrolab_rigs`*)
-  The repository was renamed from `ros2_wavemakers` (merged into `master` 2026-11-03); the units now run the scripts from `~/ros_ws/src/hydrolab_rigs`. A Pi not yet moved keeps working (GitHub redirects the old URL) until its units are replaced. Only ladertanken has a Pi so far; a new Pi is cloned under the new name and needs none of this. Not during a run; the clean build takes a while on a Pi. `$USER` is the rig name.
-  1. Before, on the Pi: both units inactive, no local changes, nothing outside the repository uses the old path, and a backup of the installed units:
-     ```bash
-     systemctl is-active wavemaker@$USER oscillator@$USER   # both inactive
-     cd ~/ros_ws/src/ros2_wavemakers && git status -s        # empty, else stash or commit
-     grep -rn ros2_wavemakers ~/.bashrc /etc/default/wavemaker /etc/default/oscillator 2>/dev/null
-     mkdir -p ~/unit_backup && cp /etc/systemd/system/{wavemaker,oscillator}@.service ~/unit_backup/ 2>/dev/null
-     ```
-  2. Move, pull, install the units and rebuild:
-     ```bash
-     sudo systemctl stop wavemaker@$USER oscillator@$USER
-     cd ~/ros_ws/src && mv ros2_wavemakers hydrolab_rigs && cd hydrolab_rigs
-     git remote set-url origin https://github.com/Vebjorn-Steinsholt/hydrolab_rigs.git
-     git checkout master && git pull
-     sudo cp rpi/wavemaker@.service /etc/systemd/system/
-     sudo cp rpi/oscillator@.service /etc/systemd/system/
-     sudo systemctl daemon-reload
-     cd ~/ros_ws && rm -rf build install log && colcon build   # Summary: 7 packages finished
-     ```
-  3. Check: no output from `verify`, `active (running)`, and the page shows *idle* before any motion. The pull also brings the package renames (`rig_controller`, `rig_interfaces`, `rig_web`), so treat the first run as a commissioning check.
-     ```bash
-     systemd-analyze verify wavemaker@$USER.service
-     sudo systemctl start wavemaker@$USER
-     systemctl status wavemaker@$USER --no-pager | head -3
-     ```
-  4. Rollback if it fails: `mv ~/ros_ws/src/hydrolab_rigs ~/ros_ws/src/ros2_wavemakers`, `sudo cp ~/unit_backup/* /etc/systemd/system/ && sudo systemctl daemon-reload`, check out the previous commit (`git reflog`) and rebuild.
-
-
 ## Medium
 
 - [ ] **16. Test and document the bridge.** (`rig_controller/test/`, `README.md`)
