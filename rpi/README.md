@@ -260,6 +260,62 @@ launch up 13:02:44, whole file played 13:06:43 to about 13:07:50 (run 5 started 
 after the run ended. With a hand-started launch the warning is only in that terminal and on the
 page, not in `journalctl`.
 
+### `play_dat` limits from the yaml (TODO 40; run 2026-11-04)
+
+Checks that `play_dat` takes its limits, upright and namespace from the rig's name, and that the
+cross-check against the running controller works on the real drive. Keep a hand near the e-stop.
+
+0. **Code on the Pi.** `git status --short` empty, then:
+
+   ```bash
+   sudo systemctl stop wavemaker@ladertanken
+   cd ~/ros_ws/src/hydrolab_rigs && git fetch && git checkout feat/wave-generation && git pull
+   git log --oneline -1                      # the commit you expect
+   cd ~/ros_ws && colcon build
+   ```
+
+1. **Start.** `sudo systemctl start wavemaker@ladertanken`; no `ERROR` in the journal, the page
+   shows *idle*.
+2. **Test file** (on the Pi):
+
+   ```bash
+   source ~/ros_ws/install/setup.bash
+   export ROS_DOMAIN_ID=1
+   mkdir -p /tmp/rigcheck && cd /tmp/rigcheck
+   printf 'kind,period_s,height_m,n_periods,n_ramp,pause_s\nregular,1.0,0.03,10,2,3\nregular,1.3,0.05,10,2,3\n' > matrix.csv
+   ros2 run rig_controller generate_waves ladertanken matrix.csv -o test_waves --no-plot
+   ```
+
+   Expected: `2 runs, 0 skipped`, and the command `play_dat test_waves.dat ladertanken --dry-run`.
+3. **Dry run by name:** `ros2 run rig_controller play_dat test_waves.dat ladertanken --dry-run`.
+   Expected: `limits from wavemakers.yaml (ladertanken): -0.14575..+0.14575 m, 0.7632 m/s, upright
+   +0.0000 m`, `namespace /wavemakers/ladertanken`, runs 0 and 1 `OK`.
+4. **Cross-check and one run:** the same without `--dry-run`, with `--runs 0`. Expected: `limits
+   match the controller` before `run 0 (regular): 10.0 s, max 0.0170 m, 0.107 m/s`; 10 waves,
+   back to upright.
+5. **A difference only warns.** A copy of the yaml with a lower speed limit:
+
+   ```bash
+   sed 's/max_velocity_rpm: 240.0/max_velocity_rpm: 200.0/' \
+     ~/ros_ws/install/wavemaker_bringup/share/wavemaker_bringup/config/wavemakers.yaml > alt.yaml
+   ros2 run rig_controller play_dat test_waves.dat ladertanken --config alt.yaml --runs 0
+   ```
+
+   Expected: `0.6360 m/s` in the limits line, `yaml and controller differ: max_velocity_mps:
+   alt.yaml 0.6360, controller 0.7632`, and the run still starts. Ctrl-C (exit 130), Return to
+   upright from the page.
+6. **The old form:** `play_dat test_waves.dat --min-m -0.146 --max-m 0.146 --max-velocity-mps 0.54
+   --dry-run`. Expected: `limits from the command line: -0.14600..+0.14600 m, 0.5400 m/s, upright
+   +0.0000 m`, no namespace line, both runs `OK`.
+
+Afterwards put the Pi back on `master` (`git checkout master && git pull`, `colcon build`) once
+the branch is merged.
+
+**Run 2026-11-04 on ladertanken, commit `8a458eb`: all steps passed.** Steps 2-3 printed the same
+file, limits and table as on the development PC. Step 4: limits matched the controller and run 0
+played. Step 5: the warning at 15:19:16, run 0 started 2 s later and was stopped with Ctrl-C.
+Step 6 as expected. The oscillator was not run (its limits are covered by the tests only).
+
 ## Oscillator
 
 The sloshing oscillator (LinMot drive behind an Arduino Uno, see `OSCILLATOR.md`) runs on the

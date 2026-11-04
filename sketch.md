@@ -504,8 +504,9 @@ python3 -m pytest rig_controller/test -q --continue-on-collection-errors
 its rig's yaml block as parameters when its namespace is `/<prefix>/<name>`, so against it
 `play_dat` prints "limits match the controller"; with `-p max_velocity_rpm:=200.0` on the fake,
 "yaml and controller differ: max_velocity_mps: wavemakers.yaml 0.7632, controller 0.6360"
-(checked 2026-11-04). Against the real controller: "limits match the controller" (not yet
-checked on the rig).
+(checked 2026-11-04). Against the real controller on ladertanken: "limits match the controller",
+and with a lowered `max_velocity_rpm` in a `--config` copy, the warning; the run still plays
+(rig test 2026-11-04, commit `8a458eb`, `rpi/README.md` *`play_dat` limits from the yaml*).
 
 ## 6. Documentation
 
