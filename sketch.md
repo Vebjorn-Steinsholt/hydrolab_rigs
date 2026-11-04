@@ -268,7 +268,6 @@ def cross_check_limits(node, limits) -> None:
     controller enforces its own limits regardless.
     """
     import rclpy
-    from rcl_interfaces.msg import ParameterType
     from rclpy.parameter import parameter_value_to_python
     from rclpy.parameter_client import AsyncParameterClient
 
@@ -277,16 +276,25 @@ def cross_check_limits(node, limits) -> None:
     if not client.wait_for_services(timeout_sec=2.0):
         log.warn('controller parameters not available; limits not cross-checked')
         return
-    future = client.get_parameters(LIMIT_PARAMETERS)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
-    if not future.done() or future.result() is None:
+    # get_parameters answers nothing at all if one name is not declared (rclcpp and rclpy), and
+    # each drive declares only its own (max_velocity_rpm on the IndraDrive, max_velocity_mps on
+    # the LinMot): ask for the declared ones only.
+    listed = client.list_parameters()
+    rclpy.spin_until_future_complete(node, listed, timeout_sec=2.0)
+    response = listed.result() if listed.done() else None
+    if response is None:
         log.warn('controller parameters not available; limits not cross-checked')
         return
-    # A parameter the controller does not declare (e.g. max_velocity_rpm on the LinMot) comes
-    # back as NOT_SET; leave it out, as if it were missing from the yaml.
+    declared = set(response.result.names)
+    keys = [key for key in LIMIT_PARAMETERS if key in declared]
+    future = client.get_parameters(keys)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+    response = future.result() if future.done() else None
+    if response is None:
+        log.warn('controller parameters not available; limits not cross-checked')
+        return
     params = {key: parameter_value_to_python(value)
-              for key, value in zip(LIMIT_PARAMETERS, future.result().values)
-              if value.type != ParameterType.PARAMETER_NOT_SET}
+              for key, value in zip(keys, response.values)}
     try:
         live = rig_limits.limits_from_parameters(limits.rig, limits.name, params, 'controller')
     except ValueError as e:
@@ -476,7 +484,8 @@ install(FILES src/play_dat.py src/rig_limits.py
 Written before the code (2026-11-03), so they fail until it exists. Against today's code the 124
 existing tests pass and only the new ones fail; against this sketch applied to a copy of the
 repository all 162 pass. A test still failing once you are done points at a real difference from
-the sketch.
+the sketch. Added after the code (2026-11-04): the short form without `--config`, which the 162
+missed (`load_limits` without the default path), so 163 now.
 
 ```bash
 cd ~/ros_ws/src/hydrolab_rigs
@@ -488,12 +497,15 @@ python3 -m pytest rig_controller/test -q --continue-on-collection-errors
 | File | What was added | Waiting for |
 |---|---|---|
 | `test_rig_limits.py` (new, 25 tests) | The table of section 1 for all four rigs; LinMot defaults; the goal acceleration limit on an IndraDrive; every missing key named (linear and angular); the three configurations the controller refuses; an unknown name; `default_config_path`; `compare`: yaml and parameters agree, a changed position, speed or acceleration is reported, the linear-drive speed is ignored, below 0.1 mm is tolerated | Section 1 |
-| `test_play_dat.py` (`src` on `sys.path`, 12 new tests) | Limits from the yaml by name; the name after the options; one override; an override checked against; no name and no limits; one limit missing; the old form's printed line; a linear drive without and with `--max-velocity-mps`; an unknown name; the oscillator's 0.1 m upright and namespace; `with_namespace` | Sections 1 and 2 |
+| `test_play_dat.py` (`src` on `sys.path`, 13 new tests) | Limits from the yaml by name; the name after the options; the name without `--config`; one override; an override checked against; no name and no limits; one limit missing; the old form's printed line; a linear drive without and with `--max-velocity-mps`; an unknown name; the oscillator's 0.1 m upright and namespace; `with_namespace` | Sections 1 and 2 |
 | `test_generate_waves.py` | `PISTON` gains `drive_name`; `drive_name` in the required keys; the end-to-end test checks the printed `play_dat … ladertanken --dry-run` | Section 3 |
 
-`cross_check_limits` needs a node and is not covered: check it by hand. Against
-`fake_controller` it prints "controller parameters not available; limits not cross-checked" (the
-fake declares no parameters); against the real controller "limits match the controller".
+`cross_check_limits` needs a node and is not covered: check it by hand. `fake_controller` declares
+its rig's yaml block as parameters when its namespace is `/<prefix>/<name>`, so against it
+`play_dat` prints "limits match the controller"; with `-p max_velocity_rpm:=200.0` on the fake,
+"yaml and controller differ: max_velocity_mps: wavemakers.yaml 0.7632, controller 0.6360"
+(checked 2026-11-04). Against the real controller: "limits match the controller" (not yet
+checked on the rig).
 
 ## 6. Documentation
 
@@ -513,5 +525,5 @@ fake declares no parameters); against the real controller "limits match the cont
 - The water depth: `play_dat` sends positions only. Whether a file was made for the current depth
   is item 39's record.
 - The trigger channel (planned feature *Trigger output*).
-- `fake_controller` declaring the limit parameters: only needed for an automated end-to-end test of
-  the cross-check.
+- An automated end-to-end test of the cross-check (`fake_controller` now declares the parameters,
+  but `test_play_dat` runs without ROS).

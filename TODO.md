@@ -14,7 +14,7 @@ the items kept there, and finished items, which are removed (see the git history
 
 ## High
 
-- [ ] **37. Move the ladertanken Pi to the renamed repository. (rig)** (`rpi/README.md`, *Repository renamed to `hydrolab_rigs`*)
+- [x] **37. Move the ladertanken Pi to the renamed repository. (rig)** (`rpi/README.md`, *Repository renamed to `hydrolab_rigs`*)
   The repository was renamed from `ros2_wavemakers` (merged into `master` 2026-11-03); the units now run the scripts from `~/ros_ws/src/hydrolab_rigs`. A Pi not yet moved keeps working (GitHub redirects the old URL) until its units are replaced. Only ladertanken has a Pi so far; a new Pi is cloned under the new name and needs none of this. Not during a run; the clean build takes a while on a Pi. `$USER` is the rig name.
   1. Before, on the Pi: both units inactive, no local changes, nothing outside the repository uses the old path, and a backup of the installed units:
      ```bash

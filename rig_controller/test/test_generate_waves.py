@@ -59,16 +59,15 @@ def write_matrix(path, rows):
 
 
 def regular(**overrides):
-    spec = gw.RunSpec(kind='regular', n_ramp=3, pause_s=5.0, period_s=1.0, height_m=0.05,
-                      n_periods=20)
+    spec = gw.RegularSpec(n_ramp=3, pause_s=5.0, period_s=1.0, height_m=0.05, n_periods=20)
     for key, value in overrides.items():
         setattr(spec, key, value)
     return spec
 
 
 def irregular(**overrides):
-    spec = gw.RunSpec(kind='irregular', n_ramp=5, pause_s=5.0, hs_m=0.03, tp_s=1.2, gamma=3.3,
-                      duration_s=120.0, seed=1)
+    spec = gw.IrregularSpec(n_ramp=5, pause_s=5.0, hs_m=0.03, tp_s=1.2, gamma=3.3,
+                            duration_s=120.0, seed=1)
     for key, value in overrides.items():
         setattr(spec, key, value)
     return spec
@@ -197,7 +196,7 @@ def test_read_matrix_both_kinds_in_file_order(tmp_path):
         {'period_s': 1.3, 'height_m': 0.1, 'n_periods': 30, 'n_ramp': 3, 'pause_s': 60},
     ])
     specs = gw.read_test_matrix(path)
-    assert [s.kind for s in specs] == ['irregular', 'regular', 'regular']
+    assert [type(s) for s in specs] == [gw.IrregularSpec, gw.RegularSpec, gw.RegularSpec]
     assert (specs[0].hs_m, specs[0].gamma, specs[0].seed) == (0.05, 2.0, 7)
     assert (specs[1].steepness, specs[1].height_m) == (60.0, None)
     assert (specs[2].height_m, specs[2].steepness) == (0.1, None)

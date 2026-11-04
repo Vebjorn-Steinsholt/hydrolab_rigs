@@ -354,12 +354,14 @@ give full paths (`~/wave_sessions/session.csv -o ~/wave_sessions/session_waves`)
 - `session_waves.png`: paddle position and speed over the whole file, with the wavemaker's
   limits dashed and the runs numbered as in the run table.
 
-and prints a summary and the `play_dat` command with this wavemaker's limits:
+and prints a summary and the `play_dat` command to check the file:
 
 ```
 session_waves.dat: 4 runs, 0 skipped, 9.3 min
-ros2 run rig_controller play_dat session_waves.dat --min-m -0.14575 --max-m 0.14575 --max-velocity-mps 0.7632
+ros2 run rig_controller play_dat session_waves.dat ladertanken --dry-run
 ```
+
+For a linear drive the command also carries `--max-velocity-mps`, and for another yaml `--config`.
 
 **Give `-o` a different name from the test matrix:** `-o session` would overwrite `session.csv`
 with the run table.
@@ -380,12 +382,14 @@ workspace first; the file name is relative to the current folder:
 
 ```bash
 source ~/ros_ws/install/setup.bash
-ros2 run rig_controller play_dat session_waves.dat --min-m -0.14575 --max-m 0.14575 \
-  --max-velocity-mps 0.7632 --dry-run
+ros2 run rig_controller play_dat session_waves.dat ladertanken --dry-run
 ```
 
-To play it, drop `--dry-run` and add `--ros-args -r __ns:=/wavemakers/ladertanken`, with the
-controller running (the wavemaker service or `lab.launch.py`); `--runs 2-3` plays only some runs.
+The name gives the limits, the upright position and the namespace from the yaml, and every run
+prints where its limits came from. To play it, drop `--dry-run`, with the controller running (the
+wavemaker service or `lab.launch.py`); `play_dat` then warns if the running controller's limits
+differ from the yaml's. `--runs 2-3` plays only some runs. `--min-m`, `--max-m`,
+`--max-velocity-mps` and `--upright-m` override the yaml; without a name, give the first three.
 See `play_dat --help`.
 
 ### Compatibility

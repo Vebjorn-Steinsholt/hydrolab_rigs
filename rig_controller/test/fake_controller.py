@@ -11,7 +11,9 @@ default, or oscillator; the topics are named after the rig the same way):
     the real controller): blends from the held position to the first sample, interpolates
     linearly and succeeds at the last sample; a goal with both is rejected,
   - holds its position after a cancel, and serves return_to_upright (back to 0 in 1.5 s),
-  - optionally rejects every goal (--reject) or aborts a goal after N s (--abort-after).
+  - optionally rejects every goal (--reject) or aborts a goal after N s (--abort-after),
+  - declares its rig's yaml block as parameters when the namespace is /<prefix>/<name>, so
+    play_dat's cross-check finds the limits; -p changes one, to see the warning.
 
 Do not run it next to the real controller: both would serve the same action.
 
@@ -21,6 +23,8 @@ Do not run it next to the real controller: both would serve the same action.
       --ros-args -r __ns:=/wavemakers/ladertanken
     ros2 run rig_controller fake_controller --rig oscillator \
       --ros-args -r __ns:=/oscillators/sloshing
+    ros2 run rig_controller fake_controller \
+      --ros-args -r __ns:=/wavemakers/ladertanken -p max_velocity_rpm:=200.0
 """
 
 import argparse
@@ -38,6 +42,8 @@ from rclpy.utilities import remove_ros_args
 from rig_interfaces.action import MoveRig
 from rig_interfaces.srv import ReturnToUpright
 from std_msgs.msg import Float64
+
+import rig_limits  # installed next to this program
 
 LOOP_S = 0.02            # setpoint rate, as the real controller at poll_interval_ms 20
 LAG_S = 0.04             # the fake "measured" position trails the setpoint by this much
@@ -64,6 +70,7 @@ class FakeController(Node):
         self._busy = False
         self._position = 0.0     # last setpoint, held after a stop
         self._lock = threading.Lock()
+        self._declare_rig_parameters(rig)
         # Named after the rig, as in the real controller (oscillator_setpoint, ...).
         self._setpoint_pub = self.create_publisher(Float64, f'{rig}_setpoint', 10)
         self._measured_pub = self.create_publisher(Float64, f'{rig}_position', 10)
@@ -78,6 +85,30 @@ class FakeController(Node):
             callback_group=ReentrantCallbackGroup())
         self.get_logger().info(
             f'Fake controller ready (rig={rig}, reject={reject}, abort_after={abort_after})')
+
+    def _declare_rig_parameters(self, rig):
+        """
+        The rig's yaml block as parameters, as the real controller has them, so play_dat's
+        cross-check has something to compare. Without a /<prefix>/<name> namespace or a yaml
+        block, none: the fake still serves goals. Lists are left out (an empty one has no type).
+        """
+        prefix = rig_limits.RIGS[rig][0]
+        namespace = self.get_namespace()
+        parts = namespace.strip('/').split('/')
+        if len(parts) != 2 or parts[0] != prefix:
+            self.get_logger().info(
+                f'No rig parameters: namespace {namespace} is not /{prefix}/<name>')
+            return
+        config_path = rig_limits.default_config_path(rig)
+        try:
+            params = rig_limits.read_block(rig, parts[1], config_path)
+        except (OSError, ValueError) as e:
+            self.get_logger().warn(f'No rig parameters: {e}')
+            return
+        for key, value in params.items():
+            if isinstance(value, (bool, int, float, str)):
+                self.declare_parameter(key, value)  # a -p override wins
+        self.get_logger().info(f'Parameters of {parts[1]} from {config_path}')
 
     def _on_goal(self, goal):
         with self._lock:

@@ -64,14 +64,15 @@ install(PROGRAMS src/generate_waves.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME generate_waves
 )
-# generate_waves imports play_dat; the program above is installed without .py, so not importable.
-install(FILES src/play_dat.py
-  DESTINATION lib/${PROJECT_NAME}
-)
 install(PROGRAMS src/soft_stop.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME soft_stop
 )
+# Imported by play_dat and generate_waves; the programs are installed without .py.
+install(FILES src/play_dat.py src/rig_limits.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 target_link_libraries(controller_node
   mgate5101_driver::mgate5101
   linmot_serial_driver::linmot_serial
