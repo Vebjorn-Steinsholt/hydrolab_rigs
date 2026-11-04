@@ -26,6 +26,7 @@ Modbus TCP / PROFIBUS gateway.
   - [Water depth](#water-depth)
   - [Web page](#web-page)
 - [Generating motion files](#generating-motion-files)
+  - [On the Pi](#on-the-pi)
 - [Interfaces](#interfaces)
 - [How a motion runs](#how-a-motion-runs)
 - [Faults and stopping](#faults-and-stopping)
@@ -301,8 +302,9 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 
 ## Generating motion files
 
-> **Not yet tested on the rig** (`feat/wave-generation`). Regular and irregular waves work and
-> pass the unit tests and `play_dat --dry-run`.
+> **Regular waves tested on the rig** (ladertanken, 2026-11-04, [rpi/README.md](rpi/README.md)).
+> Irregular waves pass the unit tests and `play_dat --dry-run`, but have not yet been played on
+> the rig.
 
 `generate_waves` (`rig_controller/src/generate_waves.py`) turns a test matrix into a motion file for one wavemaker,
 ready for `play_dat`. Wavemakers only; the oscillator gets a separate generator later
@@ -355,12 +357,14 @@ give full paths (`~/wave_sessions/session.csv -o ~/wave_sessions/session_waves`)
 - `session_waves.png`: paddle position and speed over the whole file, with the wavemaker's
   limits dashed and the runs numbered as in the run table.
 
-and prints a summary and the `play_dat` command with this wavemaker's limits:
+and prints a summary and the `play_dat` command to check the file:
 
 ```
 session_waves.dat: 4 runs, 0 skipped, 9.3 min
-ros2 run rig_controller play_dat session_waves.dat --min-m -0.14575 --max-m 0.14575 --max-velocity-mps 0.7632
+ros2 run rig_controller play_dat session_waves.dat ladertanken --dry-run
 ```
+
+For a linear drive the command also carries `--max-velocity-mps`, and for another yaml `--config`.
 
 **Give `-o` a different name from the test matrix:** `-o session` would overwrite `session.csv`
 with the run table.
@@ -381,13 +385,58 @@ workspace first; the file name is relative to the current folder:
 
 ```bash
 source ~/ros_ws/install/setup.bash
-ros2 run rig_controller play_dat session_waves.dat --min-m -0.14575 --max-m 0.14575 \
-  --max-velocity-mps 0.7632 --dry-run
+ros2 run rig_controller play_dat session_waves.dat ladertanken --dry-run
 ```
 
-To play it, drop `--dry-run` and add `--ros-args -r __ns:=/wavemakers/ladertanken`, with the
-controller running (the wavemaker service or `lab.launch.py`); `--runs 2-3` plays only some runs.
+The name gives the limits, the upright position and the namespace from the yaml, and every run
+prints where its limits came from. To play it, drop `--dry-run`, with the controller running (the
+wavemaker service or `lab.launch.py`); `play_dat` then warns if the running controller's limits
+differ from the yaml's. `--runs 2-3` plays only some runs. `--min-m`, `--max-m`,
+`--max-velocity-mps` and `--upright-m` override the yaml; without a name, give the first three.
 See `play_dat --help`.
+
+### On the Pi
+
+Generate and play on the Pi: its `wavemakers.yaml` (gain table, depth, geometry) is the one the
+controller runs with, and `play_dat`'s cross-check compares the limits only. From the lab PC (set
+up once as in [windows/README.md](windows/README.md)) or any computer with ssh, copy the test
+matrix into a new session folder and log in:
+
+```bash
+ssh ladertanken@ladertanken-rpi.local "mkdir -p wave_sessions/2026-11-05"
+scp session.csv ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05/
+ssh ladertanken@ladertanken-rpi.local
+```
+
+On the Pi, work in `tmux` so that a dropped connection does not stop a run (`tmux attach` gets
+back to it):
+
+```bash
+tmux
+source ~/ros_ws/install/setup.bash
+export ROS_DOMAIN_ID=1        # the lab's domain; without it play_dat finds no controller
+cd ~/wave_sessions/2026-11-05
+ros2 run rig_controller generate_waves ladertanken session.csv -o session_waves
+```
+
+The Pi has no screen, so `--show` does not apply. Copy the plot to the computer you sit at and
+open it there (in a second window on that computer):
+
+```bat
+scp ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05/session_waves.png .
+start session_waves.png
+```
+
+(`xdg-open` instead of `start` on Linux.) Then the dry run and play as above, in the `tmux`
+window. With VS Code's Remote-SSH extension, the Pi's folder opens directly and the plot shows in
+a tab.
+
+Keep one folder per session (matrix, `.dat`, run table, plot): the run table says which run was
+played when, so it belongs with the probe data. Copy the folder off the Pi afterwards:
+
+```bash
+scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05 .
+```
 
 ### Compatibility
 

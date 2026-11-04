@@ -509,6 +509,13 @@ def test_name_after_the_options(tmp_path, capsys):
     assert 'limits from wavemakers.yaml (ladertanken)' in capsys.readouterr().out
 
 
+def test_name_without_config_uses_the_default_yaml(tmp_path, capsys, monkeypatch):
+    """The short form: no --config, the installed yaml (here the repository's)."""
+    monkeypatch.setattr(pd.rig_limits, 'default_config_path', lambda rig: WAVEMAKERS)
+    assert dry_run(tmp_path, limits=('ladertanken',)) == 0
+    assert 'limits from wavemakers.yaml (ladertanken)' in capsys.readouterr().out
+
+
 def test_option_overrides_one_value(tmp_path, capsys):
     assert dry_run(tmp_path, limits=('ladertanken', '--config', WAVEMAKERS,
                                      '--max-m', '0.1')) == 0

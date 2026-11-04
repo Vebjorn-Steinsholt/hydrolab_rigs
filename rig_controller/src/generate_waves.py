@@ -33,16 +33,20 @@ Contract with the controller (pregenerated goal, controller_node.cpp ~800-950)
   - A run starting at upright needs no blend from the paddle's position.
 """
 import argparse
+from collections.abc import Callable
 import csv
 from dataclasses import dataclass
 import math
 import os
 import sys
+from typing import TypeVar
 
 import numpy as np
-import yaml
+
 
 import play_dat
+import rig_limits
+
 
 G = 9.81  # m/s^2, the controller's value
 
@@ -71,85 +75,39 @@ def default_config_path() -> str:
     wavemakers.yaml from the installed wavemaker_bringup share directory
     (ament_index_python), falling back to the copy in the repository.
     """
-    try:
-        from ament_index_python.packages import get_package_share_directory
-        share = get_package_share_directory('wavemaker_bringup')
-    except Exception:  # not sourced: the copy in the repository
-        share = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             '..', '..', 'wavemaker_bringup')
-    return os.path.join(share, 'config', 'wavemakers.yaml')
-
-
-def required(parameter: dict, key: str, name: str):
-    """
-    A key whose controller default would give the wrong waves for this wavemaker (e.g.
-    wavemaker_type 'piston', water_depth 0.6, limits of +-500 deg): refuse instead of guessing.
-    """
-    if key not in parameter:
-        raise ValueError(f"wavemaker '{name}': set {key} in wavemakers.yaml")
-    return parameter[key]
+    return rig_limits.default_config_path('wavemaker')
 
 
 def load_wavemaker(name: str, config_path: str) -> Wavemaker:
     """
-    Read the yaml (yaml.safe_load) and pick '/wavemakers/<name>/controller' -> 'ros__parameters';
-    list the available names if it is missing.
-
-    required(): no safe default; the type, depth, geometry and limits must be stated for each
-    wavemaker, not taken from the controller's generic defaults. params.get(): the controller's
-    default, so a key left out of the yaml means the same here as on the rig. Keep these defaults
-    in step with controller_node.cpp and indradrive_actuator.cpp (declare_parameter calls).
-
-    Limits, as controller_node.cpp sets goal_position_minimum_/maximum_ (~210-245):
-      - drive_motion 'angular': through DriveScale (drive_scale.hpp)
-          m = upright_m + (deg - actuator_upright_angle_deg) * actuator_lead_m_per_degree
-          max_velocity_mps = max_velocity_rpm * 6 * lead (IndraDriveActuator::max_velocity_mps)
-      - drive_motion 'linear': travel_minimum_m / travel_maximum_m. Speed is not defined yet
-        (TODO item 19): None, and require it on the command line.
-
-    Test, ladertanken: min_m -0.14575, max_m +0.14575, max_velocity_mps 0.7632.
+    The wavemaker's geometry and gain from its yaml block, and its limits from rig_limits (the
+    same derivation play_dat uses). Keys that set the geometry are required, as the limits are.
     """
 
-    with open(config_path) as f:
-        config = yaml.safe_load(f)
-    key = f'/wavemakers/{name}/controller'
-    if key not in config:
-        names = [k.split('/')[2] for k in config if k.startswith('/wavemakers/')]
-        raise ValueError(f"no wavemaker '{name}' in {config_path}; have {', '.join(names)}")
-    params = config[key]['ros__parameters']
+    params = rig_limits.read_block('wavemaker', name, config_path)
+    source = os.path.basename(config_path)
+    limits = rig_limits.limits_from_parameters('wavemaker', name, params, source)
 
-    wavemaker_type = required(params, 'wavemaker_type', name)
-    upright_m = params.get('upright_position_m', 0.0)
-
-    if params.get('drive_motion', 'linear') == 'angular':
-        lead = required(params, 'actuator_lead_m_per_degree', name)
-        upright_deg = params.get('actuator_upright_angle_deg', 0.0)
-        min_m = upright_m + (required(params, 'min_position_deg', name) - upright_deg) * lead
-        max_m = upright_m + (required(params, 'max_position_deg', name) - upright_deg) * lead
-        max_velocity_mps = required(params, 'max_velocity_rpm', name) * 6.0 * lead
-    else:
-        min_m = required(params, 'travel_minimum_m', name)
-        max_m = required(params, 'travel_maximum_m', name)
-        max_velocity_mps = None  # rpm -> m/s not defined for linear drives (TODO item 19)
-
+    wavemaker_type = rig_limits.required(params, 'wavemaker_type', name, source)
     if wavemaker_type == 'flap':
-        attachment_height = required(params, 'flap_attachment_height', name)
+        attachment_height = rig_limits.required(params, 'flap_attachment_height', name, source)
     else:
-        attachment_height = 0.0  # unused for a piston
-    max_acceleration = params.get('max_goal_acceleration_mps2', 0.0)
+        attachment_height = 0.0 # not used for piston
 
     return Wavemaker(
-        name=name,
-        type=wavemaker_type,
-        water_depth=required(params, 'water_depth', name),
-        hinge_height=params.get('hinge_height', 0.0),
-        attachment_height=attachment_height,
-        gain=params.get('wavemaker_transfer_gain', 1.0),
-        gain_periods=list(params.get('wavemaker_transfer_gain_periods', [])),
-        gain_values=list(params.get('wavemaker_transfer_gain_values', [])),
-        min_m=min_m, max_m=max_m, upright_m=upright_m,
-        max_velocity_mps=max_velocity_mps,
-        max_acceleration_mps2=max_acceleration if max_acceleration > 0.0 else None)
+        name = name,
+        type = wavemaker_type,
+        water_depth = rig_limits.required(params, 'water_depth', name, source),
+        hinge_height = params.get('hinge_height', 0.0),  # optional, default 0.0
+        attachment_height = attachment_height,
+        gain = params.get('wavemaker_transfer_gain', 1.0),  # optional, default 1.0
+        gain_periods =  list(params.get('wavemaker_transfer_gain_periods', [])),  # optional table
+        gain_values = list(params.get('wavemaker_transfer_gain_values', [])),
+        min_m = limits.min_m,
+        max_m = limits.max_m,
+        upright_m = limits.upright_m,
+        max_velocity_mps = limits.max_velocity_mps,
+        max_acceleration_mps2 = limits.max_acceleration_mps2)
 
 
 def transfer_gain(wm: Wavemaker, period_s: float) -> float:
@@ -225,20 +183,26 @@ def paddle_amplitude(wm: Wavemaker, period_s: float, height_m: float) -> float:
 @dataclass
 class RunSpec:
     """One row of the test matrix; the file order is the play order."""
-    kind: str                         # 'regular' | 'irregular'
     n_ramp: int                       # periods (regular) or peak periods (irregular) of ramp
     pause_s: float                    # rest after the run, >= MIN_GAP_S (1 s)
-    # regular
-    period_s: float | None = None
+
+   
+@dataclass
+class RegularSpec(RunSpec):
+    period_s: float 
+    n_periods: int     # including ramps
     height_m: float | None = None     # exactly one of height_m and steepness
     steepness: float | None = None    # x in H/lambda = 1/x, e.g. 60 for 1/60
-    n_periods: int | None = None      # including ramps
-    # irregular
-    hs_m: float | None = None
-    tp_s: float | None = None
-    gamma: float | None = None        # 3.3 typical; 1.0 = Pierson-Moskowitz
-    duration_s: float | None = None   # whole run, ramps included
-    seed: int | None = None
+   
+    
+    
+@dataclass
+class IrregularSpec(RunSpec):
+    hs_m: float
+    tp_s: float
+    gamma: float        # 3.3 typical; 1.0 = Pierson-Moskowitz
+    duration_s: float   # whole run, ramps included
+    seed: int
 
 
 def parse_steepness(text: str, row: int) -> float:
@@ -252,8 +216,9 @@ def parse_steepness(text: str, row: int) -> float:
         raise ValueError(f"row {row}: steepness '{text}' must be written 1/x, e.g. 1/60")
     return x
 
+T = TypeVar('T')
 
-def number(r: dict, key: str, row: int, kind=float):
+def number(r: dict, key: str, row: int, kind: Callable[[str], T] = float) -> T:
     """A required number from a test-matrix row, with a message naming the row and column."""
     text = (r.get(key) or '').strip()
     if not text:
@@ -274,14 +239,14 @@ def read_test_matrix(path: str) -> list[RunSpec]:
     with open(path, newline='') as f:
         for row, r in enumerate(csv.DictReader(f)):
             kind = (r.get('kind') or 'regular').strip()
-            common = {'kind': kind, 'n_ramp': number(r, 'n_ramp', row, int),
+            common = {'n_ramp': number(r, 'n_ramp', row, int),
                       'pause_s': number(r, 'pause_s', row)}
             if kind == 'regular':
                 height = (r.get('height_m') or '').strip()
                 steepness = (r.get('steepness') or '').strip()
                 if bool(height) == bool(steepness):
                     raise ValueError(f"row {row}: give height_m or steepness, not both or neither")
-                specs.append(RunSpec(
+                specs.append(RegularSpec(
                     **common,
                     period_s=number(r, 'period_s', row),
                     height_m=float(height) if height else None,
@@ -289,7 +254,7 @@ def read_test_matrix(path: str) -> list[RunSpec]:
                     n_periods=number(r, 'n_periods', row, int)))
 
             elif kind == 'irregular':
-                specs.append(RunSpec(
+                specs.append(IrregularSpec(
                     **common,
                     hs_m=number(r, 'hs_m', row),
                     tp_s=number(r, 'tp_s', row),
@@ -304,11 +269,13 @@ def wavelength(wm: Wavemaker, period_s: float) -> float:
     """lambda = 2 pi h / kh, with the controller's dispersion approximation."""
     return 2.0 * math.pi * wm.water_depth / wavenumber_depth(period_s, wm.water_depth)
 
-def target_height(wm: Wavemaker, spec: RunSpec) -> float:
+def target_height(wm: Wavemaker, spec: RegularSpec) -> float:
     """H as given, or lambda / x for a steepness 1/x."""
-    if spec.height_m is not None:
-        return spec.height_m
-    return wavelength(wm, spec.period_s) / spec.steepness
+    if spec.steepness is not None:
+        return wavelength(wm, spec.period_s) / spec.steepness
+    assert spec.height_m is not None
+    return spec.height_m
+    
 
 def apply_ramps(x, n_ramp_samples: int):
     """Ramp 0 -> 1 at the start and 1 -> 0 at the end; the run ends exactly at upright."""
@@ -390,7 +357,7 @@ def synthesize_direct(f, p, phases, n_samples: int, dt: float):
     return x
 
 
-def irregular_signal(wm: Wavemaker, spec: RunSpec, dt: float):
+def irregular_signal(wm: Wavemaker, spec: IrregularSpec, dt: float):
     """Positions relative to upright for one irregular run, and its run-table fields."""
     fp = 1.0 / spec.tp_s
     n, f, df, n_samples = frequency_grid(spec.duration_s, dt,
@@ -409,7 +376,7 @@ def irregular_signal(wm: Wavemaker, spec: RunSpec, dt: float):
 
 # ---------------------------------------------------------------- regular waves: sine wave, ramps, paddle amplitude from the controller's physics
 
-def regular_signal(wm: Wavemaker, spec: RunSpec, dt: float):
+def regular_signal(wm: Wavemaker, spec: RegularSpec, dt: float):
     """Positions relative to upright for one run, and its run-table fields."""
     height = target_height(wm, spec)
     amplitude = paddle_amplitude(wm, spec.period_s, height)
@@ -465,10 +432,13 @@ def assemble(wm: Wavemaker, specs: list[RunSpec], dt: float, max_velocity_mps: f
     sample = len(lead_in)
     rows = []
     for index, spec in enumerate(specs):
-        if spec.kind == 'regular':
+        if isinstance(spec, RegularSpec):
             x, row = regular_signal(wm, spec, dt)
-        else:
+        elif isinstance(spec, IrregularSpec):
             x, row = irregular_signal(wm, spec, dt)
+        else:
+            raise TypeError(f'run {index}: unknown spec {type(spec).__name__}')
+
         row['run'] = index
         issues = check_run(wm, x, dt, max_velocity_mps)
         if issues:
@@ -512,7 +482,10 @@ def verify_with_play_dat(dat_path: str, wm: Wavemaker, max_velocity_mps: float):
     motion = play_dat.read_motion(dat_path)
     values = play_dat.select_channel(motion, 'position')
     runs = play_dat.split_runs(values, motion.sample_interval_s, wm.upright_m)
-    play_dat.apply_run_table(runs, play_dat.read_run_table(dat_path), motion.sample_interval_s)
+    table = play_dat.read_run_table(dat_path)
+    if table is None:
+        raise ValueError(f'{dat_path}: no run table next to it')
+    play_dat.apply_run_table(runs, table, motion.sample_interval_s)
     for run in runs:
         issues = play_dat.check_run(run, motion.sample_interval_s, wm.upright_m,
                                     wm.min_m, wm.max_m, max_velocity_mps)
@@ -596,8 +569,13 @@ def main(argv=None):
         plot_motion(args.output + '.png', wm, frames, rows, args.dt, max_velocity, args.show)
     print(f'{dat_path}: {played} runs, {len(rows) - played} skipped, '
           f'{len(frames) * args.dt / 60:.1f} min')
-    print(f'ros2 run rig_controller play_dat {dat_path} --min-m {wm.min_m:.5f} '
-          f'--max-m {wm.max_m:.5f} --max-velocity-mps {max_velocity:.4f}')
+    command = f'ros2 run rig_controller play_dat {dat_path} {wm.name} --dry-run'
+    if wm.max_velocity_mps is None:  # linear drive: the speed came from the command line
+        command += f' --max-velocity-mps {max_velocity:.4f}'
+    if os.path.realpath(args.config) != os.path.realpath(default_config_path()):
+        command += f' --config {args.config}'
+    print(command)
+
     return 0
 
 

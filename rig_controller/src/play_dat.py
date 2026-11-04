@@ -30,10 +30,12 @@ goals while the soft stop is engaged, and with wavemakers.launch.py alone no sof
 so use lab.launch.py. Without hardware:
     ros2 run rig_controller fake_controller --ros-args -r __ns:=/wavemakers/ladertanken
 
-    ros2 run rig_controller play_dat 2002.dat --min-m -0.106 --max-m 0.106 \
-      --max-velocity-mps 0.54 --dry-run
-    ros2 run rig_controller play_dat 2002.dat --min-m -0.106 --max-m 0.106 \
-      --max-velocity-mps 0.54 --runs 3-5 --ros-args -r __ns:=/wavemakers/ladertanken
+    ros2 run rig_controller play_dat 2002.dat ladertanken --dry-run
+    ros2 run rig_controller play_dat 2002.dat ladertanken --runs 3-5
+
+The rig name gives the limits, the upright position and the namespace from the yaml (rig_limits).
+Without a name, give --min-m, --max-m and --max-velocity-mps (and --upright-m if not 0.0); with a
+name, each of them overrides the yaml's value.
 """
 
 import argparse
@@ -44,6 +46,8 @@ import sys
 import time
 
 import numpy as np
+
+import rig_limits
 
 HEADER_BYTES = 8           # int32 time step [ms], int32 channel count
 MIN_GAP_S = 1.0            # rest at least this long separates two runs
@@ -283,7 +287,8 @@ def print_table(runs: list[Run], sample_interval_s: float, issues: dict[int, lis
 
 # ---------------------------------------------------------------- ROS (goals)
 
-def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str]) -> int:
+def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str],
+         limits=None) -> int:
     """Send each run as a move_<rig> goal, in order; return an exit code."""
     import rclpy
     from rclpy.action import ActionClient
@@ -298,6 +303,8 @@ def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str
         if not client.wait_for_server(timeout_sec=SERVER_TIMEOUT_S):
             node.get_logger().error(f'no move_{rig} server; is the controller up and active?')
             return 3
+        if limits is not None:
+            cross_check_limits(node, limits)
         for run in runs:
             pause_end_s = time.monotonic() + run.gap_before_s
             while time.monotonic() < pause_end_s:
@@ -350,17 +357,116 @@ def parse_runs(text: str, count: int) -> list[int]:
     return indices
 
 
+LIMIT_FIELDS = ('upright_m', 'min_m', 'max_m', 'max_velocity_mps')
+
+
+def resolve_limits(args, parser) -> tuple['rig_limits.RigLimits | None', dict]:
+    """
+    The limits to check against: the rig's yaml when a name is given, each option on the command
+    line overriding one value. Prints where they came from. Returns the yaml's limits (for the
+    live cross-check; None without a name) and the values to use.
+    """
+    limits = rig_limits.load_limits(args.rig, args.name, args.config) if args.name else None
+    values, overridden = {}, []
+    for key in LIMIT_FIELDS:  # not 'field': play_dat imports dataclasses.field
+        given = getattr(args, key)
+        if given is not None:
+            values[key] = given
+            if limits is not None:
+                overridden.append('--' + key.replace('_', '-'))
+        else:
+            values[key] = getattr(limits, key) if limits is not None else None
+    if values['upright_m'] is None:
+        values['upright_m'] = 0.0  # the old default, for the form without a name
+    if limits is None and None in (values['min_m'], values['max_m'], values['max_velocity_mps']):
+        parser.error('give the rig name, or --min-m, --max-m and --max-velocity-mps')
+    if values['max_velocity_mps'] is None:
+        parser.error(f'{args.name} has no speed limit in the yaml (TODO item 19): '
+                     'give --max-velocity-mps')
+    source = f'{limits.source} ({limits.name})' if limits is not None else 'the command line'
+    if overridden:
+        source += f", {', '.join(overridden)} overridden"
+    print(f"limits from {source}: {values['min_m']:+.5f}..{values['max_m']:+.5f} m, "
+          f"{values['max_velocity_mps']:.4f} m/s, upright {values['upright_m']:+.4f} m")
+    return limits, values
+
+
+def with_namespace(argv: list[str], limits) -> list[str]:
+    """The rig's namespace as a ROS remap, unless the command line already has one."""
+    if limits is None or any(a.startswith('__ns:=') for a in argv):
+        return argv
+    return [*argv, '--ros-args', '-r', f'__ns:={limits.namespace}']
+
+
+# Every parameter limits_from_parameters reads; asked from the running controller.
+LIMIT_PARAMETERS = [
+    'drive_name', 'drive_motion', 'upright_position_m', 'actuator_lead_m_per_degree',
+    'actuator_upright_angle_deg', 'min_position_deg', 'max_position_deg', 'max_velocity_rpm',
+    'travel_minimum_m', 'travel_maximum_m', 'max_velocity_mps', 'max_acceleration_mps2',
+    'max_goal_acceleration_mps2',
+]
+
+
+def cross_check_limits(node, limits) -> None:
+    """
+    Warn if the running controller's limits differ from the yaml's the runs were checked against
+    (a Pi not pulled or rebuilt, a yaml edited after configure). Never stops the play: the
+    controller enforces its own limits regardless.
+    """
+    import rclpy
+    from rclpy.parameter import parameter_value_to_python
+    from rclpy.parameter_client import AsyncParameterClient
+
+    log = node.get_logger()
+    client = AsyncParameterClient(node, f'{limits.namespace}/controller')
+    if not client.wait_for_services(timeout_sec=2.0):
+        log.warn('controller parameters not available; limits not cross-checked')
+        return
+    # get_parameters answers nothing at all if one name is not declared (rclcpp and rclpy), and
+    # each drive declares only its own (max_velocity_rpm on the IndraDrive, max_velocity_mps on
+    # the LinMot): ask for the declared ones only.
+    listed = client.list_parameters()
+    rclpy.spin_until_future_complete(node, listed, timeout_sec=2.0)
+    response = listed.result() if listed.done() else None
+    if response is None:
+        log.warn('controller parameters not available; limits not cross-checked')
+        return
+    declared = set(response.result.names)
+    keys = [key for key in LIMIT_PARAMETERS if key in declared]
+    future = client.get_parameters(keys)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
+    response = future.result() if future.done() else None
+    if response is None:
+        log.warn('controller parameters not available; limits not cross-checked')
+        return
+    params = {key: parameter_value_to_python(value)
+              for key, value in zip(keys, response.values)}
+    try:
+        live = rig_limits.limits_from_parameters(limits.rig, limits.name, params, 'controller')
+    except ValueError as e:
+        log.warn(f'controller parameters incomplete ({e}); limits not cross-checked')
+        return
+    differences = rig_limits.compare(limits, live)
+    for line in differences:
+        log.warn(f'yaml and controller differ: {line}')
+    if not differences:
+        log.info('limits match the controller')
+
+
 def main(argv=None):
     from rclpy.utilities import remove_ros_args
     argv = sys.argv if argv is None else argv
     parser = argparse.ArgumentParser(description='Play motion files as pregenerated waves.')
     parser.add_argument('file')
+    parser.add_argument('name', nargs='?',
+                        help='rig name in the yaml (ladertanken, sloshing): gives the limits, the '
+                             'upright position and the namespace')
     parser.add_argument('--rig', default='wavemaker', choices=('wavemaker', 'oscillator'),
-                        help='action server move_<rig>; default wavemaker')
+                        help='action server move_<rig> and the yaml it is in; default wavemaker')
+    parser.add_argument('--config', help='another yaml; default the installed one')
     parser.add_argument('--channel', default='position',
                         help=f'name ({", ".join(CHANNELS)}) or 0-based index; default position')
-    parser.add_argument('--upright-m', type=float, default=0.0,
-                        help='upright_position_m of the target wavemaker')
+    parser.add_argument('--upright-m', type=float, help='override; default the yaml, else 0.0')
     parser.add_argument('--runs', default='', help="e.g. '3', '3-5', '3,7'; default all")
     parser.add_argument('--gap-threshold-m', type=float, default=0.0,
                         help='|position| at or below this counts as rest; default exact zeros')
@@ -368,18 +474,26 @@ def main(argv=None):
                         help='shortest rest that separates two runs')
     parser.add_argument('--no-split', action='store_true',
                         help='send the whole file as one goal')
-    parser.add_argument('--min-m', type=float, required=True, help='lowest position')
-    parser.add_argument('--max-m', type=float, required=True, help='highest position')
-    parser.add_argument('--max-velocity-mps', type=float, required=True)
+    parser.add_argument('--min-m', type=float, help='lowest position; overrides the yaml')
+    parser.add_argument('--max-m', type=float, help='highest position; overrides the yaml')
+    parser.add_argument('--max-velocity-mps', type=float, help='overrides the yaml')
     parser.add_argument('--dry-run', action='store_true', help='print the run table only')
-    args = parser.parse_args(remove_ros_args(argv)[1:])
+    args = parser.parse_intermixed_args(remove_ros_args(argv)[1:])
+
+    try:
+        limits, lim = resolve_limits(args, parser)
+    except (OSError, ValueError) as e:  # yaml missing, rig not in it, a limit not set
+        print(f'error: {e}', file=sys.stderr)
+        return 2
+    if limits is not None:
+        print(f'namespace {limits.namespace}')
 
     try:
         motion = read_motion(args.file)
         values_m = select_channel(motion, args.channel)
         sample_interval_s = motion.sample_interval_s
-        runs = (whole_file_run(values_m, args.upright_m) if args.no_split else
-                split_runs(values_m, sample_interval_s, args.upright_m,
+        runs = (whole_file_run(values_m, lim['upright_m']) if args.no_split else
+                split_runs(values_m, sample_interval_s, lim['upright_m'],
                            args.gap_threshold_m, args.min_gap_s))
         table = None if args.no_split else read_run_table(args.file)
         if table:
@@ -393,8 +507,8 @@ def main(argv=None):
     except (OSError, ValueError) as e:
         print(f'error: {e}', file=sys.stderr)
         return 2
-    issues = {r.index: check_run(r, sample_interval_s, args.upright_m, args.min_m,
-                                 args.max_m, args.max_velocity_mps)
+    issues = {r.index: check_run(r, sample_interval_s, lim['upright_m'], lim['min_m'],
+                                 lim['max_m'], lim['max_velocity_mps'])
               for r in selected}
     print_table(selected, sample_interval_s, issues)
     if args.dry_run:
@@ -402,7 +516,7 @@ def main(argv=None):
     if any(issues.values()):
         print('not playing: fix the problems above (nothing moved)', file=sys.stderr)
         return 1
-    return play(selected, sample_interval_s, args.rig, argv)
+    return play(selected, sample_interval_s, args.rig, with_namespace(argv, limits), limits)
 
 
 if __name__ == '__main__':
