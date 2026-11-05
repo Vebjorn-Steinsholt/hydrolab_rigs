@@ -40,7 +40,7 @@ bool sample_pregenerated(
 
 void WaveTrajectory::configure(
   const WavemakerGeometry & geometry, double wave_height, double period,
-  double start_position)
+  double start_position, double blend_max_velocity)
 {
   omega_ = 2.0 * M_PI / period;
   if (geometry.type == "oscillator") {
@@ -61,7 +61,14 @@ void WaveTrajectory::configure(
   upright_position_ = geometry.upright_position;
   upright_is_minimum_ = geometry.upright_is_minimum;
   start_position_ = start_position;
-  startup_duration_ = period;
+  // The blend adds at most kQuinticPeakVelocityFactor * distance / duration to the wave's speed.
+  // Whole periods keep the phase continuous (sample()).
+  const double distance = std::max(
+    std::abs(required_maximum() - start_position_),
+    std::abs(required_minimum() - start_position_));
+  const double periods = std::isfinite(blend_max_velocity) && blend_max_velocity > 0.0 ?
+    std::ceil(kQuinticPeakVelocityFactor * distance / (period * blend_max_velocity)) : 1.0;
+  startup_duration_ = std::max(1.0, periods) * period;
 }
 
 double WaveTrajectory::required_minimum() const
@@ -79,14 +86,15 @@ double WaveTrajectory::peak_velocity() const
   // After the blend the speed peaks at amplitude * omega. In the blend, the blend's and the
   // wave's speeds peak at different times, so adding their peaks overestimates by up to a
   // third; sample the blend instead. Between samples the speed changes by at most a
-  // relative ~(2 pi / kBlendSamples)^2 / 2 near a peak, which kSamplingMargin covers.
-  constexpr int kBlendSamples = 10000;
+  // relative ~(2 pi / kBlendSamplesPerPeriod)^2 / 2 near a peak, which kSamplingMargin covers.
+  constexpr int kBlendSamplesPerPeriod = 10000;
   constexpr double kSamplingMargin = 1e-4;
+  const int samples = kBlendSamplesPerPeriod * blend_periods();
   double peak = amplitude_ * omega_;
-  for (int i = 0; i <= kBlendSamples; ++i) {
+  for (int i = 0; i <= samples; ++i) {
     double position = 0.0;
     double velocity = 0.0;
-    sample(startup_duration_ * i / kBlendSamples, position, velocity);
+    sample(startup_duration_ * i / samples, position, velocity);
     peak = std::max(peak, std::abs(velocity));
   }
   return peak * (1.0 + kSamplingMargin);
@@ -110,11 +118,12 @@ double WaveTrajectory::peak_acceleration() const
   // After the blend the acceleration peaks at amplitude * omega^2. In the blend the product rule
   // gives a = dds * (w - x0) + 2 * ds * w' + s * w'', which can exceed that; sample it like
   // peak_velocity() does.
-  constexpr int kBlendSamples = 10000;
+  constexpr int kBlendSamplesPerPeriod = 10000;
   constexpr double kSamplingMargin = 1e-4;
+  const int samples = kBlendSamplesPerPeriod * blend_periods();
   double peak = amplitude_ * omega_ * omega_;
-  for (int i = 0; i <= kBlendSamples; ++i) {
-    const double t = startup_duration_ * i / kBlendSamples;
+  for (int i = 0; i <= samples; ++i) {
+    const double t = startup_duration_ * i / samples;
     double x, v, a;
     wave(upright_is_minimum_ ? t : t - startup_duration_, x, v, a);   // same phase as sample()
     const Blend b = quintic_blend(t, startup_duration_);
@@ -125,7 +134,7 @@ double WaveTrajectory::peak_acceleration() const
 
 void WaveTrajectory::sample(double elapsed, double & position, double & velocity) const
 {
-  // Phase is continuous across the blend only because startup_duration_ equals the period.
+  // Phase is continuous across the blend only because startup_duration_ is a whole number of periods.
   const double wave_time = (upright_is_minimum_ && elapsed < startup_duration_) ?
     elapsed : elapsed - startup_duration_;
 

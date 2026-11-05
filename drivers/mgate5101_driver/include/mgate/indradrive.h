@@ -108,7 +108,7 @@ public:
     // Abort any blocking call from another thread (e.g. Ctrl+C handler).
     void request_abort() { abort_.store(true); }
 
-    const std::string& last_error() const { return last_error_; }
+    std::string last_error() const;
 
 private:
     std::string tag(const char* s) const { return cfg_.name_prefix + s; }
@@ -127,6 +127,7 @@ private:
     std::atomic<bool> abort_{false};
     mutable std::mutex fault_mtx_;
     std::string        fault_reason_;
+    mutable std::mutex error_mtx_;
     std::string        last_error_;
     mutable std::mutex callback_mtx_;
     FaultCallback      fault_callback_;

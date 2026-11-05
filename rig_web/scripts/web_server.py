@@ -91,6 +91,7 @@ STARTING_RE = re.compile(r'height ([-+0-9.eE]+) m, period ([-+0-9.eE]+) s')
 RETURN_STATUS = {
     0: 'SUCCESS', 1: 'CONTROLLER_INACTIVE', 2: 'BUSY', 3: 'ACTUATOR_NOT_READY',
     4: 'TIMEOUT', 5: 'ACTUATOR_FAULT', 6: 'POSITION_INVALID',
+    7: 'SOFT_STOP',
 }
 LOG_LEVELS = {
     Log.DEBUG: 'debug', Log.INFO: 'info', Log.WARN: 'warn', Log.ERROR: 'error', Log.FATAL: 'fatal',

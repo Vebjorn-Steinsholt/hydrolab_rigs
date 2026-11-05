@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -18,17 +20,20 @@ struct WavemakerGeometry
   double hinge_height{0.0};  // flap only: hinge above the tank floor, < water_depth
 };
 
-// Regular wave with a quintic blend from the start position over one period.
+// Regular wave with a quintic blend from the start position over whole periods: one, or more
+// when the start is far from the wave, so the blend itself stays under blend_max_velocity.
 class WaveTrajectory
 {
 public:
   // wave_height is the target wave height H (crest to trough).
   void configure(
     const WavemakerGeometry & geometry, double wave_height, double period,
-    double start_position);
+    double start_position,
+    double blend_max_velocity = std::numeric_limits<double>::infinity());
 
   double required_minimum() const;
   double required_maximum() const;
+  double startup_duration() const {return startup_duration_;}
   // Largest |velocity| over the whole trajectory, start blend included, with a 0.01 % margin
   // so it never falls below a sample.
   double peak_velocity() const;
@@ -41,6 +46,11 @@ public:
 private:
   // The wave without the blend at time t: position, velocity, acceleration.
   void wave(double t, double & x, double & v, double & a) const;
+  // Number of whole periods in the start blend.
+  int blend_periods() const
+  {
+    return static_cast<int>(std::lround(startup_duration_ * omega_ / (2.0 * M_PI)));
+  }
 
   double upright_position_{0.0};
   bool upright_is_minimum_{false};

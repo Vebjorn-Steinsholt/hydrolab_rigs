@@ -155,6 +155,121 @@ TEST(WaveTrajectoryTest, PeakVelocityBoundsEverySample)
   }
 }
 
+namespace
+{
+
+// Ladertanken-like start far from the wave: amplitude 15 mm about upright 0, paddle at
+// +0.14 m, T = 0.7 s, return speed 0.1 m/s. D = 0.155 m and 1.875 * 0.155 / (0.7 * 0.1) = 4.2,
+// so the blend takes five periods. An oscillator, so the amplitude is exactly H / 2.
+constexpr double kFarStart = 0.14;
+constexpr double kFarPeriod = 0.7;
+constexpr double kFarReturnSpeed = 0.1;
+constexpr double kFarAmplitude = 0.015;
+
+WaveTrajectory far_start_trajectory(bool upright_is_minimum = false)
+{
+  WaveTrajectory trajectory;
+  trajectory.configure(
+    {"oscillator", 0.0, 0.0, 0.0, upright_is_minimum}, 2.0 * kFarAmplitude, kFarPeriod,
+    kFarStart, kFarReturnSpeed);
+  return trajectory;
+}
+
+}  // namespace
+
+TEST(WaveTrajectoryTest, BlendStaysOnePeriodNearUpright)
+{
+  WaveTrajectory trajectory;
+  trajectory.configure(
+    {"piston", 1.0, 0.0, 0.25, false}, 0.04, 2.0, 0.25, kFarReturnSpeed);
+  EXPECT_NEAR(trajectory.startup_duration(), 2.0, 1e-12);
+
+  WaveTrajectory unlimited;  // default blend speed: one period, as before
+  unlimited.configure({"piston", 1.0, 0.0, 0.25, false}, 0.04, 2.0, 0.45);
+  EXPECT_NEAR(unlimited.startup_duration(), 2.0, 1e-12);
+}
+
+TEST(WaveTrajectoryTest, BlendUsesWholePeriodsFromFarStart)
+{
+  for (const bool upright_is_minimum : {false, true}) {
+    const WaveTrajectory trajectory = far_start_trajectory(upright_is_minimum);
+    const double distance = upright_is_minimum ? kFarStart : kFarStart + kFarAmplitude;
+    const double expected_periods = std::ceil(
+      1.875 * distance / (kFarPeriod * kFarReturnSpeed));
+    if (!upright_is_minimum) {
+      EXPECT_EQ(expected_periods, 5.0);
+    }
+    EXPECT_NEAR(
+      trajectory.startup_duration(), expected_periods * kFarPeriod, 1e-12)
+      << "upright_is_minimum " << upright_is_minimum;
+
+    // The wave's own peak plus at most the return speed from the blend.
+    const double bound = kFarAmplitude * 2.0 * M_PI / kFarPeriod + kFarReturnSpeed;
+    for (double t = 0.0; t < trajectory.startup_duration(); t += 1e-4) {
+      double position = 0.0;
+      double velocity = 0.0;
+      trajectory.sample(t, position, velocity);
+      ASSERT_LE(std::abs(velocity), bound + 1e-12) << "t " << t;
+    }
+  }
+}
+
+TEST(WaveTrajectoryTest, PhaseContinuousAfterLongBlend)
+{
+  for (const bool upright_is_minimum : {false, true}) {
+    const WaveTrajectory trajectory = far_start_trajectory(upright_is_minimum);
+    const double end = trajectory.startup_duration();
+    constexpr double kStep = 1e-10;
+    double before_position = 0.0;
+    double before_velocity = 0.0;
+    double after_position = 0.0;
+    double after_velocity = 0.0;
+    trajectory.sample(end - kStep, before_position, before_velocity);
+    trajectory.sample(end + kStep, after_position, after_velocity);
+    EXPECT_NEAR(before_position, after_position, 1e-9);
+    EXPECT_NEAR(before_velocity, after_velocity, 1e-9);
+    // After the blend the paddle is on the wave: at upright (or its minimum) at the start of a
+    // period.
+    EXPECT_NEAR(after_position, 0.0, 1e-6);
+  }
+}
+
+TEST(WaveTrajectoryTest, PeakVelocityBoundsEverySampleWithLongBlend)
+{
+  for (const bool upright_is_minimum : {false, true}) {
+    for (const double start : {0.14, -0.14, 0.10}) {
+      WaveTrajectory trajectory;
+      trajectory.configure(
+        {"oscillator", 0.0, 0.0, 0.0, upright_is_minimum}, 2.0 * kFarAmplitude, kFarPeriod,
+        start, kFarReturnSpeed);
+      ASSERT_GT(trajectory.startup_duration(), 2.0 * kFarPeriod) << "start " << start;
+      const double bound = trajectory.peak_velocity();
+      const double acceleration_bound = trajectory.peak_acceleration();
+
+      double largest = 0.0;
+      double previous_velocity = 0.0;
+      double largest_acceleration = 0.0;
+      constexpr double kDt = 1e-4;
+      const double end = trajectory.startup_duration() + 2.0 * kFarPeriod;
+      for (double t = 0.0; t < end; t += kDt) {
+        double position = 0.0;
+        double velocity = 0.0;
+        trajectory.sample(t, position, velocity);
+        largest = std::max(largest, std::abs(velocity));
+        if (t > 0.0) {
+          largest_acceleration =
+            std::max(largest_acceleration, std::abs(velocity - previous_velocity) / kDt);
+        }
+        previous_velocity = velocity;
+      }
+      EXPECT_GT(largest, 0.0);
+      EXPECT_LE(largest, bound + 1e-12) << "start " << start;
+      // Finite differences average the acceleration over kDt, so they never exceed the peak.
+      EXPECT_LE(largest_acceleration, acceleration_bound * (1.0 + 1e-6)) << "start " << start;
+    }
+  }
+}
+
 TEST(WaveTrajectoryTest, StartBlendBeginsAtRestOnStartPosition)
 {
   WaveTrajectory trajectory;

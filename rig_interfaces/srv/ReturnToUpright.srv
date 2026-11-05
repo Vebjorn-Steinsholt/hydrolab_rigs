@@ -8,6 +8,7 @@ uint8 ACTUATOR_NOT_READY = 3
 uint8 TIMEOUT = 4
 uint8 ACTUATOR_FAULT = 5
 uint8 POSITION_INVALID = 6
+uint8 SOFT_STOP = 7
 
 uint8 status
 float64 final_position

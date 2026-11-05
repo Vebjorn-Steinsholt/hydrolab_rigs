@@ -136,8 +136,16 @@ void IndraDrive::on_cycle(bool ok) {
     }
 }
 
+std::string IndraDrive::last_error() const {
+    std::lock_guard<std::mutex> lk(error_mtx_);
+    return last_error_;
+}
+
 bool IndraDrive::fail(const std::string& why) {
-    last_error_ = why;
+    {
+        std::lock_guard<std::mutex> lk(error_mtx_);
+        last_error_ = why;
+    }
     std::fprintf(stderr, "IndraDrive: %s\n", why.c_str());
     return false;
 }

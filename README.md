@@ -26,7 +26,7 @@ Modbus TCP / PROFIBUS gateway.
   - [Water depth](#water-depth)
   - [Web page](#web-page)
 - [Generating motion files](#generating-motion-files)
-  - [On the Pi](#on-the-pi)
+  - [From test matrix to tank](#from-test-matrix-to-tank)
 - [Interfaces](#interfaces)
 - [How a motion runs](#how-a-motion-runs)
 - [Faults and stopping](#faults-and-stopping)
@@ -149,7 +149,7 @@ travel limits keeps it far inside the register's range.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `return_to_upright_max_velocity_mps` | 0.1 | Peak speed of a return to upright, and of the blend at the start of a pregenerated goal. Must not exceed the drive's limit. |
+| `return_to_upright_max_velocity_mps` | 0.1 | Peak speed of a return to upright and of the blend at the start of a pregenerated goal; also bounds the start blend's own speed for a regular wave. Must not exceed the drive's limit. |
 | `return_to_upright_min_duration_s` | 1.0 | Shortest return or blend. |
 | `return_to_upright_default_tolerance_m` | 0.002 | Tolerance for "at upright"; also the margin allowed outside the travel limits at the start of a motion. |
 | `return_to_upright_timeout_margin_s` | 2.0 | Extra time after the planned return before it times out. |
@@ -331,6 +331,105 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 ready for `play_dat`. Wavemakers only; the oscillator gets a separate generator later
 ([TODO.md](TODO.md), *Oscillator motion generator*).
 
+### From test matrix to tank
+
+The whole session, in order. Each step links to the details. Work on the Pi: its
+`wavemakers.yaml` (gain table, depth, geometry) is the one the controller runs with. The commands
+are for ladertanken and the session of 2026-11-05; use your own wavemaker and date.
+
+**1. Log in and start tmux.** On the lab PC (set up once as in
+[windows/README.md](windows/README.md)), open a Command Prompt:
+
+```bat
+ssh ladertanken@ladertanken-rpi.local
+tmux                # or `tmux attach` to get back to an earlier one
+```
+
+The commands on the Pi run inside tmux, so a dropped connection does not stop a run: log in
+again and `tmux attach`. Steps 5, 7 and 9 happen on the lab PC, in a second window. If `tmux` says *sessions should be nested with care*, you are already in one;
+carry on.
+
+**2. Set up the shell** (in every new tmux window):
+
+```bash
+source ~/ros_ws/install/setup.bash
+export ROS_DOMAIN_ID=1        # the lab's domain; without it play_dat finds no controller
+mkdir -p ~/wave_sessions/2026-11-05
+cd ~/wave_sessions/2026-11-05
+```
+
+One folder per session, named after the date. It ends up holding the matrix, the `.dat`, the
+run table and the plot, all of which belong with the probe data.
+
+**3. Write the test matrix** `session.csv` in that folder: see [Test matrix](#test-matrix) for
+the columns and [Writing the test matrix](#writing-the-test-matrix) for how. To write it on the
+PC instead, copy it over from there (the folder from step 2 must exist):
+
+```bash
+scp session.csv ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05/
+```
+
+**4. Generate** (details in [Generate](#generate)). Add `--water-depth` if the tank is not at
+the yaml's depth:
+
+```bash
+ros2 run rig_controller generate_waves ladertanken session.csv -o session_waves
+```
+
+It prints how many runs it made and how many it skipped. A skipped run does not fit the
+wavemaker; the reason is in `session_waves.csv`.
+
+**5. Look at the plot.** The Pi has no screen. On the computer you sit at, in a second window:
+
+```bat
+scp ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05/session_waves.png .
+start session_waves.png
+```
+
+(`xdg-open` instead of `start` on Linux. With VS Code's Remote-SSH extension, open the Pi's folder
+and the plot shows in a tab.) Check that the runs and pauses look as intended, and that position
+and speed stay inside the dashed limits.
+
+**6. Dry run**, back in tmux. This reads the file and moves nothing:
+
+```bash
+ros2 run rig_controller play_dat session_waves.dat ladertanken --dry-run
+```
+
+Every run must say `OK`. Compare `max|x|` and `speed` with what you expect. Runs close to the
+speed limit in the first line are the first to watch in the tank.
+
+**7. Start the wavemaker** if it is not running: on the lab PC, double-click
+`start_wavemaker.bat` ([windows/README.md](windows/README.md)). It stops the oscillator if that
+runs, starts the wavemaker (which enables the drive) and opens the web page. Keep the page open
+while playing: it plots the paddle, shows the soft stop, and has Stop and Return to upright.
+Its *Log* shows the controller coming up. The web page's idle auto-stop shuts the wavemaker
+down after 2 h without motion, so start it close to playing.
+
+**8. Play**, in tmux. The tank must be calm and the soft stop released:
+
+```bash
+ros2 run rig_controller play_dat session_waves.dat ladertanken
+```
+
+If it stops with `no move_wavemaker server; is the controller up and active?` while the page
+shows the controller running, `ROS_DOMAIN_ID` is not set in this tmux window (step 2).
+
+It plays the runs in order, with the pauses between them. `--runs 1` or `--runs 0-1` plays only
+some runs (numbers as in the dry run). It warns if the running controller's limits differ from
+the yaml's; then stop and find out why. **To stop:** press Ctrl-C in the tmux window, or use
+Stop on the web page, the soft stop or the e-stop. A stop cancels the run and ends `play_dat`.
+The paddle stops where it is and holds position with the drive enabled; *Return to upright* on
+the web page brings it back.
+
+**9. Afterwards.** If nothing else follows, double-click `stop_rigs.bat` on the lab PC; it stops
+the wavemaker and disables the drive. Then copy the session folder off the Pi, in a Command
+Prompt on the lab PC:
+
+```bat
+scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05 .
+```
+
 ### Test matrix
 
 A CSV, one row per run, played top to bottom; a repeat is just another row. Each row fills the
@@ -394,8 +493,8 @@ quit with **Ctrl+X**. If nano asks "Save modified buffer?" on quitting, answer *
 **Enter**.
 
 **C. On the lab PC (Windows), then copy it.** Open **Notepad**, type the rows, and save with *File
-→ Save as*: *Save as type* *All files*, file name `session.csv`. Copy it to the Pi as in [On the
-Pi](#on-the-pi). Excel also works if you save as *CSV UTF-8 (comma delimited)*, but on a PC with
+→ Save as*: *Save as type* *All files*, file name `session.csv`. Copy it to the Pi as in step 3 of
+[From test matrix to tank](#from-test-matrix-to-tank). Excel also works if you save as *CSV UTF-8 (comma delimited)*, but on a PC with
 Norwegian settings Excel writes semicolons and decimal commas (`1;0`), which `generate_waves`
 cannot read: it then stops with `row 0: n_ramp is required`. Notepad avoids that.
 
@@ -413,13 +512,12 @@ files are written then.
 ### Generate
 
 ```bash
-source ~/ros_ws/install/setup.bash
-cd ~/wave_sessions          # the folder with the test matrix
+cd ~/wave_sessions/2026-11-05    # the session folder, with the test matrix
 ros2 run rig_controller generate_waves ladertanken session.csv -o session_waves
 ```
 
 File names are relative to the current folder, for the test matrix and for `-o`; from elsewhere
-give full paths (`~/wave_sessions/session.csv -o ~/wave_sessions/session_waves`). It writes:
+give full paths (`~/wave_sessions/2026-11-05/session.csv -o ~/wave_sessions/2026-11-05/session_waves`). It writes:
 
 - `session_waves.dat`: the motion file for `play_dat`.
 - `session_waves.csv`: the run table: per run its start and end, the parameters, H and 1/x
@@ -468,49 +566,6 @@ wavemaker service or `lab.launch.py`); `play_dat` then warns if the running cont
 differ from the yaml's. `--runs 2-3` plays only some runs. `--min-m`, `--max-m`,
 `--max-velocity-mps` and `--upright-m` override the yaml; without a name, give the first three.
 See `play_dat --help`.
-
-### On the Pi
-
-Generate and play on the Pi: its `wavemakers.yaml` (gain table, depth, geometry) is the one the
-controller runs with, and `play_dat`'s cross-check compares the limits only. From the lab PC (set
-up once as in [windows/README.md](windows/README.md)) or any computer with ssh, copy the test
-matrix into a new session folder and log in:
-
-```bash
-ssh ladertanken@ladertanken-rpi.local "mkdir -p wave_sessions/2026-11-05"
-scp session.csv ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05/
-ssh ladertanken@ladertanken-rpi.local
-```
-
-On the Pi, work in `tmux` so that a dropped connection does not stop a run (`tmux attach` gets
-back to it):
-
-```bash
-tmux
-source ~/ros_ws/install/setup.bash
-export ROS_DOMAIN_ID=1        # the lab's domain; without it play_dat finds no controller
-cd ~/wave_sessions/2026-11-05
-ros2 run rig_controller generate_waves ladertanken session.csv -o session_waves
-```
-
-The Pi has no screen, so `--show` does not apply. Copy the plot to the computer you sit at and
-open it there (in a second window on that computer):
-
-```bat
-scp ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05/session_waves.png .
-start session_waves.png
-```
-
-(`xdg-open` instead of `start` on Linux.) Then the dry run and play as above, in the `tmux`
-window. With VS Code's Remote-SSH extension, the Pi's folder opens directly and the plot shows in
-a tab.
-
-Keep one folder per session (matrix, `.dat`, run table, plot): the run table says which run was
-played when, so it belongs with the probe data. Copy the folder off the Pi afterwards:
-
-```bash
-scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05 .
-```
 
 ### Compatibility
 
@@ -642,7 +697,10 @@ ros2 service call /wavemakers/ladertanken/return_to_upright \
 ```
 
 Reply `status`: `SUCCESS`, `CONTROLLER_INACTIVE`, `BUSY`, `ACTUATOR_NOT_READY`, `TIMEOUT`,
-`ACTUATOR_FAULT` or `POSITION_INVALID`, with `final_position` and a `message`.
+`ACTUATOR_FAULT`, `POSITION_INVALID` or `SOFT_STOP`, with `final_position` and a `message`.
+An exception during the return gives `ACTUATOR_FAULT` with its text; a drive fault gives
+`ACTUATOR_FAULT` even when it deactivates the node; a soft stop gives `SOFT_STOP` (the actuator
+is halted and stays enabled). `CONTROLLER_INACTIVE` is left for a lifecycle transition.
 
 ### Service `cancel_all_goals` (`rig_interfaces/srv/CancelAllGoals`)
 
@@ -728,8 +786,9 @@ Parameters: `rig` (`wavemaker` or `oscillator`), `heartbeat_timeout` (s, default
 
 ## How a motion runs
 
-- **Start blend.** A regular wave blends from the measured position into the wave over one period
-  (quintic smoothstep, phase-continuous). A pregenerated goal blends from the measured position to
+- **Start blend.** A regular wave blends from the measured position into the wave over one
+  period, or more whole periods when the paddle starts far from the wave, so the blend stays
+  under `return_to_upright_max_velocity_mps` (quintic smoothstep, phase-continuous). A pregenerated goal blends from the measured position to
   its first sample at the return speed, then plays the samples with linear interpolation.
 - **Control loop.** Runs at `1000 / poll_interval_ms` Hz on the steady clock, so every setpoint
   reaches the drive.
@@ -779,7 +838,7 @@ colcon test-result --verbose
   starts, stop by topic and service, stop during start, lost heartbeat, controller rejection and
   abort, deactivation, and a stop the controller never confirms.
 - `test_wave_trajectory`: start blends, peak-speed bounds and pregenerated sampling.
-- `test_indradrive_actuator`: unit conversion and parameter checks.
+- `test_indradrive_actuator`: unit conversion, parameter checks, and `halt()` against a fake MGate.
 - `mapping` (driver): register mapping.
 
 The fake actuator does not model all drive behaviour, so passing tests do not replace the rig

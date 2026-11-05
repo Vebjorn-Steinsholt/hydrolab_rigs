@@ -10,17 +10,19 @@ max_goal_acceleration_mps2.
 
 from dataclasses import dataclass
 import os
+
 import yaml
 
 # rig -> (namespace prefix, bringup package, yaml file)
 
 RIGS = {
-    'wavemaker':('wavemakers', 'wavemaker_bringup', 'wavemakers.yaml'),
-    'oscillator':('oscillators', 'oscillator_bringup', 'oscillator.yaml'),
+    'wavemaker': ('wavemakers', 'wavemaker_bringup', 'wavemakers.yaml'),
+    'oscillator': ('oscillators', 'oscillator_bringup', 'oscillator.yaml'),
 }
 
-LINMOT_MAX_VELOCITY_MPS = 2.0 # linmot_actuator.cpp default
+LINMOT_MAX_VELOCITY_MPS = 2.0  # linmot_actuator.cpp default
 LINMOT_MAX_ACCELERATION_MPS2 = 20.0
+
 
 @dataclass
 class RigLimits:
@@ -34,14 +36,16 @@ class RigLimits:
     max_acceleration_mps2: float | None
     source: str
 
+
 def required(params: dict, key: str, name: str, source: str):
-    """A key with no safe default: the controller's generic default would give the wrong limits."""
+    """Return a key with no safe default: the controller's default would give wrong limits."""
     if key not in params:
         raise ValueError(f'{name}: {key} not set in {source}')
     return params[key]
 
+
 def default_config_path(rig: str) -> str:
-    """The installed yaml when the workspace is sourced, else the repository's copy."""
+    """Return the installed yaml when the workspace is sourced, else the repository's copy."""
     _, package, filename = RIGS[rig]
     try:
         from ament_index_python.packages import get_package_share_directory
@@ -66,19 +70,22 @@ def read_block(rig: str, name: str, config_path: str) -> dict:
         raise ValueError(f"no {rig} '{name}' in {config_path}; have {', '.join(names) or 'none'}")
     return config[key]['ros__parameters']
 
+
 def limits_from_parameters(rig: str, name: str, params: dict, source: str) -> RigLimits:
-    """The controller's rules, applied to a yaml block or to parameters read from the controller."""
+    """Apply the controller's rules to a yaml block or to parameters read from the controller."""
     drive = required(params, 'drive_name', name, source)
-    upright_m = params.get('upright_position_m',0.0)
+    upright_m = params.get('upright_position_m', 0.0)
     if params.get('drive_motion', 'linear') == 'angular':
         lead = required(params, 'actuator_lead_m_per_degree', name, source)
-        if lead <= 0.0: 
+        if lead <= 0.0:
             raise ValueError(f'{name}: actuator_lead_m_per_degree must be > 0 in {source}')
         upright_deg = params.get('actuator_upright_angle_deg', 0.0)
-        min_m = upright_m + (required(params, 'min_position_deg', name, source) - upright_deg) * lead
-        max_m = upright_m + (required(params, 'max_position_deg', name, source) - upright_deg) * lead
+        min_deg = required(params, 'min_position_deg', name, source)
+        max_deg = required(params, 'max_position_deg', name, source)
+        min_m = upright_m + (min_deg - upright_deg) * lead
+        max_m = upright_m + (max_deg - upright_deg) * lead
         max_velocity = required(params, 'max_velocity_rpm', name, source) * 6.0 * lead
-    else: 
+    else:
         min_m = required(params, 'travel_minimum_m', name, source)
         max_m = required(params, 'travel_maximum_m', name, source)
         max_velocity = (params.get('max_velocity_mps', LINMOT_MAX_VELOCITY_MPS)
@@ -87,7 +94,8 @@ def limits_from_parameters(rig: str, name: str, params: dict, source: str) -> Ri
     acceleration = (goal_acceleration if goal_acceleration > 0.0 else None)
     if drive == 'linmot':
         drive_acceleration = params.get('max_acceleration_mps2', LINMOT_MAX_ACCELERATION_MPS2)
-        acceleration = (drive_acceleration if acceleration is None else min(acceleration, drive_acceleration))
+        acceleration = (drive_acceleration if acceleration is None
+                        else min(acceleration, drive_acceleration))
 
     if not min_m < max_m:
         raise ValueError(f'{name}: lower limit {min_m} not below upper limit {max_m} in {source}')
@@ -96,8 +104,9 @@ def limits_from_parameters(rig: str, name: str, params: dict, source: str) -> Ri
     return RigLimits(rig, name, f'/{RIGS[rig][0]}/{name}', upright_m, min_m, max_m,
                      max_velocity, acceleration, source)
 
+
 def load_limits(rig: str, name: str, config_path: str | None = None) -> RigLimits:
-    """The limits of one rig from its yaml block."""
+    """Load the limits of one rig from its yaml block."""
     config_path = config_path or default_config_path(rig)
     return limits_from_parameters(rig, name, read_block(rig, name, config_path),
                                   os.path.basename(config_path))
@@ -110,10 +119,10 @@ def compare(expected: RigLimits, actual: RigLimits) -> list[str]:
         e, a = getattr(expected, field), getattr(actual, field)
         if abs(e - a) > 1e-4:
             lines.append(f'{field}: {expected.source} {e:+.5f} m, {actual.source} {a:+.5f} m')
-    e,a = expected.max_velocity_mps, actual.max_velocity_mps
+    e, a = expected.max_velocity_mps, actual.max_velocity_mps
     if e is not None and a is not None and abs(e - a) > 1e-3:
         lines.append(f'max_velocity_mps: {expected.source} {e:.4f}, {actual.source} {a:.4f}')
-    e,a = expected.max_acceleration_mps2, actual.max_acceleration_mps2
+    e, a = expected.max_acceleration_mps2, actual.max_acceleration_mps2
     if (e is None) != (a is None) or (e is not None and a is not None and abs(e - a) > 1e-3):
         lines.append(f'max_acceleration_mps2: {expected.source} {e}, {actual.source} {a}')
     return lines

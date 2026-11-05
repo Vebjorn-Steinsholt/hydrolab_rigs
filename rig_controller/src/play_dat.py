@@ -362,9 +362,11 @@ LIMIT_FIELDS = ('upright_m', 'min_m', 'max_m', 'max_velocity_mps')
 
 def resolve_limits(args, parser) -> tuple['rig_limits.RigLimits | None', dict]:
     """
-    The limits to check against: the rig's yaml when a name is given, each option on the command
-    line overriding one value. Prints where they came from. Returns the yaml's limits (for the
-    live cross-check; None without a name) and the values to use.
+    Resolve the limits to check against.
+
+    The rig's yaml when a name is given, each option on the command line overriding one value.
+    Prints where they came from. Returns the yaml's limits (for the live cross-check; None
+    without a name) and the values to use.
     """
     limits = rig_limits.load_limits(args.rig, args.name, args.config) if args.name else None
     values, overridden = {}, []
@@ -392,7 +394,7 @@ def resolve_limits(args, parser) -> tuple['rig_limits.RigLimits | None', dict]:
 
 
 def with_namespace(argv: list[str], limits) -> list[str]:
-    """The rig's namespace as a ROS remap, unless the command line already has one."""
+    """Add the rig's namespace as a ROS remap, unless the command line already has one."""
     if limits is None or any(a.startswith('__ns:=') for a in argv):
         return argv
     return [*argv, '--ros-args', '-r', f'__ns:={limits.namespace}']
@@ -409,9 +411,11 @@ LIMIT_PARAMETERS = [
 
 def cross_check_limits(node, limits) -> None:
     """
-    Warn if the running controller's limits differ from the yaml's the runs were checked against
-    (a Pi not pulled or rebuilt, a yaml edited after configure). Never stops the play: the
-    controller enforces its own limits regardless.
+    Warn if the running controller's limits differ from the yaml's.
+
+    The runs were checked against the yaml; they can differ on a Pi not pulled or rebuilt, or
+    with a yaml edited after configure. Never stops the play: the controller enforces its own
+    limits regardless.
     """
     import rclpy
     from rclpy.parameter import parameter_value_to_python

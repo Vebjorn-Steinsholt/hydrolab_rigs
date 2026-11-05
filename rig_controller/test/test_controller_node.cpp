@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <limits>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -20,6 +21,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float64.hpp"
 #include "rig_interfaces/action/move_rig.hpp"
+#include "rig_interfaces/srv/cancel_all_goals.hpp"
 
 #define main controller_node_main
 #include "../src/controller_node.cpp"
@@ -70,7 +72,13 @@ public:
   bool faulted() const override {return fault.load();}
   std::string fault_reason() const override {return fault.load() ? "fake fault" : "";}
   std::string status() const override {return "fake";}
-  double actual_position_m() const override {return actual_position;}
+  double actual_position_m() const override
+  {
+    if (throw_on_position.load()) {
+      throw std::runtime_error("fake position read failed");
+    }
+    return actual_position;
+  }
   double max_velocity_mps() const override {return max_velocity;}
   double max_acceleration_mps2() const override {return max_acceleration;}
   int update_period_ms() const override {return update_period;}
@@ -118,6 +126,7 @@ public:
   std::atomic<int> write_count{0};
   std::atomic<bool> fault{false};
   std::atomic<bool> reject_writes{false};  // write_setpoint returns false
+  std::atomic<bool> throw_on_position{false};  // actual_position_m() throws
   // Like IndraDrive::move_to(): writes above this speed fail. Unlimited by default.
   double max_velocity{std::numeric_limits<double>::infinity()};
   // Like LinMotDrive::move_to(): writes above this acceleration fail. Unlimited by default.
@@ -284,14 +293,16 @@ bool wait_for_soft_stop_release(rclcpp::Executor & executor, const ControllerNod
   return true;
 }
 
-// Creates a controller whose fake drive accepts at most max_velocity_mps.
+// Creates a controller whose fake drive accepts at most max_velocity_mps and starts at
+// start_position.
 std::shared_ptr<ControllerNode> speed_limited_node(
   const std::string & ns, double max_velocity_mps,
-  const std::vector<rclcpp::Parameter> & overrides = {})
+  const std::vector<rclcpp::Parameter> & overrides = {}, double start_position = 0.25)
 {
-  auto factory = [max_velocity_mps](rclcpp_lifecycle::LifecycleNode &) {
+  auto factory = [max_velocity_mps, start_position](rclcpp_lifecycle::LifecycleNode &) {
       auto actuator = std::make_unique<FakeActuator>();
       actuator->max_velocity = max_velocity_mps;
+      actuator->actual_position = start_position;
       return actuator;
     };
   auto options = node_options(ns);
@@ -338,10 +349,11 @@ bool goal_accepted(
 // Like goal_accepted() on a fresh speed_limited_node().
 bool goal_accepted_with_speed_limit(
   const std::string & ns, double max_velocity_mps,
-  const MoveRig::Goal & goal, const std::vector<rclcpp::Parameter> & overrides = {})
+  const MoveRig::Goal & goal, const std::vector<rclcpp::Parameter> & overrides = {},
+  double start_position = 0.25)
 {
   return goal_accepted(
-    speed_limited_node(ns, max_velocity_mps, overrides), ns, goal);
+    speed_limited_node(ns, max_velocity_mps, overrides, start_position), ns, goal);
 }
 
 class ControllerNodeTest : public ::testing::Test
@@ -598,6 +610,91 @@ TEST_F(ControllerNodeTest, CancelledActionHaltsAndAcceptsNextGoal)
   ASSERT_TRUE(spin_until(executor, second_result_future, std::chrono::seconds(2)));
   EXPECT_EQ(second_result_future.get().code, rclcpp_action::ResultCode::CANCELED);
   EXPECT_EQ(fake->halt_count, 2);
+}
+
+TEST_F(ControllerNodeTest, CancelAllGoalsRightAfterActivate)
+{
+  const std::string ns = "/cancel_all_after_activate_test";
+  auto factory = [](rclcpp_lifecycle::LifecycleNode &) {
+      return std::make_unique<FakeActuator>();
+    };
+  auto node = std::make_shared<ControllerNode>(node_options(ns), factory);
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  auto client_node = std::make_shared<rclcpp::Node>("cancel_all_client", node_options(ns));
+  auto client = client_node->create_client<CancelAllGoals>("cancel_all_goals");
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node->get_node_base_interface());
+  executor.add_node(client_node);
+  ASSERT_TRUE(client->wait_for_service(std::chrono::seconds(1)));
+
+  auto request = std::make_shared<CancelAllGoals::Request>();
+  request->requester = "test";
+  auto future = client->async_send_request(request);
+  ASSERT_TRUE(spin_until(executor, future, std::chrono::seconds(3)));
+  const auto response = future.get();
+  EXPECT_EQ(response->status, CancelAllGoals::Response::NO_ACTIVE_GOALS) << response->message;
+  EXPECT_EQ(response->goals_canceling, 0u);
+  EXPECT_EQ(response->requester, "test");
+}
+
+TEST_F(ControllerNodeTest, CancelAllGoalsCancelsARunningGoal)
+{
+  const std::string ns = "/cancel_all_running_test";
+  FakeActuator * fake = nullptr;
+  auto factory = [&fake](rclcpp_lifecycle::LifecycleNode &) {
+      auto actuator = std::make_unique<FakeActuator>();
+      fake = actuator.get();
+      return actuator;
+    };
+  auto node = std::make_shared<ControllerNode>(node_options(ns), factory);
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+
+  auto client_node = std::make_shared<rclcpp::Node>("cancel_all_client", node_options(ns));
+  auto action_client = rclcpp_action::create_client<MoveRig>(client_node, "move_wavemaker");
+  auto cancel_client = client_node->create_client<CancelAllGoals>("cancel_all_goals");
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node->get_node_base_interface());
+  executor.add_node(client_node);
+  ASSERT_TRUE(action_client->wait_for_action_server(std::chrono::seconds(1)));
+  ASSERT_TRUE(cancel_client->wait_for_service(std::chrono::seconds(1)));
+  ASSERT_TRUE(wait_for_soft_stop_release(executor, *node));
+
+  MoveRig::Goal goal;
+  goal.height = 0.002;
+  goal.period = 10.0;
+  auto goal_future = action_client->async_send_goal(goal);
+  ASSERT_TRUE(spin_until(executor, goal_future, std::chrono::seconds(1)));
+  auto goal_handle = goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+  const auto write_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (fake->write_count == 0 && std::chrono::steady_clock::now() < write_deadline) {
+    executor.spin_some();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_GT(fake->write_count, 0);
+
+  auto request = std::make_shared<CancelAllGoals::Request>();
+  request->requester = "test";
+  auto cancel_future = cancel_client->async_send_request(request);
+  ASSERT_TRUE(spin_until(executor, cancel_future, std::chrono::seconds(3)));
+  const auto response = cancel_future.get();
+  EXPECT_EQ(response->status, CancelAllGoals::Response::REQUEST_ACCEPTED) << response->message;
+  EXPECT_EQ(response->goals_canceling, 1u);
+
+  auto result_future = action_client->async_get_result(goal_handle);
+  ASSERT_TRUE(spin_until(executor, result_future, std::chrono::seconds(2)));
+  EXPECT_EQ(result_future.get().code, rclcpp_action::ResultCode::CANCELED);
 }
 
 TEST_F(ControllerNodeTest, SinusoidalGoalBlendsFromMeasuredPosition)
@@ -1008,6 +1105,61 @@ TEST_F(ControllerNodeTest, ReturnToUprightReportsFaultDuringMove)
   EXPECT_EQ(rig.fake->halt_count, 1);
 }
 
+TEST_F(ControllerNodeTest, ReturnToUprightReportsExceptionText)
+{
+  ReturnToUprightRig rig;
+  ASSERT_NO_FATAL_FAILURE(rig.setup("/return_exception_test", 0.30, true));
+
+  std::thread trigger([fake = rig.fake]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      fake->throw_on_position = true;
+    });
+  const auto response = rig.call(0.001);
+  trigger.join();
+
+  EXPECT_EQ(response.status, ReturnToUpright::Response::ACTUATOR_FAULT);
+  EXPECT_NE(response.message.find("fake position read failed"), std::string::npos)
+    << response.message;
+}
+
+TEST_F(ControllerNodeTest, ReturnToUprightReportsFaultThatDeactivates)
+{
+  ReturnToUprightRig rig;
+  ASSERT_NO_FATAL_FAILURE(rig.setup("/return_fault_deactivates_test", 0.30, true));
+
+  std::thread trigger([fake = rig.fake]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      fake->fault = true;
+      fake->fault_callback_("fake fault");
+    });
+  const auto response = rig.call(0.001);
+  trigger.join();
+  rig.fake = nullptr;  // release_resources() may destroy it once the node deactivates
+
+  EXPECT_EQ(response.status, ReturnToUpright::Response::ACTUATOR_FAULT);
+  EXPECT_NE(response.message.find("fake fault"), std::string::npos) << response.message;
+}
+
+TEST_F(ControllerNodeTest, ReturnToUprightReportsSoftStop)
+{
+  const std::string ns = "/return_soft_stop_test";
+  ReturnToUprightRig rig;
+  ASSERT_NO_FATAL_FAILURE(rig.setup(ns, 0.30, true));
+
+  std::thread trigger([ns]() {
+      std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      std_msgs::msg::Bool engaged;
+      engaged.data = true;
+      soft_stop_releaser().publishers.at(ns)->publish(engaged);
+    });
+  const auto response = rig.call(0.001);
+  trigger.join();
+
+  EXPECT_EQ(response.status, ReturnToUpright::Response::SOFT_STOP) << response.message;
+  EXPECT_EQ(rig.fake->halt_count, 1);
+  EXPECT_EQ(rig.node->get_current_state().id(), lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+}
+
 TEST_F(ControllerNodeTest, ReturnToUprightRejectsPositionOutsideLimits)
 {
   ReturnToUprightRig rig;
@@ -1142,6 +1294,17 @@ TEST_F(ControllerNodeTest, RegularWaveAboveDriveSpeedIsRejected)
   slow.height = 0.002;
   slow.period = 10.0;
   EXPECT_TRUE(goal_accepted_with_speed_limit("/slow_wave_test", 0.06, slow));
+}
+
+TEST_F(ControllerNodeTest, RegularWaveFarFromUprightIsAccepted)
+{
+  // Piston in 1 m water, started at the travel end 0.25 m from upright. Blending in over one
+  // period needs about 0.47 m/s; whole periods at the return speed (0.05 m/s) keep the blend
+  // under the drive's 0.08 m/s.
+  MoveRig::Goal goal;
+  goal.height = 0.01;
+  goal.period = 1.0;
+  EXPECT_TRUE(goal_accepted_with_speed_limit("/far_start_wave_test", 0.08, goal, {}, 0.0));
 }
 
 TEST_F(ControllerNodeTest, PregeneratedGoalAboveDriveSpeedIsRejected)

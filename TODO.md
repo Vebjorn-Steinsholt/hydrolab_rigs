@@ -24,22 +24,7 @@ the items kept there, and finished items, which are removed (see the git history
 - [ ] **19. Linear drives (lilletanken, mclab).** Deferred: neither is deployed yet (they need gateways). (`rig_controller/src/indradrive_actuator.cpp`)
   The drive's position tag (scaled as degrees) is used as metres unchanged, and velocity is converted with `/ 6` as if it were deg/s → rpm; the limits exist twice (`travel_minimum_m/maximum` and `min_position_m/max_position_m`). Once the drive scaling is confirmed on the rig (item 19 in [COMMISSIONING.md](COMMISSIONING.md)), add a proper linear conversion and derive the drive limits from the node limits. The unit conversion now goes through `DriveScale` (`rig_controller/src/drive_scale.hpp`, 2026-10-23); the duplicate limits remain.
 
-- [ ] **20. Data race on `IndraDrive::last_error_`.** (`drivers/mgate5101_driver/src/indradrive.cpp`)
-  Written by `fail()` from the worker thread, read by `fault_reason()` / `last_error()` from executor threads. Guard it with a mutex and return a copy.
-
-- [ ] **21. Unit-test the hold behaviour of `IndraDriveActuator::halt()`.**
-  Check that `halt()` writes the last commanded target (clamped) with `hold_velocity_rpm` and leaves Drive Start set, e.g. by reading the MGate driver's staged outputs.
-
-- [ ] **22. `cancel_all_goals` can report `SERVER_UNAVAILABLE` right after configure.** (`rig_controller/src/controller_node.cpp`)
-  `action_server_is_ready()` is false until discovery completes; wait up to about 1 s before replying.
-
 ## Low
-
-- [ ] **24. Return-to-upright replies with the wrong reason in two cases.** (`controller_node.cpp`)
-  An exception gives `ACTUATOR_FAULT` with an empty message (use the exception text); a fault that deactivates the node first gives `CONTROLLER_INACTIVE` (check `actuator_->faulted()` in the `Stopped` case). Also (2026-10-27): a soft stop during a return ends as `Stopped` too and is reported as `CONTROLLER_INACTIVE`, "Interrupted by lifecycle transition"; give the soft stop its own status or message.
-
-- [ ] **25. The start blend always lasts one wave period.** (`rig_controller/src/wave_trajectory.cpp`)
-  Far from the first wave position with a short period, the start is too fast and the goal is rejected. Use enough whole periods to stay under `return_to_upright_max_velocity_mps`.
 
 - [x] **26. Goal type is chosen by a parameter.** (`controller_node.cpp`, `play_dat.py`)
   `mode_pregenerated` fixes at launch whether the controller takes regular waves or position lists, so playing a `.dat` file needs a relaunch, and a regular wave sent in pregenerated mode is rejected with "goal requires positions", which does not name the mode. Choose per goal instead (non-empty `positions` → pregenerated), remove `mode_pregenerated` (add it to the rename table as removed) and the relaunch from `play_dat.py`'s usage text, the launch files and `fake_controller.py --pregenerated`.

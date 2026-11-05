@@ -41,9 +41,8 @@ from rclpy.node import Node
 from rclpy.utilities import remove_ros_args
 from rig_interfaces.action import MoveRig
 from rig_interfaces.srv import ReturnToUpright
-from std_msgs.msg import Float64
-
 import rig_limits  # installed next to this program
+from std_msgs.msg import Float64
 
 LOOP_S = 0.02            # setpoint rate, as the real controller at poll_interval_ms 20
 LAG_S = 0.04             # the fake "measured" position trails the setpoint by this much
@@ -88,9 +87,11 @@ class FakeController(Node):
 
     def _declare_rig_parameters(self, rig):
         """
-        The rig's yaml block as parameters, as the real controller has them, so play_dat's
-        cross-check has something to compare. Without a /<prefix>/<name> namespace or a yaml
-        block, none: the fake still serves goals. Lists are left out (an empty one has no type).
+        Declare the rig's yaml block as parameters, as the real controller has them.
+
+        So play_dat's cross-check has something to compare. Without a /<prefix>/<name> namespace
+        or a yaml block, none: the fake still serves goals. Lists are left out (an empty one has
+        no type).
         """
         prefix = rig_limits.RIGS[rig][0]
         namespace = self.get_namespace()

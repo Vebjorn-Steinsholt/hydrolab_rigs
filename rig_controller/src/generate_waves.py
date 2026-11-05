@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate wave motion files (.dat, run table .csv, record .txt) for one wavemaker, using its
-geometry and limits from wavemakers.yaml. The goal is compatibility: every file plays with
-play_dat.py and every run is accepted by the controller on that wavemaker.
+Generate wave motion files (.dat, run table .csv, record .txt) for one wavemaker.
+
+Uses the wavemaker's geometry and limits from wavemakers.yaml. The goal is compatibility: every
+file plays with play_dat.py and every run is accepted by the controller on that wavemaker.
 
 The wave physics is the controller's (wave_math.cpp, WaveTrajectory::configure), so a run in a
-file and the same H and T sent as a regular goal give the same stroke. 
+file and the same H and T sent as a regular goal give the same stroke.
 
 Contract with play_dat.py
   .dat (read_motion)
@@ -36,16 +37,15 @@ import argparse
 from collections.abc import Callable
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 import math
 import os
-import sys
-from typing import TypeVar
-from datetime import datetime
 import shlex
 import subprocess
+import sys
+from typing import TypeVar
 
 import numpy as np
-
 
 import play_dat
 import rig_limits
@@ -55,11 +55,13 @@ G = 9.81  # m/s^2, the controller's value
 
 # ---------------------------------------------------------------- wavemaker from the yaml
 
+
 @dataclass
 class Wavemaker:
     """What generation needs from /wavemakers/<name>/controller: ros__parameters."""
+
     name: str
-    type: str                # wavemaker_type: 'flap' | 'piston'
+    type: str  # noqa: A003  wavemaker_type: 'flap' | 'piston'
     water_depth: float
     hinge_height: float      # flap only
     attachment_height: float  # flap_attachment_height, flap only
@@ -75,18 +77,21 @@ class Wavemaker:
 
 def default_config_path() -> str:
     """
-    wavemakers.yaml from the installed wavemaker_bringup share directory
-    (ament_index_python), falling back to the copy in the repository.
+    Return the path of wavemakers.yaml.
+
+    From the installed wavemaker_bringup share directory (ament_index_python), falling back to
+    the copy in the repository.
     """
     return rig_limits.default_config_path('wavemaker')
 
 
 def load_wavemaker(name: str, config_path: str) -> Wavemaker:
     """
-    The wavemaker's geometry and gain from its yaml block, and its limits from rig_limits (the
-    same derivation play_dat uses). Keys that set the geometry are required, as the limits are.
-    """
+    Load the wavemaker's geometry, gain and limits.
 
+    Geometry and gain come from its yaml block, the limits from rig_limits (the same derivation
+    play_dat uses). Keys that set the geometry are required, as the limits are.
+    """
     params = rig_limits.read_block('wavemaker', name, config_path)
     source = os.path.basename(config_path)
     limits = rig_limits.limits_from_parameters('wavemaker', name, params, source)
@@ -95,32 +100,33 @@ def load_wavemaker(name: str, config_path: str) -> Wavemaker:
     if wavemaker_type == 'flap':
         attachment_height = rig_limits.required(params, 'flap_attachment_height', name, source)
     else:
-        attachment_height = 0.0 # not used for piston
+        attachment_height = 0.0  # not used for piston
 
     return Wavemaker(
-        name = name,
-        type = wavemaker_type,
-        water_depth = rig_limits.required(params, 'water_depth', name, source),
-        hinge_height = params.get('hinge_height', 0.0),  # optional, default 0.0
-        attachment_height = attachment_height,
-        gain = params.get('wavemaker_transfer_gain', 1.0),  # optional, default 1.0
-        gain_periods =  list(params.get('wavemaker_transfer_gain_periods', [])),  # optional table
-        gain_values = list(params.get('wavemaker_transfer_gain_values', [])),
-        min_m = limits.min_m,
-        max_m = limits.max_m,
-        upright_m = limits.upright_m,
-        max_velocity_mps = limits.max_velocity_mps,
-        max_acceleration_mps2 = limits.max_acceleration_mps2)
+        name=name,
+        type=wavemaker_type,
+        water_depth=rig_limits.required(params, 'water_depth', name, source),
+        hinge_height=params.get('hinge_height', 0.0),  # optional, default 0.0
+        attachment_height=attachment_height,
+        gain=params.get('wavemaker_transfer_gain', 1.0),  # optional, default 1.0
+        gain_periods=list(params.get('wavemaker_transfer_gain_periods', [])),  # optional table
+        gain_values=list(params.get('wavemaker_transfer_gain_values', [])),
+        min_m=limits.min_m,
+        max_m=limits.max_m,
+        upright_m=limits.upright_m,
+        max_velocity_mps=limits.max_velocity_mps,
+        max_acceleration_mps2=limits.max_acceleration_mps2)
 
 
 def transfer_gain(wm: Wavemaker, period_s: float) -> float:
     """
-    The table if set, else wm.gain. As interpolate_gain() in wave_math.cpp: linear between
-    points, nearest end value outside (np.interp does both).
+    Return the transfer gain for a period: the table if set, else wm.gain.
+
+    As interpolate_gain() in wave_math.cpp: linear between points, nearest end value outside
+    (np.interp does both).
 
     Test, ladertanken: 1.05 s -> 0.755; 0.5 s -> 0.64; 2.5 s -> 0.76.
     """
-
     if wm.gain_periods:
         return float(np.interp(period_s, wm.gain_periods, wm.gain_values))
     return wm.gain
@@ -130,7 +136,9 @@ def transfer_gain(wm: Wavemaker, period_s: float) -> float:
 
 def wavenumber_depth(period_s: float, depth: float) -> float:
     """
-    k*h, the controller's Beji 2013 approximation (solve_dispersion), g = 9.81:
+    Return k*h with the controller's Beji 2013 approximation (solve_dispersion).
+
+    With g = 9.81:
       mu0  = omega^2 h / g
       mu_a = mu0 / sqrt(tanh(mu0))
       kh   = mu_a * (1 + mu0^1.09 * exp(-(1.55 + 1.30 mu0 + 0.216 mu0^2)))
@@ -147,7 +155,8 @@ def wavenumber_depth(period_s: float, depth: float) -> float:
 
 def stroke_ratio(kh: float, wm: Wavemaker) -> float:
     """
-    H/S at the still-water level, compute_stroke() in wave_math.cpp:
+    Return H/S at the still-water level, as compute_stroke() in wave_math.cpp.
+
       piston: 4 sinh^2(kh) / (sinh(2kh) + 2kh)
       flap, hm = kh * hinge_height / water_depth:
         4 sinh(kh) [sinh(kh) + (cosh(hm) - cosh(kh)) / (kh - hm)] / (sinh(2kh) + 2kh)
@@ -163,7 +172,9 @@ def stroke_ratio(kh: float, wm: Wavemaker) -> float:
 
 def paddle_amplitude(wm: Wavemaker, period_s: float, height_m: float) -> float:
     """
-    Amplitude at the attachment point, as WaveTrajectory::configure, in this order:
+    Return the amplitude at the attachment point, as WaveTrajectory::configure.
+
+    In this order:
       stroke = H / stroke_ratio / gain     (the gain divides)
       amplitude = stroke / 2
       flap: amplitude *= (attachment_height - hinge) / (water_depth - hinge)
@@ -186,19 +197,19 @@ def paddle_amplitude(wm: Wavemaker, period_s: float, height_m: float) -> float:
 @dataclass
 class RunSpec:
     """One row of the test matrix; the file order is the play order."""
+
     n_ramp: int                       # periods (regular) or peak periods (irregular) of ramp
     pause_s: float                    # rest after the run, >= MIN_GAP_S (1 s)
 
-   
+
 @dataclass
 class RegularSpec(RunSpec):
-    period_s: float 
+    period_s: float
     n_periods: int     # including ramps
     height_m: float | None = None     # exactly one of height_m and steepness
     steepness: float | None = None    # x in H/lambda = 1/x, e.g. 60 for 1/60
-   
-    
-    
+
+
 @dataclass
 class IrregularSpec(RunSpec):
     hs_m: float
@@ -219,10 +230,12 @@ def parse_steepness(text: str, row: int) -> float:
         raise ValueError(f"row {row}: steepness '{text}' must be written 1/x, e.g. 1/60")
     return x
 
+
 T = TypeVar('T')
 
+
 def number(r: dict, key: str, row: int, kind: Callable[[str], T] = float) -> T:
-    """A required number from a test-matrix row, with a message naming the row and column."""
+    """Read a required number from a test-matrix row; errors name the row and column."""
     text = (r.get(key) or '').strip()
     if not text:
         raise ValueError(f'row {row}: {key} is required')
@@ -231,9 +244,12 @@ def number(r: dict, key: str, row: int, kind: Callable[[str], T] = float) -> T:
     except ValueError:
         raise ValueError(f"row {row}: {key} '{text}' is not a number") from None
 
+
 def read_test_matrix(path: str) -> list[RunSpec]:
     """
-    CSV, one row per run, played in file order. Columns per kind (others left empty):
+    Read the test matrix: CSV, one row per run, played in file order.
+
+    Columns per kind (others left empty):
       all:        kind (default regular), n_ramp, pause_s
       regular:    period_s, height_m or steepness (1/x), n_periods
       irregular:  hs_m, tp_s, gamma (default 3.3), duration_s, seed
@@ -248,7 +264,7 @@ def read_test_matrix(path: str) -> list[RunSpec]:
                 height = (r.get('height_m') or '').strip()
                 steepness = (r.get('steepness') or '').strip()
                 if bool(height) == bool(steepness):
-                    raise ValueError(f"row {row}: give height_m or steepness, not both or neither")
+                    raise ValueError(f'row {row}: give height_m or steepness, not both or neither')
                 specs.append(RegularSpec(
                     **common,
                     period_s=number(r, 'period_s', row),
@@ -268,9 +284,11 @@ def read_test_matrix(path: str) -> list[RunSpec]:
                 raise ValueError(f"row {row}: kind '{kind}' must be regular or irregular")
     return specs
 
+
 def wavelength(wm: Wavemaker, period_s: float) -> float:
-    """lambda = 2 pi h / kh, with the controller's dispersion approximation."""
+    """Return the wavelength 2 pi h / kh, with the controller's dispersion approximation."""
     return 2.0 * math.pi * wm.water_depth / wavenumber_depth(period_s, wm.water_depth)
+
 
 def target_height(wm: Wavemaker, spec: RegularSpec) -> float:
     """H as given, or lambda / x for a steepness 1/x."""
@@ -278,49 +296,54 @@ def target_height(wm: Wavemaker, spec: RegularSpec) -> float:
         return wavelength(wm, spec.period_s) / spec.steepness
     assert spec.height_m is not None
     return spec.height_m
-    
+
 
 def apply_ramps(x, n_ramp_samples: int):
     """Ramp 0 -> 1 at the start and 1 -> 0 at the end; the run ends exactly at upright."""
     if n_ramp_samples < 2 or 2 * n_ramp_samples > len(x):
         raise ValueError(f'{n_ramp_samples} ramp samples do not fit a run of {len(x)}')
     ramp = np.linspace(0.0, 1.0, n_ramp_samples)
-    x=x.copy()  # avoid modifying the caller's array
+    x = x.copy()  # avoid modifying the caller's array
     x[:n_ramp_samples] *= ramp
     x[-n_ramp_samples:] *= ramp[::-1]
     x[-1] = 0.0
     return x
-         
+
+
 # ---------------------------------------------------------------- signals
-# ---------------------------------------------------------------- Irregular waves: JONSWAP spectrum, random phases, ramps
+# ---------------------------------------------------------------- irregular waves
+# JONSWAP spectrum, random phases, ramps.
 F_MIN_FACTOR = 0.5   # band: F_MIN_FACTOR * fp .. F_MAX_FACTOR * fp (README, Irregular waves)
 F_MAX_FACTOR = 3.0
 SIGMA_1 = 0.07       # JONSWAP peak width below fp
 SIGMA_2 = 0.09       # and above
 
 
-
-
 def frequency_grid(duration_s: float, dt: float, f_min: float, f_max: float):
-    """The synthesis frequencies f_n = n df, df = 1 / duration, within f_min..f_max and below
-    Nyquist. Returns (n, f, df, n_samples); n are the FFT bin numbers.
+    """
+    Return the synthesis frequencies f_n = n df, df = 1 / duration.
+
+    Only those within f_min..f_max and below Nyquist. Returns (n, f, df, n_samples); n are the
+    FFT bin numbers.
     """
     n_samples = round(duration_s / dt)
     if abs(n_samples * dt - duration_s) > 1e-9:
         raise ValueError(f'duration {duration_s} s is not a whole number of {dt} s samples')
     df = 1.0/(n_samples * dt)
-    n_all = np.arange(1,n_samples//2+1)
+    n_all = np.arange(1, n_samples//2+1)
     f_all = n_all * df
     mask = (f_all >= f_min) & (f_all <= f_max) & (f_all < 0.5/dt)
     if not mask.any():
         raise ValueError(f'no frequencies between {f_min:.3f} and {f_max:.3f} Hz')
     return n_all[mask], f_all[mask], df, n_samples
 
+
 def jonswap(f, df: float, hs_m: float, tp_s: float, gamma: float,
             sigma1: float = SIGMA_1, sigma2: float = SIGMA_2):
     """
-    S(f) [m^2/Hz] on the grid. alpha is chosen with the same sum the synthesis uses, so the
-    generated Hs is exactly hs_m.
+    Return the JONSWAP spectrum S(f) [m^2/Hz] on the grid.
+
+    alpha is chosen with the same sum the synthesis uses, so the generated Hs is exactly hs_m.
     """
     fm = 1.0 / tp_s
     sigma = np.where(f <= fm, sigma1, sigma2)
@@ -330,29 +353,40 @@ def jonswap(f, df: float, hs_m: float, tp_s: float, gamma: float,
     m0 = shape.sum() * df
     return shape * (hs_m ** 2 / 16.0) / m0
 
+
 def wave_amplitudes(spectrum, df: float):
-    """a_n = sqrt(2 S(f_n) df); then 4 sqrt(sum(a_n^2) / 2) = Hs."""
+    """Return a_n = sqrt(2 S(f_n) df); then 4 sqrt(sum(a_n^2) / 2) = Hs."""
     return np.sqrt(2.0 * spectrum * df)
 
+
 def paddle_amplitudes(wm: Wavemaker, f, a):
-    """Each component as a regular wave of height 2 a_n: same transfer function, gain and scaling."""
+    """
+    Return the paddle amplitude of each component.
+
+    Each as a regular wave of height 2 a_n: same transfer function, gain and scaling.
+    """
     return np.array([paddle_amplitude(wm, 1.0 / fn, 2.0 * an) for fn, an in zip(f, a)])
+
 
 def random_phases(seed: int, count: int):
     """Uniform in [0, 2 pi); the same seed gives the same run."""
     return np.random.default_rng(seed).uniform(0.0, 2.0 * math.pi, count)
 
+
 def synthesize(n, p, phases, n_samples: int):
     """
-    x_k = sum_n p_n cos(2 pi n k / n_samples + phi_n), by inverse FFT. irfft divides by
-    n_samples and doubles the positive frequencies, hence the factor n_samples / 2.
+    Return x_k = sum_n p_n cos(2 pi n k / n_samples + phi_n), by inverse FFT.
+
+    irfft divides by n_samples and doubles the positive frequencies, hence the factor
+    n_samples / 2.
     """
     spectrum = np.zeros(n_samples // 2 + 1, dtype=complex)
     spectrum[n] = p * np.exp(1j * phases) * (n_samples / 2.0)
     return np.fft.irfft(spectrum, n_samples)
 
+
 def synthesize_direct(f, p, phases, n_samples: int, dt: float):
-    """The same sum, term by term: slow, for testing synthesize() on short runs."""
+    """Compute the same sum term by term: slow, for testing synthesize() on short runs."""
     t = np.arange(n_samples) * dt
     x = np.zeros(n_samples)
     for fn, pn, phi in zip(f, p, phases):
@@ -377,7 +411,8 @@ def irregular_signal(wm: Wavemaker, spec: IrregularSpec, dt: float):
     return x, row
 
 
-# ---------------------------------------------------------------- regular waves: sine wave, ramps, paddle amplitude from the controller's physics
+# ---------------------------------------------------------------- regular waves
+# Sine wave, ramps, paddle amplitude from the controller's physics.
 
 def regular_signal(wm: Wavemaker, spec: RegularSpec, dt: float):
     """Positions relative to upright for one run, and its run-table fields."""
@@ -394,12 +429,10 @@ def regular_signal(wm: Wavemaker, spec: RegularSpec, dt: float):
     return x, row
 
 
-
-
-
 def check_run(wm: Wavemaker, x, dt: float, max_velocity_mps: float) -> list[str]:
     """
-    Reasons the controller would reject the run or play_dat would refuse it; empty if OK.
+    Return the reasons the controller would reject the run or play_dat refuse it; empty if OK.
+
     Compute each as play_dat and the controller do, so the numbers match:
       - travel: upright_m + x within min_m..max_m
       - speed: max|np.diff(x)| / dt <= max_velocity_mps
@@ -430,8 +463,8 @@ def check_run(wm: Wavemaker, x, dt: float, max_velocity_mps: float) -> list[str]
 
 def assemble(wm: Wavemaker, specs: list[RunSpec], dt: float, max_velocity_mps: float):
     """Frames (n x 2: position, trigger) and run-table rows, in file order."""
-    lead_in = np.zeros((round(max(play_dat.MIN_GAP_S, 2.0) / dt),2))
-    chunks  = [lead_in]
+    lead_in = np.zeros((round(max(play_dat.MIN_GAP_S, 2.0) / dt), 2))
+    chunks = [lead_in]
     sample = len(lead_in)
     rows = []
     for index, spec in enumerate(specs):
@@ -451,7 +484,7 @@ def assemble(wm: Wavemaker, specs: list[RunSpec], dt: float, max_velocity_mps: f
             row.update(start_s=round(sample * dt, 3), end_s=round((sample + len(x)) * dt, 3),
                        status='')
             pause = np.zeros((round(spec.pause_s / dt), 2))
-            chunks += [np.column_stack((x, np.ones_like(x))),pause]
+            chunks += [np.column_stack((x, np.ones_like(x))), pause]
             sample += len(x) + len(pause)
         rows.append(row)
     return np.vstack(chunks), rows
@@ -481,7 +514,7 @@ def write_run_table(path: str, rows: list[dict]):
 
 
 def source_commit() -> str:
-    """The repository's commit, with '-dirty' for local changes; 'unknown' without git."""
+    """Return the repository's commit, '-dirty' for local changes; 'unknown' without git."""
     here = os.path.dirname(os.path.realpath(__file__))
     try:  # an installed copy: CMakeLists.txt writes where the repo is.
         with open(os.path.join(here, 'source_dir.txt')) as f:
@@ -544,15 +577,16 @@ def verify_with_play_dat(dat_path: str, wm: Wavemaker, max_velocity_mps: float):
             raise ValueError(f"run {run.index}: {'; '.join(issues)}")
     return len(runs)
 
+
 def plot_motion(png_path: str, wm: Wavemaker, frames, rows: list[dict], dt: float,
-                 max_velocity_mps: float, show: bool = False):
+                max_velocity_mps: float, show: bool = False):
     """Paddle position and speed over the whole file, runs shaded, limits dashed."""
     import matplotlib
     if not show:
         matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    x = frames[:,0]
+    x = frames[:, 0]
     t = np.arange(len(x)) * dt
     speed = np.abs(np.diff(x, prepend=x[0])) / dt
     fig, (ax_x, ax_v) = plt.subplots(2, 1, sharex=True, figsize=(12, 6))

@@ -412,7 +412,10 @@ public:
           service->send_response(*request_id, *response);
         };
 
-        if (!cancel_client_ || !cancel_client_->action_server_is_ready()) {
+        // Our own action server; discovery can lag right after configure.
+        if (!cancel_client_ ||
+        !cancel_client_->wait_for_action_server(std::chrono::seconds(1)))
+        {
           respond(
             CancelAllGoals::Response::SERVER_UNAVAILABLE,
             0, "Action server is unavailable");
@@ -502,10 +505,12 @@ public:
         }
         const bool started = start_execution([this, respond, tolerance, not_a_number]() {
           double final_position = not_a_number;
+          std::string failure;
           ReturnStatus status = ReturnStatus::Fault;
           try {
             status = move_to_upright(tolerance, final_position);
           } catch (const std::exception & error) {
+            failure = error.what();
             RCLCPP_ERROR(get_logger(), "Return to upright failed: %s", error.what());
             try {
               actuator_->halt();
@@ -513,6 +518,7 @@ public:
                 // best effort: the drive may already be unreachable
             }
           } catch (...) {
+            failure = "unknown exception";
             RCLCPP_ERROR(get_logger(), "Return to upright failed with an unknown exception");
             try {
               actuator_->halt();
@@ -546,12 +552,18 @@ public:
               case ReturnStatus::Fault:
                 respond(
                     ReturnToUpright::Response::ACTUATOR_FAULT, final_position,
-                    actuator_->fault_reason());
+                    failure.empty() ? actuator_->fault_reason() :
+                    "Return to upright failed: " + failure);
                 break;
               case ReturnStatus::Stopped:
                 respond(
                     ReturnToUpright::Response::CONTROLLER_INACTIVE, final_position,
                     "Interrupted by lifecycle transition");
+                break;
+              case ReturnStatus::SoftStop:
+                respond(
+                    ReturnToUpright::Response::SOFT_STOP, final_position,
+                    "Soft stop engaged; actuator halted and remains enabled");
                 break;
             }
           } catch (const std::exception & error) {
@@ -702,7 +714,7 @@ public:
   }
 
 private:
-  enum class ReturnStatus { Success, Timeout, Fault, PositionInvalid, Stopped };
+  enum class ReturnStatus { Success, Timeout, Fault, PositionInvalid, Stopped, SoftStop };
 
   void check_soft_stop_liveness()
   {
@@ -864,7 +876,7 @@ private:
       {rig_ == "oscillator" ? "oscillator" : wavemaker_type_, water_depth_,
         flap_attachment_height_, wavemaker_position_offset_,
         upright_is_minimum_, gain, hinge_height_},
-      goal.height, goal.period, start_position);
+      goal.height, goal.period, start_position, return_max_velocity_mps_);
 
     const double required_minimum = trajectory_.required_minimum();
     const double required_maximum = trajectory_.required_maximum();
@@ -1176,7 +1188,7 @@ private:
       if (soft_stop_active()) {
         RCLCPP_WARN(get_logger(), "Soft stop engaged during return to upright");
         actuator_->halt();
-        return ReturnStatus::Stopped;
+        return ReturnStatus::SoftStop;
       }
       if (actuator_->faulted()) {
         RCLCPP_ERROR(get_logger(), "Actuator fault detected");
@@ -1206,7 +1218,8 @@ private:
       loop_rate.sleep();
     }
     actuator_->halt();
-    return ReturnStatus::Stopped;
+    // A driver fault deactivates the node, which also ends this loop.
+    return actuator_->faulted() ? ReturnStatus::Fault : ReturnStatus::Stopped;
   }
 
   void execute_goal(

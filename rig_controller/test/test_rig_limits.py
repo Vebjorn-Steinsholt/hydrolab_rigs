@@ -95,12 +95,14 @@ def test_linmot_without_goal_limit_uses_the_drives():
 
 def test_linmot_speed_from_the_parameter():
     params = dict(LINEAR, drive_name='linmot', max_velocity_mps=1.5)
-    assert rig_limits.limits_from_parameters('oscillator', 't', params, 's').max_velocity_mps == 1.5
+    limits = rig_limits.limits_from_parameters('oscillator', 't', params, 's')
+    assert limits.max_velocity_mps == 1.5
 
 
 def test_goal_acceleration_limit_on_an_indradrive():
     params = dict(LINEAR, max_goal_acceleration_mps2=5.0)
-    assert rig_limits.limits_from_parameters('wavemaker', 't', params, 's').max_acceleration_mps2 == 5.0
+    limits = rig_limits.limits_from_parameters('wavemaker', 't', params, 's')
+    assert limits.max_acceleration_mps2 == 5.0
 
 
 @pytest.mark.parametrize('key', ['drive_name', 'travel_minimum_m', 'travel_maximum_m'])
