@@ -302,9 +302,9 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 
 ## Generating motion files
 
-> **Regular waves tested on the rig** (ladertanken, 2026-11-04, [rpi/README.md](rpi/README.md)).
-> Irregular waves pass the unit tests and `play_dat --dry-run`, but have not yet been played on
-> the rig.
+> **Regular and irregular waves played on the rig** (ladertanken, 2026-11-04 and 2026-11-05,
+> [rpi/README.md](rpi/README.md)). The wave heights have not yet been measured with probes
+> ([TODO.md](TODO.md), item 43).
 
 `generate_waves` (`rig_controller/src/generate_waves.py`) turns a test matrix into a motion file for one wavemaker,
 ready for `play_dat`. Wavemakers only; the oscillator gets a separate generator later

@@ -28,6 +28,8 @@ Before you start, as the wavemaker user:
 - The workspace is built (see *Build* in the top-level README), and `rpi/run.sh` and `rpi/stop.sh`
   are executable (`ls -l rpi/*.sh` shows `-rwxr-xr-x`).
 - The user is in the `gpio` group (`id` lists `gpio`); the soft stop node needs it.
+- `python3-matplotlib` is installed (`sudo apt install python3-matplotlib`); `generate_waves` needs
+  it for its plot.
 - No `lab.launch.py` is running by hand. A second copy would clash on port 8080 and GPIO17.
 
 Install the unit:
@@ -315,6 +317,68 @@ the branch is merged.
 file, limits and table as on the development PC. Step 4: limits matched the controller and run 0
 played. Step 5: the warning at 15:19:16, run 0 started 2 s later and was stopped with Ctrl-C.
 Step 6 as expected. The oscillator was not run (its limits are covered by the tests only).
+
+### `generate_waves` on the rig (TODO 38; run 2026-11-05)
+
+Generates a test matrix on the Pi and plays it on ladertanken: two regular runs, one close to the
+travel limit, and the first irregular run on the rig. Keep a hand near the e-stop.
+
+1. **Pi up to date and the water depth set.** Measure the depth; below, 0.98 stands for the measured
+   value. With the Pi on `master`, run `git pull` and `colcon build`. Then
+   `sudoedit /etc/default/wavemaker`, set `WATER_DEPTH=0.98` with nothing after the number, and stop
+   and start the service. Check the start:
+
+   ```bash
+   journalctl -u wavemaker@ladertanken --since "-10min" --no-pager -o cat | grep -E "ERROR|WARN"
+   ros2 param get /wavemakers/ladertanken/controller water_depth    # Double value is: 0.98
+   ```
+
+   Expected: no `ERROR` after the start, and the page shows *idle*. `journalctl -b` also shows
+   every earlier start since the Pi booted. The controller only logs `water_depth` when the value is
+   invalid, so check it with `ros2 param get`.
+2. **Matrix and file**, on the Pi in `tmux`. `tmux` opens a new shell, so set the variables inside
+   it:
+
+   ```bash
+   source ~/ros_ws/install/setup.bash
+   export ROS_DOMAIN_ID=1
+   D=0.98                                    # the same as WATER_DEPTH
+   mkdir -p ~/wave_sessions/2026-11-05_item38 && cd ~/wave_sessions/2026-11-05_item38
+   cat > matrix.csv <<'END'
+   kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+   regular,1.0,,1/60,30,,,,,,3,60
+   regular,1.5,,1/40,30,,,,,,3,60
+   regular,1.3,0.171,,30,,,,,,3,60
+   irregular,,,,,0.03,1.2,3.3,120,1,5,60
+   END
+   ros2 run rig_controller generate_waves ladertanken matrix.csv -o item38 --water-depth $D
+   ```
+
+   Expected: `4 runs, 0 skipped, 7.9 min`. Run 2 needs 0.144 m of the 0.146 m travel at 0.95 m, and
+   0.132 m at 1.0 m. At a shallower depth it may be skipped, and `item38.csv` says why. The plot
+   needs `python3-matplotlib` (`sudo apt install python3-matplotlib`); without it, use `--no-plot`.
+   Copy `item38.png` to the PC with `scp`.
+3. **Dry run, then each run in full**, with the page open: `play_dat item38.dat ladertanken
+   --dry-run`, then `--runs 0` to `--runs 3`, one at a time. Expected: the dry run lists runs 0-2
+   `regular` and run 3 `irregular`, all `OK`. Each play logs `limits match the controller`, then
+   `run N (...)`, and exits 0. Before run N, `play_dat` first waits for the rest that comes before
+   it in the file. Here that is about 60 s for runs 1-3, and nothing is logged while it waits.
+4. **Stops**, after the tank has calmed. `--runs 0` and Stop on the page after a few waves: the
+   paddle holds, `play_dat` exits 5; Return to upright. `--runs 1` and the soft stop: the paddle
+   halts, exit 5, and while the stop is held a new `play_dat` exits 4. Release the stop and Return to
+   upright.
+5. **Pass:** every run accepted and no faults, and the page's plot of each run matches the `.png`.
+   Measure the wave heights with probes (TODO 43).
+
+**Run 2026-11-05 on ladertanken, Pi on `master`: steps 1-4 passed. The wave heights were not
+measured, because no probes were available (TODO 43).** Water depth 0.98 m; the gain table is for
+1.0 m, and `generate_waves` warned about it. Step 1: no errors after the 08:42 start. The F2026,
+F2074 and PROFIBUS lines in `journalctl -b` came from 26 October to 05 November 08:21. Step 2: `4
+runs, 0 skipped, 7.9 min`. In the plot, run 2 reached ±0.137 m of ±0.146 m, at 0.66 of 0.77 m/s.
+`python3-matplotlib` was installed on the Pi during this test. Step 3: dry run all `OK`. Runs 0-3
+were all played in full, and run 3 ramped in and ended at upright. Step 4 as expected. At 09:32:07,
+mid-session, the controller logged `No Soft stop message received for over 200 ms`, and the soft
+stop was triggered and released 5 s later (TODO 36).
 
 ## Oscillator
 
