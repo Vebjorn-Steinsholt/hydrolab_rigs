@@ -68,6 +68,13 @@ install(PROGRAMS src/soft_stop.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME soft_stop
 )
+# generate_waves records the repository's commit (source_commit); an installed copy finds the
+# repository through this file.
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/source_dir.txt "${CMAKE_CURRENT_SOURCE_DIR}\n")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/source_dir.txt
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Imported by play_dat and generate_waves; the programs are installed without .py.
 install(FILES src/play_dat.py src/rig_limits.py
   DESTINATION lib/${PROJECT_NAME}
@@ -135,6 +142,19 @@ if(BUILD_TESTING)
   target_link_libraries(test_controller_node
     mgate5101_driver::mgate5101
     linmot_serial_driver::linmot_serial
+  )
+
+  # Runs the bridge against a fake move_wavemaker server (TODO 16).
+  ament_add_gtest(test_bridge_node test/test_bridge_node.cpp TIMEOUT 120)
+  ament_target_dependencies(test_bridge_node
+    lifecycle_msgs
+    rclcpp
+    rclcpp_lifecycle
+    rclcpp_action
+    bondcpp
+    rig_interfaces
+    std_msgs
+    std_srvs
   )
 endif()
 

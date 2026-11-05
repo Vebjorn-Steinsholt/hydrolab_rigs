@@ -356,6 +356,9 @@ give full paths (`~/wave_sessions/session.csv -o ~/wave_sessions/session_waves`)
   with the reason for a run that does not fit the wavemaker.
 - `session_waves.png`: paddle position and speed over the whole file, with the wavemaker's
   limits dashed and the runs numbered as in the run table.
+- `session_waves.txt`: how the file was made (date, command, commit, yaml, water depth, dt, speed
+  limit) and a copy of the test matrix. Keep it with the `.dat`: it is what the probe data is
+  read against.
 
 and prints a summary and the `play_dat` command to check the file:
 
@@ -364,7 +367,7 @@ session_waves.dat: 4 runs, 0 skipped, 9.3 min
 ros2 run rig_controller play_dat session_waves.dat ladertanken --dry-run
 ```
 
-For a linear drive the command also carries `--max-velocity-mps`, and for another yaml `--config`.
+For a linear drive the command also carries `--max-velocity-mps`, and `--config` whenever one was given.
 
 **Give `-o` a different name from the test matrix:** `-o session` would overwrite `session.csv`
 with the run table.
@@ -375,7 +378,7 @@ with the run table.
 | `--dt 0.01` | Sample interval [s], whole milliseconds; default 0.02 |
 | `--show` | Also open the plot in a window |
 | `--no-plot` | Do not write the `.png` |
-| `--config <file>` | Another `wavemakers.yaml`; default the installed one, else the repository's |
+| `--config <file>` | Another `wavemakers.yaml`; default the installed one, else the repository's when running from the source tree |
 | `--max-velocity-mps` | Required for linear drives (lilletanken, mclab), whose speed limit is not known from the yaml yet (TODO item 19) |
 
 ### Check and play
@@ -555,6 +558,63 @@ ros2 run rqt_plot rqt_plot /wavemakers/ladertanken/wavemaker_setpoint/data \
   /wavemakers/ladertanken/wavemaker_position/data
 ```
 
+### Bridge (`bridge_node`, bridge mode)
+
+The bridge turns topic commands from a client (the web server) into `move_wavemaker` goals and
+reports what happens. It runs one regular wave at a time; pregenerated motion goes straight to
+the action (`play_dat`). For the oscillator (`rig: oscillator`) the action is `move_oscillator`
+and the status topics are `oscillator_state` / `oscillator_message`.
+
+| Name | Type | QoS | Direction | Content |
+|---|---|---|---|---|
+| `height` | `std_msgs/Float64` | reliable, depth 10 | to the bridge | Wave height H [m] (the stroke for the oscillator) |
+| `period` | `std_msgs/Float64` | reliable, depth 10 | to the bridge | Wave period [s] |
+| `start` | `std_msgs/Bool` | reliable, depth 10 | to the bridge | `true` starts a wave with the last height and period |
+| `stop` | `std_msgs/Bool` | reliable, depth 10 | to the bridge | `true` stops the wave |
+| `stop` (service) | `std_srvs/Trigger` | | to the bridge | Stops the wave and replies when it has stopped (below) |
+| `heartbeat` | `std_msgs/Bool` | sensor data (best effort) | to the bridge | From the client, at least every `heartbeat_timeout` (1.0 s); the web server sends 10 Hz |
+| `wavemaker_state` | `std_msgs/String` | reliable, transient local, depth 1 | from the bridge | The state (below); on every change and again every 1 s |
+| `wavemaker_message` | `std_msgs/String` | reliable, transient local, depth 1 | from the bridge | What happened last, in words; published with each state |
+
+**Start sequence.** Publish `height` and `period`, then `start`. They are separate topics and DDS
+does not order them, so a start sent right after the values can use old ones. The bridge puts the
+values it used in the message (`Starting wave: height 0.0200 m, period 1.000 s`); the web server
+checks it. A start is **refused**, with the state unchanged and a message beginning
+`start refused:`, unless the bridge is `idle`, height and period are positive and finite, a
+heartbeat has arrived within `heartbeat_timeout`, and the action server is available.
+
+**Heartbeat.** While a wave is `starting` or `running`, a heartbeat older than
+`heartbeat_timeout` stops it: "Stopped: client heartbeat (LabVIEW or web page) lost". A frozen
+page or a dropped network therefore stops the paddle.
+
+`wavemaker_state` values:
+
+| State | Meaning | Next |
+|---|---|---|
+| `inactive` | Bridge configured but not active, or deactivated. Commands are not received | `idle` on activate |
+| `idle` | Ready for a start | `starting` |
+| `starting` | Goal sent, the controller has not accepted it yet | `running`; `idle` if rejected; `stopping` on a stop |
+| `running` | The controller accepted the goal; the wave runs until stopped | `stopping`; `idle` if the controller aborts it |
+| `stopping` | Cancel sent, waiting for the controller's result | `idle` |
+
+How a wave ends (`wavemaker_message` with `idle`):
+
+| Message | Cause |
+|---|---|
+| `Stopped, holding position.` | Stopped (topic, service, lost heartbeat) and confirmed by the controller. The paddle holds; return to upright separately |
+| `Wave aborted: <reason>` | The controller aborted the goal (fault, soft stop, its deactivation) |
+| `Goal rejected by controller (see its log)` | The controller refused the goal (limits, busy, soft stop) |
+| `<reason>; stop not confirmed by controller, verify` | No result within 2 s of the stop, or the action is no longer available. The bridge gives up on the goal so a new start is possible; **check the paddle** |
+
+A stop during `starting` cancels the goal as soon as the controller accepts it. The `stop` service
+replies `success: true` with the end message once the controller confirms, `success: false` when
+the stop is not confirmed, and `success: true`, "Nothing running" when no wave was running (it
+still cancels any goal on the action, e.g. from the terminal). Deactivating the bridge stops the
+wave and leaves it `inactive`, also when the controller's result arrives later.
+
+Parameters: `rig` (`wavemaker` or `oscillator`), `heartbeat_timeout` (s, default 1.0) and
+`bond_timeout` (set by the launch file).
+
 ## How a motion runs
 
 - **Start blend.** A regular wave blends from the measured position into the wave over one period
@@ -604,6 +664,9 @@ colcon test-result --verbose
 
 - `test_controller_node`: lifecycle, goals, cancel, return to upright, faults, speed limits, clamping
   and topics, using a fake actuator.
+- `test_bridge_node`: the bridge against a fake `move_wavemaker` server: start and refused
+  starts, stop by topic and service, stop during start, lost heartbeat, controller rejection and
+  abort, deactivation, and a stop the controller never confirms.
 - `test_wave_trajectory`: start blends, peak-speed bounds and pregenerated sampling.
 - `test_indradrive_actuator`: unit conversion and parameter checks.
 - `mapping` (driver): register mapping.

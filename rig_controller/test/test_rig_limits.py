@@ -59,6 +59,31 @@ def test_default_config_path_finds_the_yaml():
     assert pathlib.Path(rig_limits.default_config_path('oscillator')).name == 'oscillator.yaml'
 
 
+def package_not_installed(monkeypatch):
+    """ROS sourced, but the bringup package not built (TODO item 42)."""
+    packages = pytest.importorskip('ament_index_python.packages')
+
+    def missing(package):
+        raise packages.PackageNotFoundError(package)
+    monkeypatch.setattr(packages, 'get_package_share_directory', missing)
+
+
+def test_default_config_path_falls_back_to_the_repository(monkeypatch):
+    package_not_installed(monkeypatch)
+    path = pathlib.Path(rig_limits.default_config_path('wavemaker'))
+    assert path.resolve() == pathlib.Path(WAVEMAKERS).resolve()
+
+
+def test_default_config_path_installed_without_the_package(monkeypatch, tmp_path):
+    """An installed copy has no repository next to it: say what to do, not a missing file."""
+    package_not_installed(monkeypatch)
+    installed = tmp_path / 'install' / 'rig_controller' / 'lib' / 'rig_controller'
+    installed.mkdir(parents=True)
+    monkeypatch.setattr(rig_limits, '__file__', str(installed / 'rig_limits.py'))
+    with pytest.raises(FileNotFoundError, match='wavemaker_bringup is not installed.*--config'):
+        rig_limits.default_config_path('wavemaker')
+
+
 # ---------------------------------------------------------------- the rules
 
 def test_linmot_without_goal_limit_uses_the_drives():

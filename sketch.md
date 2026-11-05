@@ -1,530 +1,307 @@
-# Sketch: `play_dat` takes its limits from the yaml (TODO item 40)
+# Sketch: `generate_waves` records how a file was made, and two follow-ups of item 40 (TODO items 39, 41, 42)
+
+The previous sketch (`play_dat` takes its limits from the yaml, item 40) is done and in the git
+history (`git show b298c13:sketch.md`).
 
 ## Problem
 
-`play_dat` checks every run before playing it, against limits typed by hand:
+- **39.** A motion file is only right for the depth, yaml and code it was made with, and a
+  pregenerated goal carries positions only, so neither `play_dat` nor the controller can tell.
+  Item 38's `item38.dat` (2026-11-05) is already an example: made at 0.98 m with a gain table for
+  1.0 m, and nothing next to it says so. The probe test (item 43) needs this record.
+- **41.** `--water-depth` equal to the yaml's depth still warns: "the gain table is for 1.0 m, not
+  1.0 m".
+- **42.** Without the bringup package installed, `rig_limits.default_config_path` falls back to a
+  path inside `install/rig_controller/` that does not exist, and the error does not say why.
+  `generate_waves` looks the default up while building its parser, so it fails even with
+  `--config`.
 
-```bash
-ros2 run rig_controller play_dat waves.dat --min-m -0.14575 --max-m 0.14575 \
-  --max-velocity-mps 0.7632 --upright-m 0.0 --ros-args -r __ns:=/wavemakers/ladertanken
-```
+## Decisions (2026-11-05)
 
-All five values follow from the rig's name and its yaml block. A typo gives a misleading dry-run
-result (the controller still enforces its own limits, so this is about a trustworthy dry run, not
-safety). `--upright-m` defaults to 0.0, which is wrong for the oscillator (0.1 m).
-
-## Goal
-
-```bash
-ros2 run rig_controller play_dat waves.dat ladertanken --dry-run
-ros2 run rig_controller play_dat waves.dat ladertanken
-ros2 run rig_controller play_dat waves.dat sloshing --rig oscillator
-```
-
-## Decisions (2026-11-03)
-
-1. **The yaml for the checks; the running controller as a cross-check when playing.** The dry run
-   must work without the controller. When playing, one parameter request catches a Pi whose yaml
-   or build differs; a difference is a warning, not a stop (the controller enforces its own limits).
-2. **The rig name is an optional positional argument after the file**, as in
-   `generate_waves ladertanken matrix.csv`.
-3. **The old form stays:** no name and all three limits given. Every run prints where its limits
-   came from.
+1. **The record is `<output>.txt`**, next to the `.dat`, `.csv` and `.png`: plain `key value`
+   lines, then the test matrix as it was. The matrix is copied because `matrix.csv` is often edited
+   or overwritten afterwards; with it, the file can be made again.
+2. **The commit is the repository's at generation time** (`git describe --always --dirty`).
+   An installed copy has no repository next to it, so `CMakeLists.txt` installs `source_dir.txt`
+   with the source path. This shows what was checked out, not proof that it was built: after a
+   `git pull` without `colcon build`, the code that ran is older. Without git, `unknown`.
+3. **Item 42 differs from the sketch in TODO.md.** That sketch falls back to the repository only
+   on `ImportError`, but `ament_index_python` imports whenever `/opt/ros/jazzy` is sourced, which
+   it is in every shell on the PC and the Pi. Running the tests with only ROS sourced, or with the
+   workspace sourced but built without the bringup packages, would then fail. Instead: fall back
+   whenever the package is not found, and raise only when the fallback does not exist either (an
+   installed copy).
+4. **`generate_waves` prints `--config` whenever it was given**, instead of comparing it with the
+   default. The comparison called `default_config_path()`, which can now raise. Giving the default
+   path explicitly then prints a `--config` that is not needed but does no harm.
 
 ## Files
 
 | File | Change | Section |
 |---|---|---|
-| `rig_controller/src/rig_limits.py` | New: limits from a yaml or a parameter dict | 1 |
-| `rig_controller/src/play_dat.py` | Rig name, overrides, namespace, live cross-check | 2 |
-| `rig_controller/src/generate_waves.py` | Limits from `rig_limits`; `required()` moves there | 3 |
-| `rig_controller/CMakeLists.txt` | Install `rig_limits.py` | 4 |
-| `rig_controller/test/test_rig_limits.py` | New | 5 |
-| `rig_controller/test/test_play_dat.py`, `test_generate_waves.py` | Import path, new cases | 5 |
-| README, `play_dat.py` docstring | Short form in the examples | 6 |
+| `rig_controller/src/rig_limits.py` | `default_config_path`: narrower except, error when nothing is found | 1 |
+| `rig_controller/src/generate_waves.py` | `--config` default `None`; the warning; `source_commit`, `write_record` | 2 |
+| `rig_controller/CMakeLists.txt` | Install `source_dir.txt` | 3 |
+| `rig_controller/test/test_rig_limits.py`, `test_generate_waves.py` | 8 new tests (already in the repository) | 4 |
+| README, `rpi/README.md`, TODO.md | The `.txt`, the short `play_dat` form, close 39, 41, 42 | 5 |
+
+Checked in a copy of the repository (2026-11-05): with sections 1-3 applied, all 171 tests pass.
 
 ---
 
-## 1. `rig_limits.py` (new, complete)
+## 1. `rig_limits.py`: `default_config_path` (item 42)
 
-The rules are the controller's, from three places:
-
-| Case | Recognised by | `min_m`, `max_m` | `max_velocity_mps` | `max_acceleration_mps2` |
-|---|---|---|---|---|
-| IndraDrive, angular (ladertanken) | `drive_motion: angular` | `upright_m + (min/max_position_deg - actuator_upright_angle_deg) * actuator_lead_m_per_degree` (`controller_node.cpp` ~212-223, `drive_scale.hpp`) | `max_velocity_rpm * 6 * lead` (`indradrive_actuator.cpp` ~249) | `max_goal_acceleration_mps2` if > 0 |
-| IndraDrive, linear (lilletanken, mclab) | `drive_motion: linear`, `drive_name: indradrive` | `travel_minimum_m`, `travel_maximum_m` (~224-244) | none: the controller's `rpm * 6` is not m/s (TODO item 19) | as above |
-| LinMot (oscillator) | `drive_name: linmot` | `travel_minimum_m`, `travel_maximum_m` | `max_velocity_mps`, default 2.0 (`linmot_actuator.cpp`) | the lower of `max_goal_acceleration_mps2` (if > 0) and `max_acceleration_mps2` (default 20.0) |
-
-`drive_name` is required: the controller declares it as `''` and refuses to configure without a
-known drive. Every key that sets a limit is required; only offsets and the LinMot defaults fall
-back on the controller's defaults.
+Replace the function (today line 43):
 
 ```python
-#!/usr/bin/env python3
-"""
-Goal limits of a rig, from its yaml block or its live parameters, derived as the controller does.
-
-Shared by play_dat and generate_waves so they cannot disagree. The rules are the controller's:
-position limits in controller_node.cpp on_configure (~212-244, through DriveScale), speed and
-acceleration from the actuator (indradrive_actuator.cpp, linmot_actuator.cpp) and
-max_goal_acceleration_mps2.
-"""
-
-from dataclasses import dataclass
-import os
-
-import yaml
-
-# rig -> (namespace prefix, bringup package, yaml file)
-RIGS = {
-    'wavemaker': ('wavemakers', 'wavemaker_bringup', 'wavemakers.yaml'),
-    'oscillator': ('oscillators', 'oscillator_bringup', 'oscillator.yaml'),
-}
-LINMOT_MAX_VELOCITY_MPS = 2.0       # linmot_actuator.cpp defaults
-LINMOT_MAX_ACCELERATION_MPS2 = 20.0
-
-
-@dataclass
-class RigLimits:
-    rig: str
-    name: str
-    namespace: str
-    upright_m: float
-    min_m: float                          # absolute goal limits
-    max_m: float
-    max_velocity_mps: float | None        # None: not known (linear IndraDrive, TODO item 19)
-    max_acceleration_mps2: float | None   # None: no limit
-    source: str                           # 'wavemakers.yaml', 'controller', ...
-
-
-def required(params: dict, key: str, name: str, source: str):
-    """A key with no safe default: the controller's generic default would give the wrong limits."""
-    if key not in params:
-        raise ValueError(f'{name}: {key} not set in {source}')
-    return params[key]
-
-
 def default_config_path(rig: str) -> str:
-    """The installed yaml when the workspace is sourced, else the repository's copy."""
+    """The installed yaml, else the repository's copy when running from the source tree."""
     _, package, filename = RIGS[rig]
     try:
         from ament_index_python.packages import get_package_share_directory
         share = get_package_share_directory(package)
-    except Exception:  # not sourced
+    except (ImportError, LookupError):  # ROS not sourced, or the package not installed
         share = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', package)
+        if not os.path.isdir(share):  # an installed copy: no repository next to it
+            raise FileNotFoundError(
+                f'{package} is not installed, so there is no {filename}: build it '
+                f'(colcon build --packages-up-to {package}) or give --config') from None
     return os.path.join(share, 'config', filename)
-
-
-def read_block(rig: str, name: str, config_path: str) -> dict:
-    """ros__parameters of /<prefix>/<name>/controller; lists the names in the file if missing."""
-    prefix = RIGS[rig][0]
-    with open(config_path) as f:
-        config = yaml.safe_load(f) or {}
-    key = f'/{prefix}/{name}/controller'
-    if key not in config:
-        names = [k.split('/')[2] for k in config if k.startswith(f'/{prefix}/')]
-        raise ValueError(f"no {rig} '{name}' in {config_path}; have {', '.join(names) or 'none'}")
-    return config[key]['ros__parameters']
-
-
-def limits_from_parameters(rig: str, name: str, params: dict, source: str) -> RigLimits:
-    """The controller's rules, applied to a yaml block or to parameters read from the controller."""
-    drive = required(params, 'drive_name', name, source)
-    upright_m = params.get('upright_position_m', 0.0)
-
-    if params.get('drive_motion', 'linear') == 'angular':
-        lead = required(params, 'actuator_lead_m_per_degree', name, source)
-        if lead <= 0.0:
-            raise ValueError(f'{name}: actuator_lead_m_per_degree must be > 0 in {source}')
-        upright_deg = params.get('actuator_upright_angle_deg', 0.0)
-        min_m = upright_m + (required(params, 'min_position_deg', name, source) - upright_deg) * lead
-        max_m = upright_m + (required(params, 'max_position_deg', name, source) - upright_deg) * lead
-        max_velocity = required(params, 'max_velocity_rpm', name, source) * 6.0 * lead
-    else:
-        min_m = required(params, 'travel_minimum_m', name, source)
-        max_m = required(params, 'travel_maximum_m', name, source)
-        max_velocity = (params.get('max_velocity_mps', LINMOT_MAX_VELOCITY_MPS)
-                        if drive == 'linmot' else None)
-
-    goal_acceleration = params.get('max_goal_acceleration_mps2', 0.0)
-    acceleration = goal_acceleration if goal_acceleration > 0.0 else None
-    if drive == 'linmot':
-        drive_acceleration = params.get('max_acceleration_mps2', LINMOT_MAX_ACCELERATION_MPS2)
-        acceleration = (drive_acceleration if acceleration is None
-                        else min(acceleration, drive_acceleration))
-
-    # The controller refuses to configure with these, so a file checked against them means nothing.
-    if not min_m < max_m:
-        raise ValueError(f'{name}: lower limit {min_m} not below upper limit {max_m} in {source}')
-    if not min_m <= upright_m <= max_m:
-        raise ValueError(f'{name}: upright {upright_m} outside {min_m}..{max_m} in {source}')
-
-    return RigLimits(rig, name, f'/{RIGS[rig][0]}/{name}', upright_m, min_m, max_m,
-                     max_velocity, acceleration, source)
-
-
-def load_limits(rig: str, name: str, config_path: str | None = None) -> RigLimits:
-    config_path = config_path or default_config_path(rig)
-    params = read_block(rig, name, config_path)
-    return limits_from_parameters(rig, name, params, os.path.basename(config_path))
-
-
-def compare(expected: RigLimits, actual: RigLimits) -> list[str]:
-    """Differences worth a warning: positions beyond 0.1 mm, speed and acceleration beyond 1e-3."""
-    lines = []
-    for field in ('upright_m', 'min_m', 'max_m'):
-        e, a = getattr(expected, field), getattr(actual, field)
-        if abs(e - a) > 1e-4:
-            lines.append(f'{field}: {expected.source} {e:+.5f} m, {actual.source} {a:+.5f} m')
-    e, a = expected.max_velocity_mps, actual.max_velocity_mps
-    if e is not None and a is not None and abs(e - a) > 1e-3:
-        lines.append(f'max_velocity_mps: {expected.source} {e:.4f}, {actual.source} {a:.4f}')
-    e, a = expected.max_acceleration_mps2, actual.max_acceleration_mps2
-    if (e is None) != (a is None) or (e is not None and abs(e - a) > 1e-3):
-        lines.append(f'max_acceleration_mps2: {expected.source} {e}, {actual.source} {a}')
-    return lines
 ```
 
-Checked against today's yamls:
-
-| Rig | `min_m` | `max_m` | `max_velocity_mps` | `max_acceleration_mps2` | `upright_m` | namespace |
-|---|---|---|---|---|---|---|
-| ladertanken | -0.14575 | +0.14575 | 0.7632 | None | 0.0 | `/wavemakers/ladertanken` |
-| lilletanken, mclab | 0.0 | 0.5 | None | None | 0.0 | `/wavemakers/<name>` |
-| sloshing | 0.015 | 0.185 | 2.0 | 9.81 | 0.1 | `/oscillators/sloshing` |
+`PackageNotFoundError` is a `LookupError`. `except Exception` would also have hidden a real error
+in `ament_index_python`. `play_dat` catches the `FileNotFoundError` as an `OSError` (exit 2), and
+`fake_controller` does too.
 
 ---
 
-## 2. `play_dat.py`
+## 2. `generate_waves.py`
 
-### 2.1 Import
+### 2.1 Docstring and imports
 
-At the top, with the other imports. Installed next to `play_dat` (section 4), so it imports the
-same way `generate_waves` imports `play_dat`:
+The first lines of the module docstring:
 
 ```python
-import rig_limits
+"""
+Generate wave motion files (.dat, run table .csv, record .txt) for one wavemaker, using its
+geometry and limits from wavemakers.yaml. The goal is compatibility: every file plays with
+play_dat.py and every run is accepted by the controller on that wavemaker.
 ```
 
-### 2.2 New functions
-
-Put them above `main()`.
+Add, in order with the others:
 
 ```python
-LIMIT_FIELDS = ('upright_m', 'min_m', 'max_m', 'max_velocity_mps')
+from datetime import datetime
+import shlex
+import subprocess
+```
 
+### 2.2 New functions (item 39)
 
-def resolve_limits(args, parser) -> tuple['rig_limits.RigLimits | None', dict]:
-    """
-    The limits to check against: the rig's yaml when a name is given, each option on the command
-    line overriding one value. Prints where they came from. Returns the yaml's limits (for the
-    live cross-check; None without a name) and the values to use.
-    """
-    limits = rig_limits.load_limits(args.rig, args.name, args.config) if args.name else None
-    values, overridden = {}, []
-    for key in LIMIT_FIELDS:  # not 'field': play_dat imports dataclasses.field
-        given = getattr(args, key)
-        if given is not None:
-            values[key] = given
-            if limits is not None:
-                overridden.append('--' + key.replace('_', '-'))
-        else:
-            values[key] = getattr(limits, key) if limits is not None else None
-    if values['upright_m'] is None:
-        values['upright_m'] = 0.0  # the old default, for the form without a name
-    if limits is None and None in (values['min_m'], values['max_m'], values['max_velocity_mps']):
-        parser.error('give the rig name, or --min-m, --max-m and --max-velocity-mps')
-    if values['max_velocity_mps'] is None:
-        parser.error(f'{args.name} has no speed limit in the yaml (TODO item 19): '
-                     'give --max-velocity-mps')
-    source = f'{limits.source} ({limits.name})' if limits is not None else 'the command line'
-    if overridden:
-        source += f", {', '.join(overridden)} overridden"
-    print(f"limits from {source}: {values['min_m']:+.5f}..{values['max_m']:+.5f} m, "
-          f"{values['max_velocity_mps']:.4f} m/s, upright {values['upright_m']:+.4f} m")
-    return limits, values
+Put them after `write_run_table` (today ~467-477):
 
-
-def with_namespace(argv: list[str], limits) -> list[str]:
-    """The rig's namespace as a ROS remap, unless the command line already has one."""
-    if limits is None or any(a.startswith('__ns:=') for a in argv):
-        return argv
-    return [*argv, '--ros-args', '-r', f'__ns:={limits.namespace}']
-
-
-# Every parameter limits_from_parameters reads; asked from the running controller.
-LIMIT_PARAMETERS = [
-    'drive_name', 'drive_motion', 'upright_position_m', 'actuator_lead_m_per_degree',
-    'actuator_upright_angle_deg', 'min_position_deg', 'max_position_deg', 'max_velocity_rpm',
-    'travel_minimum_m', 'travel_maximum_m', 'max_velocity_mps', 'max_acceleration_mps2',
-    'max_goal_acceleration_mps2',
-]
-
-
-def cross_check_limits(node, limits) -> None:
-    """
-    Warn if the running controller's limits differ from the yaml's the runs were checked against
-    (a Pi not pulled or rebuilt, a yaml edited after configure). Never stops the play: the
-    controller enforces its own limits regardless.
-    """
-    import rclpy
-    from rclpy.parameter import parameter_value_to_python
-    from rclpy.parameter_client import AsyncParameterClient
-
-    log = node.get_logger()
-    client = AsyncParameterClient(node, f'{limits.namespace}/controller')
-    if not client.wait_for_services(timeout_sec=2.0):
-        log.warn('controller parameters not available; limits not cross-checked')
-        return
-    # get_parameters answers nothing at all if one name is not declared (rclcpp and rclpy), and
-    # each drive declares only its own (max_velocity_rpm on the IndraDrive, max_velocity_mps on
-    # the LinMot): ask for the declared ones only.
-    listed = client.list_parameters()
-    rclpy.spin_until_future_complete(node, listed, timeout_sec=2.0)
-    response = listed.result() if listed.done() else None
-    if response is None:
-        log.warn('controller parameters not available; limits not cross-checked')
-        return
-    declared = set(response.result.names)
-    keys = [key for key in LIMIT_PARAMETERS if key in declared]
-    future = client.get_parameters(keys)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=2.0)
-    response = future.result() if future.done() else None
-    if response is None:
-        log.warn('controller parameters not available; limits not cross-checked')
-        return
-    params = {key: parameter_value_to_python(value)
-              for key, value in zip(keys, response.values)}
+```python
+def source_commit() -> str:
+    """The repository's commit, with '-dirty' for local changes; 'unknown' without git."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    try:  # an installed copy: CMakeLists.txt writes where the repository is
+        with open(os.path.join(here, 'source_dir.txt')) as f:
+            here = f.read().strip()
+    except OSError:
+        pass  # running from the source tree
     try:
-        live = rig_limits.limits_from_parameters(limits.rig, limits.name, params, 'controller')
-    except ValueError as e:
-        log.warn(f'controller parameters incomplete ({e}); limits not cross-checked')
-        return
-    differences = rig_limits.compare(limits, live)
-    for line in differences:
-        log.warn(f'yaml and controller differ: {line}')
-    if not differences:
-        log.info('limits match the controller')
-```
+        result = subprocess.run(['git', '-C', here, 'describe', '--always', '--dirty',
+                                 '--exclude=*'],
+                                capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return 'unknown'
+    return result.stdout.strip()
 
-### 2.3 `main()`: arguments
 
-Replace the `--rig`, `--upright-m`, `--min-m`, `--max-m` and `--max-velocity-mps` lines
-(today ~358-373); the others stay:
-
-```python
-    parser.add_argument('file')
-    parser.add_argument('name', nargs='?',
-                        help='rig name in the yaml (ladertanken, sloshing): gives the limits, the '
-                             'upright position and the namespace')
-    parser.add_argument('--rig', default='wavemaker', choices=('wavemaker', 'oscillator'),
-                        help='action server move_<rig> and the yaml it is in; default wavemaker')
-    parser.add_argument('--config', help='another yaml; default the installed one')
-    parser.add_argument('--upright-m', type=float, help='override; default the yaml, else 0.0')
-    parser.add_argument('--min-m', type=float, help='lowest position; overrides the yaml')
-    parser.add_argument('--max-m', type=float, help='highest position; overrides the yaml')
-    parser.add_argument('--max-velocity-mps', type=float, help='overrides the yaml')
-```
-
-### 2.4 `main()`: body
-
-Parse with `parse_intermixed_args` instead of `parse_args`:
-
-```python
-    args = parser.parse_intermixed_args(remove_ros_args(argv)[1:])
-```
-
-With `parse_args`, an optional positional is only taken straight after the file:
-`play_dat a.dat ladertanken --dry-run` works, but `play_dat a.dat --dry-run ladertanken` fails
-with "unrecognized arguments: ladertanken". `parse_intermixed_args` takes the name anywhere
-(`test_name_after_the_options`).
-
-Then, before reading the file:
-
-```python
-    try:
-        limits, lim = resolve_limits(args, parser)
-    except (OSError, ValueError) as e:  # yaml missing, rig not in it, a limit not set
-        print(f'error: {e}', file=sys.stderr)
-        return 2
-    if limits is not None:
-        print(f'namespace {limits.namespace}')
-```
-
-Then replace each use of the old arguments:
-
-| Today | After |
-|---|---|
-| `whole_file_run(values_m, args.upright_m)` | `whole_file_run(values_m, lim['upright_m'])` |
-| `split_runs(values_m, sample_interval_s, args.upright_m, ...)` | `split_runs(values_m, sample_interval_s, lim['upright_m'], ...)` |
-| `check_run(r, sample_interval_s, args.upright_m, args.min_m, args.max_m, args.max_velocity_mps)` | `check_run(r, sample_interval_s, lim['upright_m'], lim['min_m'], lim['max_m'], lim['max_velocity_mps'])` |
-| `return play(selected, sample_interval_s, args.rig, argv)` | `return play(selected, sample_interval_s, args.rig, with_namespace(argv, limits), limits)` |
-
-### 2.5 `play()`
-
-Add the parameter and one call after the action server is found:
-
-```python
-def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str],
-         limits=None) -> int:
-    ...
-        if not client.wait_for_server(timeout_sec=SERVER_TIMEOUT_S):
-            node.get_logger().error(f'no move_{rig} server; is the controller up and active?')
-            return 3
-        if limits is not None:
-            cross_check_limits(node, limits)
-    ...
-```
-
-### What it prints
-
-```
-limits from wavemakers.yaml (ladertanken): -0.14575..+0.14575 m, 0.7632 m/s, upright +0.0000 m
-namespace /wavemakers/ladertanken
-limits from wavemakers.yaml (ladertanken), --max-m overridden: -0.14575..+0.10000 m, 0.7632 m/s, upright +0.0000 m
-limits from the command line: -0.10000..+0.10000 m, 0.5000 m/s, upright +0.0000 m
-limits from oscillator.yaml (sloshing): +0.01500..+0.18500 m, 2.0000 m/s, upright +0.1000 m
-play_dat: error: lilletanken has no speed limit in the yaml (TODO item 19): give --max-velocity-mps
-play_dat: error: give the rig name, or --min-m, --max-m and --max-velocity-mps
-```
-
-An explicit `--ros-args -r __ns:=/x` on the command line is left alone and wins.
-
----
-
-## 3. `generate_waves.py`
-
-### 3.1 Import and config path
-
-```python
-import play_dat
-import rig_limits
-```
-
-Remove `import yaml`: with `load_wavemaker` reading through `rig_limits.read_block`, nothing in
-`generate_waves.py` uses it any more (pyflakes reports it).
-
-Replace the body of `default_config_path()`:
-
-```python
-def default_config_path() -> str:
-    return rig_limits.default_config_path('wavemaker')
-```
-
-Delete `required()`; its uses become `rig_limits.required(params, key, name, source)`.
-
-### 3.2 `load_wavemaker()`
-
-The limits come from `rig_limits`; the geometry and gain stay here:
-
-```python
-def load_wavemaker(name: str, config_path: str) -> Wavemaker:
-    """
-    The wavemaker's geometry and gain from its yaml block, and its limits from rig_limits (the
-    same derivation play_dat uses). Keys that set the geometry are required, as the limits are.
-    """
-    params = rig_limits.read_block('wavemaker', name, config_path)
-    source = os.path.basename(config_path)
-    limits = rig_limits.limits_from_parameters('wavemaker', name, params, source)
-
-    wavemaker_type = rig_limits.required(params, 'wavemaker_type', name, source)
-    if wavemaker_type == 'flap':
-        attachment_height = rig_limits.required(params, 'flap_attachment_height', name, source)
+def write_record(path: str, argv: list[str], args, wm: Wavemaker, yaml_depth: float,
+                 config: str, max_velocity_mps: float, summary: str):
+    """<output>.txt: what the file was made from, to read probe data and to make it again."""
+    if args.water_depth is None:
+        depth = f'{wm.water_depth} m (the yaml)'
     else:
-        attachment_height = 0.0  # unused for a piston
-
-    return Wavemaker(
-        name=name,
-        type=wavemaker_type,
-        water_depth=rig_limits.required(params, 'water_depth', name, source),
-        hinge_height=params.get('hinge_height', 0.0),
-        attachment_height=attachment_height,
-        gain=params.get('wavemaker_transfer_gain', 1.0),
-        gain_periods=list(params.get('wavemaker_transfer_gain_periods', [])),
-        gain_values=list(params.get('wavemaker_transfer_gain_values', [])),
-        min_m=limits.min_m, max_m=limits.max_m, upright_m=limits.upright_m,
-        max_velocity_mps=limits.max_velocity_mps,
-        max_acceleration_mps2=limits.max_acceleration_mps2)
+        depth = f'{wm.water_depth} m (--water-depth; the yaml has {yaml_depth} m)'
+    speed = f'{max_velocity_mps:.4f} m/s'
+    if args.max_velocity_mps:
+        speed += ' (--max-velocity-mps)'
+    with open(args.test_matrix) as f:
+        matrix = f.read().rstrip('\n')
+    lines = [
+        f'generated    {datetime.now().astimezone().isoformat(timespec="seconds")}',
+        f'command      generate_waves {shlex.join(argv)}',
+        f'folder       {os.getcwd()}',
+        f'commit       {source_commit()}',
+        f'config       {os.path.realpath(config)}',
+        f'wavemaker    {wm.name} ({wm.type})',
+        f'water depth  {depth}',
+        f'dt           {args.dt} s',
+        f'max speed    {speed}',
+        f'result       {summary}',
+        '',
+        f'test matrix {args.test_matrix}:',
+        matrix,
+    ]
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
 ```
 
-Keep the docstring's limit formulas and test values in `rig_limits.py` instead.
+- `--exclude=*` keeps `describe` to the bare commit, even if the repository gets tags.
+- `realpath` resolves the installed yaml to a full path.
+- `folder` makes a relative `-o` or test matrix in `command` readable later.
 
-### 3.3 `main()`: the printed command
+### 2.3 `main()`
 
-Replace the last `print`:
+The `-o` and `--config` arguments (today ~543-544):
 
 ```python
-    command = f'ros2 run rig_controller play_dat {dat_path} {wm.name} --dry-run'
-    if wm.max_velocity_mps is None:  # linear drive: the speed came from the command line
-        command += f' --max-velocity-mps {max_velocity:.4f}'
-    if os.path.realpath(args.config) != os.path.realpath(default_config_path()):
+    parser.add_argument('-o', '--output', required=True,
+                        help='base name for .dat, .csv, .txt and .png')
+    parser.add_argument('--config', help='another wavemakers.yaml; default the installed one')
+```
+
+After the arguments, the command line for the record, then the config path (item 42) and the
+warning (item 41). Today ~550-558 becomes:
+
+```python
+    argv = sys.argv[1:] if argv is None else argv
+    args = parser.parse_args(argv)
+    if not os.path.isfile(args.test_matrix):
+        parser.error(f'test matrix {args.test_matrix} not found (relative to {os.getcwd()})')
+    try:
+        config = args.config or default_config_path()
+    except FileNotFoundError as e:
+        parser.error(str(e))
+
+    wm = load_wavemaker(args.wavemaker, config)
+    yaml_depth = wm.water_depth
+    if args.water_depth is not None:
+        if wm.gain_periods and args.water_depth != wm.water_depth:
+            print(f'warning: the gain table is for {wm.water_depth} m, not {args.water_depth} m')
+        wm.water_depth = args.water_depth
+```
+
+The `!=` compares two floats parsed from text (`1.0` in the yaml, `1.0` on the command line), so
+exact equality is what is meant.
+
+After `verify_with_play_dat` (today ~567-571): the summary once, the record before the plot. If the
+plot fails, as it did on the Pi without matplotlib, the record is still written:
+
+```python
+    played = verify_with_play_dat(dat_path, wm, max_velocity)
+    summary = (f'{played} runs, {len(rows) - played} skipped, '
+               f'{len(frames) * args.dt / 60:.1f} min')
+    write_record(args.output + '.txt', argv, args, wm, yaml_depth, config, max_velocity, summary)
+    if not args.no_plot:
+        plot_motion(args.output + '.png', wm, frames, rows, args.dt, max_velocity, args.show)
+    print(f'{dat_path}: {summary}')
+```
+
+The `--config` in the printed command (today ~575):
+
+```python
+    if args.config is not None:
         command += f' --config {args.config}'
-    print(command)
 ```
 
-`realpath` because the repository fallback path contains `..`.
+### What it writes
+
+From the copy, `generate_waves ladertanken m.csv -o demo --water-depth 0.98 --no-plot --config …`:
+
+```
+generated    2026-11-05T10:05:51+01:00
+command      generate_waves ladertanken m.csv -o demo --water-depth 0.98 --no-plot --config repo/wavemaker_bringup/config/wavemakers.yaml
+folder       /tmp/…/scratchpad
+commit       5e85a0a-dirty
+config       /tmp/…/scratchpad/repo/wavemaker_bringup/config/wavemakers.yaml
+wavemaker    ladertanken (flap)
+water depth  0.98 m (--water-depth; the yaml has 1.0 m)
+dt           0.02 s
+max speed    0.7632 m/s
+result       1 runs, 0 skipped, 0.3 min
+
+test matrix m.csv:
+kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,1.0,,1/60,10,,,,,,2,5
+```
 
 ---
 
-## 4. `CMakeLists.txt`
+## 3. `CMakeLists.txt`
 
-Extend the `install(FILES ...)` added for `generate_waves`:
+Before the `install(FILES src/play_dat.py src/rig_limits.py ...)` block (today line 71):
 
 ```cmake
-# Imported by play_dat and generate_waves; the programs are installed without .py.
-install(FILES src/play_dat.py src/rig_limits.py
+# generate_waves records the repository's commit (source_commit); an installed copy finds the
+# repository through this file.
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/source_dir.txt "${CMAKE_CURRENT_SOURCE_DIR}\n")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/source_dir.txt
   DESTINATION lib/${PROJECT_NAME}
 )
 ```
 
+`file(WRITE)` runs at configure time, which `colcon build` does not repeat. That is fine: the path
+does not change, and the commit is read when `generate_waves` runs. Checked with a minimal project:
+the installed file holds the source path.
+
 ---
 
-## 5. Tests
+## 4. Tests
 
-Written before the code (2026-11-03), so they fail until it exists. Against today's code the 124
-existing tests pass and only the new ones fail; against this sketch applied to a copy of the
-repository all 162 pass. A test still failing once you are done points at a real difference from
-the sketch. Added after the code (2026-11-04): the short form without `--config`, which the 162
-missed (`load_limits` without the default path), so 163 now.
+Already in the repository, written before the code, so 6 fail until sections 1-2 are in. Against
+today's code: 165 pass, 6 fail. With the sketch applied to a copy: 171 pass.
 
 ```bash
 cd ~/ros_ws/src/hydrolab_rigs
-python3 -m pytest rig_controller/test -v
-# until rig_limits.py exists, test_rig_limits.py cannot import and stops the run; meanwhile:
-python3 -m pytest rig_controller/test -q --continue-on-collection-errors
+python3 -m pytest rig_controller/test -q
 ```
 
-| File | What was added | Waiting for |
+| Test | Item | Fails today |
 |---|---|---|
-| `test_rig_limits.py` (new, 25 tests) | The table of section 1 for all four rigs; LinMot defaults; the goal acceleration limit on an IndraDrive; every missing key named (linear and angular); the three configurations the controller refuses; an unknown name; `default_config_path`; `compare`: yaml and parameters agree, a changed position, speed or acceleration is reported, the linear-drive speed is ignored, below 0.1 mm is tolerated | Section 1 |
-| `test_play_dat.py` (`src` on `sys.path`, 13 new tests) | Limits from the yaml by name; the name after the options; the name without `--config`; one override; an override checked against; no name and no limits; one limit missing; the old form's printed line; a linear drive without and with `--max-velocity-mps`; an unknown name; the oscillator's 0.1 m upright and namespace; `with_namespace` | Sections 1 and 2 |
-| `test_generate_waves.py` | `PISTON` gains `drive_name`; `drive_name` in the required keys; the end-to-end test checks the printed `play_dat … ladertanken --dry-run` | Section 3 |
+| `test_rig_limits.py::test_default_config_path_falls_back_to_the_repository` | 42 | no (keeps the fallback) |
+| `test_rig_limits.py::test_default_config_path_installed_without_the_package` | 42 | yes |
+| `test_generate_waves.py::test_gain_table_warning_only_at_another_depth[1.0-False]` | 41 | yes |
+| `test_generate_waves.py::test_gain_table_warning_only_at_another_depth[0.98-True]` | 41 | no (keeps the warning) |
+| `test_generate_waves.py::test_config_given_works_without_the_package` | 42 | yes |
+| `test_generate_waves.py::test_record_next_to_the_file` | 39 | yes |
+| `test_generate_waves.py::test_record_depth_from_the_yaml` | 39 | yes |
+| `test_generate_waves.py::test_source_commit_of_an_installed_copy` | 39 | yes |
 
-`cross_check_limits` needs a node and is not covered: check it by hand. `fake_controller` declares
-its rig's yaml block as parameters when its namespace is `/<prefix>/<name>`, so against it
-`play_dat` prints "limits match the controller"; with `-p max_velocity_rpm:=200.0` on the fake,
-"yaml and controller differ: max_velocity_mps: wavemakers.yaml 0.7632, controller 0.6360"
-(checked 2026-11-04). Against the real controller on ladertanken: "limits match the controller",
-and with a lowered `max_velocity_rpm` in a `--config` copy, the warning; the run still plays
-(rig test 2026-11-04, commit `8a458eb`, `rpi/README.md` *`play_dat` limits from the yaml*).
+The two `default_config_path` tests patch `get_package_share_directory` and skip without
+`ament_index_python`. `test_source_commit_of_an_installed_copy` places `source_dir.txt` in a
+temporary folder and points it at this repository.
 
-## 6. Documentation
+On the Pi, after `colcon build`, check by hand that the installed copy finds the repository:
+`ls ~/ros_ws/install/rig_controller/lib/rig_controller/source_dir.txt`, then one
+`generate_waves` run with `commit` showing a hash in its `.txt`, not `unknown`.
 
-- `play_dat.py` docstring, the examples:
-  ```
-  ros2 run rig_controller play_dat 2002.dat ladertanken --dry-run
-  ros2 run rig_controller play_dat 2002.dat ladertanken --runs 3-5
-  ```
-  plus: "Without a name, give --min-m, --max-m and --max-velocity-mps (and --upright-m if not
-  0.0); with a name, each of them overrides the yaml's value."
-- README *Generating motion files*, *Check and play*: the short form.
-- `rpi/README.md`, rig test *Goal type per goal and `play_dat`*: the old form still works; move to
-  the short form when it is next run.
+---
+
+## 5. Documentation
+
+- **README *Generating motion files*:**
+  - Under *It writes*, add `session_waves.txt`: how the file was made (date, command, commit, yaml,
+    water depth, dt, speed limit) and a copy of the test matrix. Keep it with the `.dat`, as it is
+    what the probe data is read against.
+  - The `--config` row: "default the installed one, else the repository's when running from the
+    source tree".
+  - The `--water-depth` row: "warns when the gain table was measured at another depth" is now true.
+- **`rpi/README.md`, rig test *Goal type per goal and `play_dat`*, steps 3-4:** the short form
+  (`play_dat /tmp/test_runs.dat ladertanken --dry-run`, and `--runs 1` without `--ros-args`), as
+  the previous sketch planned for when that test is next run. The expected output then also has
+  the `limits from wavemakers.yaml (ladertanken)` and `namespace` lines, and the 0.54 m/s becomes
+  the yaml's 0.7632 m/s. The six runs (peak 0.157 m/s) pass either way.
+- **TODO.md:**
+  - Remove items 39, 41 and 42.
+  - In item 43, note that `item38.dat` has no `.txt`. Generating it again for the probe test makes
+    one, and it goes with the probe data.
 
 ## Out of scope
 
-- The water depth: `play_dat` sends positions only. Whether a file was made for the current depth
-  is item 39's record.
-- The trigger channel (planned feature *Trigger output*).
-- An automated end-to-end test of the cross-check (`fake_controller` now declares the parameters,
-  but `test_play_dat` runs without ROS).
+- A check in `play_dat` that the file matches today's depth: `play_dat` cannot know the depth the
+  file was made for unless it reads the `.txt`. That is possible later, now that the `.txt` exists.
+- The 60 s wait before `--runs N`, the slow service stop and the soft stop gaps seen on 2026-11-05.
+  These are separate TODO items.

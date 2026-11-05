@@ -209,18 +209,17 @@ another machine it needs `ROS_DOMAIN_ID=1` too.
    source ~/ros_ws/install/setup.bash
    export ROS_DOMAIN_ID=1
    python3 ~/ros_ws/src/hydrolab_rigs/rig_controller/test/make_test_dat.py /tmp/test_runs.dat
-   ros2 run rig_controller play_dat /tmp/test_runs.dat --min-m -0.146 --max-m 0.146 \
-     --max-velocity-mps 0.54 --dry-run
+   ros2 run rig_controller play_dat /tmp/test_runs.dat ladertanken --dry-run
    ```
 
-   Expected: `6 runs, 67.5 s, max |x| 0.020 m, peak speed 0.157 m/s`, then runs 0-5, all
-   `regular`, status `OK`, exit 0. (±0.146 m is ±275° at 0.00053 m/deg; 0.02 m at the
-   attachment is about ±38° at the drive.)
+   Expected: `limits from wavemakers.yaml (ladertanken): -0.14575..+0.14575 m, 0.7632 m/s, upright
+   +0.0000 m`, `namespace /wavemakers/ladertanken`, `6 runs, 67.5 s, max |x| 0.020 m, peak speed
+   0.157 m/s`, then runs 0-5, all `regular`, status `OK`, exit 0. (±0.146 m is ±275° at
+   0.00053 m/deg; 0.02 m at the attachment is about ±38° at the drive.)
 4. **One run with the page open:**
 
    ```bash
-   ros2 run rig_controller play_dat /tmp/test_runs.dat --min-m -0.146 --max-m 0.146 \
-     --max-velocity-mps 0.54 --runs 1 --ros-args -r __ns:=/wavemakers/ladertanken
+   ros2 run rig_controller play_dat /tmp/test_runs.dat ladertanken --runs 1
    ```
 
    Expected: after the 3 s gap, `run 1 (regular): 8.0 s, max 0.0200 m, 0.126 m/s`; the paddle
@@ -379,6 +378,23 @@ runs, 0 skipped, 7.9 min`. In the plot, run 2 reached ±0.137 m of ±0.146 m, at
 were all played in full, and run 3 ramped in and ended at upright. Step 4 as expected. At 09:32:07,
 mid-session, the controller logged `No Soft stop message received for over 200 ms`, and the soft
 stop was triggered and released 5 s later (TODO 36).
+
+**Probes, 2026-11-05 about 12:14-12:21: `item38.dat` played whole, WP1 3 m from the flap,
+depth assumed 0.98 m.** Recorded in catman, `item38.bin` (200 Hz, 456 s; the recording starts about
+26 s before run 0 and stops 14 s after run 3). Analysed with `wave_analysis`
+(`sessions/2026-11-05_item38.toml`): measured / target H was 1.03 for run 0 (1.0 s, 1/60), **1.12
+for run 1** (1.5 s, 1/40, measured before the beach reflection; 1.16 with it) and 1.05 for run 2
+(1.3 s, 0.171 m; second harmonic 10 %). So runs 0 and 2 pass and run 1 fails the ±6 % limit. Compared with `Calib20oct.BIN` (WP1 also at 3 m): the
+paddle sensor measured 0.572 of the commanded amplitude over the steady part, as in October
+(with `ramp = 3` in the session; without it the 3-period ramps pull the fit to 0.55), and the wave
+height per paddle amplitude matched October within 3 % at 1.0, 1.3 and 1.5 s. Run 1 was 1.08-1.12
+at the start and rose to 1.16-1.19 about 21 s in, when the beach reflection arrived; October's
+1.5 s run lasted 15 s, so it never saw that. The rest of the difference is in the command: per
+metre of target height, run 1 commanded 8 % more stroke than October's 1.5 s run (0.993 against
+0.918), 4 % from the gain table (0.75 now, 0.78 then) and 4 % from the 0.98 m depth. Runs 0 and 2
+stayed flat within 2 %. Irregular run 3: Hm0 0.0347 m (target 0.030; about
+±10 % from the 104 s record), H1/3 0.0324 m, Tp 1.18 s. Before each run the probe was still to
+within 1.3 mm, so the 60 s pauses are long enough.
 
 ## Oscillator
 

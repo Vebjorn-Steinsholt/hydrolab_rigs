@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Generate wave motion files (.dat + run table .csv) for one wavemaker, using its geometry and
-limits from wavemakers.yaml. The goal is compatibility: every file plays with play_dat.py and
-every run is accepted by the controller on that wavemaker.
+Generate wave motion files (.dat, run table .csv, record .txt) for one wavemaker, using its
+geometry and limits from wavemakers.yaml. The goal is compatibility: every file plays with
+play_dat.py and every run is accepted by the controller on that wavemaker.
 
 The wave physics is the controller's (wave_math.cpp, WaveTrajectory::configure), so a run in a
 file and the same H and T sent as a regular goal give the same stroke. 
@@ -40,6 +40,9 @@ import math
 import os
 import sys
 from typing import TypeVar
+from datetime import datetime
+import shlex
+import subprocess
 
 import numpy as np
 
@@ -477,6 +480,54 @@ def write_run_table(path: str, rows: list[dict]):
         writer.writerows(rows)
 
 
+def source_commit() -> str:
+    """The repository's commit, with '-dirty' for local changes; 'unknown' without git."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    try:  # an installed copy: CMakeLists.txt writes where the repo is.
+        with open(os.path.join(here, 'source_dir.txt')) as f:
+            here = f.read().strip()
+    except OSError:
+        pass
+    try:
+        result = subprocess.run(['git', '-C', here, 'describe', '--always', '--dirty',
+                                 '--exclude=*'],
+                                capture_output=True, text=True, timeout=5, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return 'unknown'
+    return result.stdout.strip()
+
+
+def write_record(path: str, argv: list[str], args, wm: Wavemaker, yaml_depth: float,
+                 config: str, max_velocity_mps: float, summary: str):
+    """<output>.txt: what the file was made from, to read probe data and to make it again."""
+    if args.water_depth is None:
+        depth = f'{wm.water_depth} m (the yaml)'
+    else:
+        depth = f'{wm.water_depth} m (--water-depth; the yaml has {yaml_depth} m)'
+    speed = f'{max_velocity_mps:.4f} m/s'
+    if args.max_velocity_mps:
+        speed += ' (--max-velocity-mps)'
+    with open(args.test_matrix) as f:
+        matrix = f.read().rstrip('\n')
+    lines = [
+        f'generated    {datetime.now().astimezone().isoformat(timespec="seconds")}',
+        f'command      generate_waves {shlex.join(argv)}',
+        f'folder       {os.getcwd()}',
+        f'commit       {source_commit()}',
+        f'config       {os.path.realpath(config)}',
+        f'wavemaker    {wm.name} ({wm.type})',
+        f'water depth  {depth}',
+        f'dt           {args.dt} s',
+        f'max speed    {speed}',
+        f'result       {summary}',
+        '',
+        f'test matrix {args.test_matrix}:',
+        matrix,
+    ]
+    with open(path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+
+
 def verify_with_play_dat(dat_path: str, wm: Wavemaker, max_velocity_mps: float):
     """Read the file back with play_dat's own functions; raises if play_dat would refuse it."""
     motion = play_dat.read_motion(dat_path)
@@ -540,20 +591,27 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Generate wave motion files for play_dat.')
     parser.add_argument('wavemaker', help='name in wavemakers.yaml')
     parser.add_argument('test_matrix', help='CSV, one row per run (read_test_matrix)')
-    parser.add_argument('-o', '--output', required=True, help='base name for .dat and .csv')
-    parser.add_argument('--config', default=default_config_path())
+    parser.add_argument('-o', '--output', required=True,
+                        help='base name for .dat, .csv, .txt and .png')
+    parser.add_argument('--config', help='another wavemakers.yaml; default the installed one')
     parser.add_argument('--dt', type=float, default=0.02, help='sample interval [s], whole ms')
     parser.add_argument('--water-depth', type=float, help='override the yaml for this file')
     parser.add_argument('--max-velocity-mps', type=float, help='required for linear drives')
     parser.add_argument('--no-plot', action='store_true', help='do not write <output>.png')
     parser.add_argument('--show', action='store_true', help='also open the plot in a window')
+    argv = sys.argv[1:] if argv is None else argv
     args = parser.parse_args(argv)
     if not os.path.isfile(args.test_matrix):
         parser.error(f'test matrix {args.test_matrix} not found (relative to {os.getcwd()})')
+    try:
+        config = args.config or default_config_path()
+    except FileNotFoundError as e:
+        parser.error(str(e))
 
-    wm = load_wavemaker(args.wavemaker, args.config)
+    wm = load_wavemaker(args.wavemaker, config)
+    yaml_depth = wm.water_depth
     if args.water_depth is not None:
-        if wm.gain_periods:
+        if wm.gain_periods and args.water_depth != wm.water_depth:
             print(f'warning: the gain table is for {wm.water_depth} m, not {args.water_depth} m')
         wm.water_depth = args.water_depth
     max_velocity = args.max_velocity_mps or wm.max_velocity_mps
@@ -565,14 +623,16 @@ def main(argv=None):
     write_motion(dat_path, frames, args.dt)
     write_run_table(args.output + '.csv', rows)
     played = verify_with_play_dat(dat_path, wm, max_velocity)
+    summary = (f'{played} runs, {len(rows) - played} skipped, '
+               f'{len(frames) * args.dt / 60:.1f} min')
+    write_record(args.output + '.txt', argv, args, wm, yaml_depth, config, max_velocity, summary)
     if not args.no_plot:
         plot_motion(args.output + '.png', wm, frames, rows, args.dt, max_velocity, args.show)
-    print(f'{dat_path}: {played} runs, {len(rows) - played} skipped, '
-          f'{len(frames) * args.dt / 60:.1f} min')
+    print(f'{dat_path}: {summary}')
     command = f'ros2 run rig_controller play_dat {dat_path} {wm.name} --dry-run'
     if wm.max_velocity_mps is None:  # linear drive: the speed came from the command line
         command += f' --max-velocity-mps {max_velocity:.4f}'
-    if os.path.realpath(args.config) != os.path.realpath(default_config_path()):
+    if args.config is not None:
         command += f' --config {args.config}'
     print(command)
 

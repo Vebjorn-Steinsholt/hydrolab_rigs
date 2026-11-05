@@ -46,8 +46,12 @@ def default_config_path(rig: str) -> str:
     try:
         from ament_index_python.packages import get_package_share_directory
         share = get_package_share_directory(package)
-    except Exception: # not sourced
+    except (ImportError, LookupError):  # ROS not sourced, or the package not installed
         share = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', package)
+        if not os.path.isdir(share):  # an installed copy: no repository next to it
+            raise FileNotFoundError(
+                f'{package} is not installed, so there is no {filename}: build it '
+                f'(colcon build --packages-up-to {package}) or give --config') from None
     return os.path.join(share, 'config', filename)
 
 

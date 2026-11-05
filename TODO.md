@@ -15,13 +15,11 @@ the items kept there, and finished items, which are removed (see the git history
 ## High
 
 - [ ] **43. Measure the generated waves with probes. (rig)** (`rig_controller/src/generate_waves.py`, the gain table in `wavemakers.yaml`)
-  Item 38 (2026-11-05, `rpi/README.md`, *`generate_waves` on the rig*) played all four runs of `item38.dat` on ladertanken without faults, but no wave probes were available, so the wave heights were not measured. When probes are in the tank: measure the depth, generate the same matrix again (`matrix.csv` is in `~/wave_sessions/2026-11-05_item38` on the Pi, and in the copy taken off it), and play the whole file in one go: `play_dat item38.dat ladertanken`, without `--runs`, which plays runs 0-3 with the 60 s pauses between them, about 8 min in all. `play_dat` logs `run N (...)` with a timestamp as each run starts; use those times to match the probe data. Check on the probes that the tank has calmed before the next run starts; if not, raise `pause_s` and generate again. To repeat a single run, use `--runs N`. It first waits for the rest before run N in the file, about 60 s, and logs nothing while it waits.
+  Item 38 (2026-11-05, `rpi/README.md`, *`generate_waves` on the rig*) played all four runs of `item38.dat` on ladertanken without faults, but no wave probes were available, so the wave heights were not measured. When probes are in the tank: measure the depth, generate the same matrix again (`matrix.csv` is in `~/wave_sessions/2026-11-05_item38` on the Pi, and in the copy taken off it), and play the whole file in one go: `play_dat item38.dat ladertanken`, without `--runs`, which plays runs 0-3 with the 60 s pauses between them, about 8 min in all. `play_dat` logs `run N (...)` with a timestamp as each run starts; use those times to match the probe data. Check on the probes that the tank has calmed before the next run starts; if not, raise `pause_s` and generate again. To repeat a single run, use `--runs N`. It first waits for the rest before run N in the file, about 60 s, and logs nothing while it waits. `item38.dat` has no `.txt` (item 39 came after it); generating it again makes one, and it goes with the probe data.
   Pass: the measured H of regular runs 0-2 (1/60 at 1.0 s, 1/40 at 1.5 s, 0.171 m at 1.3 s) is within the gain table's scatter (~6 %) of the target. Note the measured Hs of irregular run 3 (target 0.03 m, Tp 1.2 s); there is no pass limit yet. The gain table is for 1.0 m: note the depth with the result, which on 2026-11-05 was 0.98 m.
+  Measured 2026-11-05, WP1 3 m from the flap as in October (`rpi/README.md`, *`generate_waves` on the rig*; `wave_analysis/sessions/2026-11-05_item38.toml`): run 0 1.03 and run 2 1.05 pass, **run 1 (1.5 s) 1.12 fails** (before the beach reflection; 1.16 with it); run 3 Hm0 0.0347 m, Tp 1.18 s. Against `Calib20oct.BIN` the tank and drive behave as in October (paddle 0.572 of the command, H per paddle amplitude within 3 %). Run 1's excess is the command plus a reflection: 8 % more stroke per metre of target than October's 1.5 s run (gain table 0.75 against the 0.78 that run measured, and the 0.98 m depth), then +6 % from the beach reflection about 21 s into the run, which October's 15 s run never reached.
+  Open: (1) the 1.5 s table value: 2026-10-20 measured 0.78, the table has 0.75, and the 2026-10-21 check (0 % with 0.75) is not on the stick to recheck. (2) Runs 0 and 2 also came out 3-5 % high, which fits the depth correction overcorrecting, or a depth other than 0.98 m. (3) Long runs at 1.5 s and above see the beach reflection after about 21 s; shorten the measuring window or separate incident and reflected waves (COMMISSIONING.md, 3 probes). Next: one session at a measured depth with 1.5 s at 0.074, 0.0835 and 0.112 m and 1.0 s / 1/60 before and after, measured before the reflection arrives. Leave the gain table alone until then.
 ## Medium
-
-- [ ] **16. Test and document the bridge.** (`rig_controller/test/`, `README.md`)
-  - A gtest with a fake `move_wavemaker` server: start and refused start, stop (topic and service), stop during start, lost heartbeat, controller rejection and abort, deactivation (`inactive`), and a stop the controller never confirms (no result within 2 s, or the action unavailable): the bridge must leave `stopping` and publish idle with a warning. `test/fake_controller.py` shows the fake's behaviour.
-  - Document the bridge interface in the README: topics, types, QoS, the start sequence (height, period, then `start`), heartbeat, `wavemaker_state` values.
 
 - [ ] **19. Linear drives (lilletanken, mclab).** Deferred: neither is deployed yet (they need gateways). (`rig_controller/src/indradrive_actuator.cpp`)
   The drive's position tag (scaled as degrees) is used as metres unchanged, and velocity is converted with `/ 6` as if it were deg/s → rpm; the limits exist twice (`travel_minimum_m/maximum` and `min_position_m/max_position_m`). Once the drive scaling is confirmed on the rig (item 19 in [COMMISSIONING.md](COMMISSIONING.md)), add a proper linear conversion and derive the drive limits from the node limits. The unit conversion now goes through `DriveScale` (`rig_controller/src/drive_scale.hpp`, 2026-10-23); the duplicate limits remain.
@@ -34,9 +32,6 @@ the items kept there, and finished items, which are removed (see the git history
 
 - [ ] **22. `cancel_all_goals` can report `SERVER_UNAVAILABLE` right after configure.** (`rig_controller/src/controller_node.cpp`)
   `action_server_is_ready()` is false until discovery completes; wait up to about 1 s before replying.
-
-- [ ] **39. `generate_waves` records how a file was made.** (`rig_controller/src/generate_waves.py`)
-  A file is only right for the depth, yaml and generator it was made with, and a pregenerated goal carries positions only, so neither `play_dat` nor the controller can tell. Write `<output>.txt` next to the `.dat`: wavemaker, water depth (and whether it was overridden), dt, the git commit of the repository (with `-dirty` if it has local changes), the date and the command line. Needed to interpret probe data and to regenerate a run.
 
 ## Low
 
@@ -51,8 +46,9 @@ the items kept there, and finished items, which are removed (see the git history
   Decided 2026-10-29: the web page and the bridge start regular waves only; pregenerated motion is for `play_dat.py` (and other CLI clients). The bridge needs no change.
   Done 2026-10-30: each goal picks its type (non-empty `positions` → pregenerated; positions together with height/period, or no sample_interval, are rejected); `mode_pregenerated` and `wavemaker_mode_pregenerated` are in the rename table as removed, so a leftover setting fails configure. Removed from `wavemakers.yaml`, `wavemakers.launch.py`, `bridge.launch.py`; `fake_controller.py` lost `--pregenerated`; `MoveRig.action`, README, OSCILLATOR.md and `play_dat.py` usage updated. `play_dat` now runs under `lab.launch.py` with the page open: the plot, Stop on the page and the soft stop act on its goals, and the web server's idle auto-stop counts every controller setpoint as motion. Tests: new `EachGoalPicksItsType`, `GoalWithPositionsAndWaveIsRejected` and removed-name cases in `test_controller_node`; all gtests pass; checked against `fake_controller` (play_dat, a regular goal and a both-types goal on one node) and the idle timer (`idle_timeout_s:=12`, 20 s run: shutdown 12 s after the run, not during). Rig test passed on ladertanken 2026-11-02 (commit `e096801`): checklist and results in `rpi/README.md`, *Rig test* → *Goal type per goal and `play_dat`*; next: merge `feat/oscillator` into `master`.
 
-- [ ] **27. A regular wave from the terminal runs until it is cancelled.**
+- [x] **27. A regular wave from the terminal runs until it is cancelled.**
   In bridge mode the heartbeat covers a lost client; from the terminal nothing does. Consider an optional `duration` in `MoveRig.action`.
+  Closed 2026-11-05: no `duration`. An operator who starts a wave from the terminal stops it there (Ctrl-C on `ros2 action send_goal`, or the soft stop).
 
 - [ ] **29. `IndraDrive::disable()` can block a lifecycle callback for up to 20 s.** (`drivers/mgate5101_driver/src/indradrive.cpp`)
   Accept, or use a shorter timeout for `disable()`.
@@ -68,31 +64,6 @@ the items kept there, and finished items, which are removed (see the git history
 
 - [ ] **36. Soft stop timeout logged once at startup.** (`controller_node.cpp`, `soft_stop.py`; rig)
   On the Pi, about 1 s after `Managed nodes are active`, the controller logs `No Soft stop message received for over 200 ms; treating as stopped` once (2026-10-16), then works normally. Most likely load while all nodes start; harmless before the first wave, but it is logged as an error on every normal start. If it ever appears mid-session, `soft_stop_timeout_s` (0.2 s) is too tight for the Pi. Decide: raise the timeout, or skip the check until the soft stop has published steadily for a moment. 2026-10-22, on the PC with the LinMot actuator: logged 13 ms after an activation that blocked for about 0.8 s, with `ros2 topic pub` publishing at 20 Hz throughout. Both times it follows a blocking `on_activate`, so the soft stop subscription is probably not served during activation (the liveness check runs in `fault_timer_`, in the default callback group with the lifecycle services); check that before changing the timeout. 2026-10-23, LinMot: logged 2 ms after an activation that blocked for 21 s while homing, `ros2 topic pub` at 20 Hz throughout; goals worked right after. The blocking length makes no difference, which fits the callback-group explanation, not the timeout. Confirmed 2026-10-23 on the Pi with `oscillator.launch.py`: `soft_stop` published at 13:14:40.70 (starting stopped) and 13:14:47.77 (released), but the controller logged `Soft stop connected` only at 13:15:01.60, when the 21 s homing activation ended, together with `has not published within 5 s of configure`. The controller does not serve the soft stop subscription while `on_activate` blocks, although it already has its own callback group (`soft_stop_callback_group_`) and `main()` uses a `MultiThreadedExecutor`. Why is still open; a lead: the group and subscription are created in `on_configure`, after `spin()` started. Fix the cause (or do not block `on_activate`), not the timeout. 2026-10-26: also logged while the controller was `inactive` after a failed activation (the drive did not answer on CAN), minutes after the fault; harmless (goals are refused), probably the same cause. 2026-11-05 at 09:32:07, mid-session on ladertanken with no motion running: logged once, then 5 s later `soft_stop` logged `Soft stop triggered` and was released 4.5 s after that. It is not yet known whether anyone pressed the button.
-
-- [ ] **41. `generate_waves` warns about the gain table at the yaml's own depth.** (`rig_controller/src/generate_waves.py`, `main()`)
-  Any `--water-depth` prints `warning: the gain table is for 1.0 m, not ... m`, also when it equals the yaml's depth (found 2026-11-04: "for 1.0 m, not 1.0 m"). Warn only when the two differ: `if wm.gain_periods and args.water_depth != wm.water_depth:`. Add a test that `--water-depth` equal to the yaml's prints no warning.
-
-- [ ] **42. `rig_limits.default_config_path` falls back to a path that does not exist when installed.** (`rig_controller/src/rig_limits.py`)
-  Without the bringup package installed (`wavemaker_bringup`, `oscillator_bringup`), the fallback builds the path from the file's own location: right from the source tree (`src/../../wavemaker_bringup/config`), but from `install/rig_controller/lib/rig_controller/` it points into `install/rig_controller/`, so `play_dat <file> <name>` and `generate_waves` without `--config` fail with a missing-file error that does not say why. Found by reading the code 2026-11-04, when the development PC's workspace had `rig_controller` built without the bringup packages; not yet hit in practice. Workaround: `colcon build --packages-up-to rig_controller wavemaker_bringup oscillator_bringup`.
-  Sketch: fall back to the repository only when ROS is not sourced (running from the source tree, as the tests do); sourced but the package missing is an error that says what to do. `PackageNotFoundError` is a `LookupError`; `FileNotFoundError` is an `OSError`, which `play_dat` and `fake_controller` already catch.
-  ```python
-  def default_config_path(rig: str) -> str:
-      """The installed yaml when the workspace is sourced, else the repository's copy."""
-      _, package, filename = RIGS[rig]
-      try:
-          from ament_index_python.packages import get_package_share_directory
-      except ImportError:  # not sourced: running from the source tree
-          share = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', package)
-      else:
-          try:
-              share = get_package_share_directory(package)
-          except LookupError:  # PackageNotFoundError
-              raise FileNotFoundError(
-                  f'{package} is not installed, so there is no {filename}: build it '
-                  f'(colcon build --packages-up-to {package}) or give --config') from None
-      return os.path.join(share, 'config', filename)
-  ```
-  `generate_waves` calls `default_config_path()` while building its parser (`parser.add_argument('--config', default=default_config_path())`), so it would now fail even with `--config`: make the default `None`, then `config = args.config or default_config_path()` after parsing, and use `config` in `load_wavemaker` and in the printed command's `--config` comparison. Tests: with `ament_index_python` importable and the package missing, the error names the package and `--config` (monkeypatch `get_package_share_directory` to raise `PackageNotFoundError`); `generate_waves ... --config <file>` works with the same patch.
 
 ## Planned features (all rigs)
 

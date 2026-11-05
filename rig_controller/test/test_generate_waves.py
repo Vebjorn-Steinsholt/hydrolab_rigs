@@ -12,6 +12,7 @@ import csv
 import importlib.util
 import math
 import pathlib
+import re
 import sys
 
 import numpy as np
@@ -420,3 +421,70 @@ def test_main_end_to_end(tmp_path, capsys):
         table = list(csv.DictReader(f))
     assert [r['kind'] for r in table] == ['regular', 'irregular']
     assert table[1]['peak_period_s'] == '1.2' and table[0]['period_s'] == '1.0'
+
+
+def small_matrix(tmp_path):
+    return write_matrix(tmp_path / 'm.csv', [
+        {'kind': 'regular', 'period_s': 1.0, 'steepness': '1/60', 'n_periods': 10, 'n_ramp': 2,
+         'pause_s': 5},
+    ])
+
+
+def generate(tmp_path, *options):
+    out = str(tmp_path / 'session')
+    return gw.main(['ladertanken', small_matrix(tmp_path), '-o', out, '--no-plot', *options]), out
+
+
+@pytest.mark.parametrize('depth, warns', [('1.0', False), ('0.98', True)])
+def test_gain_table_warning_only_at_another_depth(tmp_path, capsys, depth, warns):
+    """TODO item 41: ladertanken's yaml and gain table are for 1.0 m."""
+    code, _ = generate(tmp_path, '--config', CONFIG, '--water-depth', depth)
+    assert code == 0
+    assert ('warning: the gain table is for 1.0 m' in capsys.readouterr().out) == warns
+
+
+def test_config_given_works_without_the_package(tmp_path, capsys, monkeypatch):
+    """TODO item 42: the default is looked up only when --config is not given."""
+    def missing():
+        raise FileNotFoundError('wavemaker_bringup is not installed')
+    monkeypatch.setattr(gw, 'default_config_path', missing)
+    code, out = generate(tmp_path, '--config', CONFIG)
+    assert code == 0
+    assert f'play_dat {out}.dat ladertanken --dry-run --config {CONFIG}' in capsys.readouterr().out
+    with pytest.raises(SystemExit) as stop:
+        generate(tmp_path)
+    assert stop.value.code == 2
+    assert 'wavemaker_bringup is not installed' in capsys.readouterr().err
+
+
+def test_record_next_to_the_file(tmp_path):
+    """TODO item 39: <output>.txt says how the file was made."""
+    code, out = generate(tmp_path, '--config', CONFIG, '--water-depth', '0.98')
+    assert code == 0
+    record = pathlib.Path(out + '.txt').read_text()
+    assert f'command      generate_waves ladertanken {tmp_path}/m.csv -o {out}' in record
+    assert 'wavemaker    ladertanken (flap)' in record
+    assert 'water depth  0.98 m (--water-depth; the yaml has 1.0 m)' in record
+    assert 'dt           0.02 s' in record
+    assert 'max speed    0.7632 m/s\n' in record
+    assert 'result       1 runs, 0 skipped' in record
+    assert f'config       {pathlib.Path(CONFIG).resolve()}' in record
+    assert re.search(r'^commit       ([0-9a-f]{7,40}(-dirty)?|unknown)$', record, re.M)
+    assert record.endswith(f'test matrix {tmp_path}/m.csv:\n' + ','.join(HEADER) + '\n'
+                           'regular,1.0,,1/60,10,,,,,,2,5\n')
+
+
+def test_record_depth_from_the_yaml(tmp_path):
+    code, out = generate(tmp_path, '--config', CONFIG)
+    assert code == 0
+    assert 'water depth  1.0 m (the yaml)' in pathlib.Path(out + '.txt').read_text()
+
+
+def test_source_commit_of_an_installed_copy(tmp_path, monkeypatch):
+    """Installed, the repository is found through source_dir.txt; without it, 'unknown'."""
+    installed = tmp_path / 'lib' / 'rig_controller'
+    installed.mkdir(parents=True)
+    monkeypatch.setattr(gw, '__file__', str(installed / 'generate_waves.py'))
+    assert gw.source_commit() == 'unknown'
+    (installed / 'source_dir.txt').write_text(str(SRC.parent) + '\n')
+    assert re.fullmatch(r'[0-9a-f]{7,40}(-dirty)?', gw.source_commit())
