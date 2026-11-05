@@ -112,6 +112,27 @@ before connecting to hardware. Changes take effect at the next `configure`.
 | `max_velocity_rpm` | Drive speed limit. Goals whose peak speed exceeds it are rejected. |
 | `hold_velocity_rpm` | Speed cap used when stopping and holding position (default 10, ≤ `max_velocity_rpm`). |
 
+### Ladertanken: position resolution
+
+The setpoint is not rounded to a coarse step anywhere on the way to the drive:
+
+- Goals carry positions as 64-bit floats in metres (a `.dat` file stores 32-bit floats, about
+  0.01 µm at full travel), and the controller converts them to drive degrees in 64-bit floats
+  (÷ 0.00053 m/deg).
+- The drive's target position register is a 32-bit integer in steps of 0.0001°, and the setpoint
+  is rounded to the nearest step (`ProcessImage::set_scaled`). One step is **0.053 µm** at the
+  attachment point (about 0.04 µm at the waterline). The register reaches ±214 748°; the travel
+  limits use ±275°. The speed cap sent with each setpoint has steps of 0.0001 rpm.
+- What limits small motions is the flap's standstill wobble, about ±0.5° at the drive (±0.27 mm
+  at the attachment; COMMISSIONING.md, *Verified so far*), some 5000 steps. From about 5 mm paddle
+  amplitude (H about 1 cm at 1.0 s) it is a few percent of the motion at most; at 1-2 mm it
+  becomes a large part of it.
+- The control loop runs every `poll_interval_ms` (20 ms); motion files may use any whole number of
+  milliseconds, and the controller interpolates between their samples.
+
+The driver casts the setpoint to 32 bits without a range check; the controller's clamp to the
+travel limits keeps it far inside the register's range.
+
 ### Communication
 
 | Parameter | Meaning |
@@ -339,6 +360,56 @@ irregular,,,,,0.04,1.2,3.3,300,1,5,60
 With steepness rows, H follows from the wavelength, so it depends on the water depth: generate
 with the depth of the session (`--water-depth`).
 
+### Writing the test matrix
+
+The matrix is a plain text file. Three ways to make one; pick whichever you are used to. Each
+session gets its own folder, named after the date.
+
+**A. On the Pi, by pasting.** Log in (`ssh ladertanken@ladertanken-rpi.local`), then paste the
+whole block below into the terminal in one go (right-click pastes in most terminals), with your
+own rows between the header line and `END`:
+
+```bash
+mkdir -p ~/wave_sessions/2026-11-05
+cd ~/wave_sessions/2026-11-05
+cat > session.csv <<'END'
+kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,1.0,,1/60,30,,,,,,3,60
+regular,1.3,0.171,,30,,,,,,3,60
+irregular,,,,,0.03,1.2,3.3,120,1,5,60
+END
+```
+
+The terminal shows `>` at the start of each line while you paste; that is normal. The file is
+written when the `END` line arrives. To change a row afterwards, use B.
+
+**B. On the Pi, in an editor.** In the session folder:
+
+```bash
+nano session.csv
+```
+
+Type or paste the rows, using the arrow keys to move. Save with **Ctrl+O** then **Enter**, and
+quit with **Ctrl+X**. If nano asks "Save modified buffer?" on quitting, answer **Y** then
+**Enter**.
+
+**C. On the lab PC (Windows), then copy it.** Open **Notepad**, type the rows, and save with *File
+→ Save as*: *Save as type* *All files*, file name `session.csv`. Copy it to the Pi as in [On the
+Pi](#on-the-pi). Excel also works if you save as *CSV UTF-8 (comma delimited)*, but on a PC with
+Norwegian settings Excel writes semicolons and decimal commas (`1;0`), which `generate_waves`
+cannot read: it then stops with `row 0: n_ramp is required`. Notepad avoids that.
+
+**Check the file** before generating. On the Pi:
+
+```bash
+cat session.csv
+```
+
+Every line must have the same number of commas as the header (11), and decimals with a point
+(`1.0`, not `1,0`). A mistake in a row makes `generate_waves`
+stop with the row number (`row 0` is the first row after the header) and what is wrong; no
+files are written then.
+
 ### Generate
 
 ```bash
@@ -455,6 +526,46 @@ scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-05 .
   on the controller's generic defaults for them.
 - **Trigger:** channel 1 of the file is 1 during each run and 0 at rest. Nothing plays it yet
   ([TODO.md](TODO.md), *Trigger output*).
+
+### Making your own motion file
+
+Use `generate_waves` where you can: it applies the wavemaker's geometry, gain table and limits for
+you. Make your own file only for motion it cannot generate, and then follow these rules. The
+controller plays the numbers as they are: it adds no wave theory, gain or depth to a file, and
+only refuses motion outside the limits. A wrong number makes a wrong wave, without any warning.
+
+**What a position is.** Metres (not mm), at the **actuator attachment point** on the flap (the
+actuator arm), relative to upright, with the gain already applied. Not the stroke at the
+waterline (z = 0). From linear wavemaker theory, for a flap:
+
+```
+x_attachment = (S / 2) / gain × (attachment_height − hinge_height) / (water_depth − hinge_height)
+```
+
+where S is the stroke at the waterline for wave height H (S = H / transfer function, with the
+hinge at `hinge_height`), and the gain, heights and depth are from the wavemaker's block in
+`wavemakers.yaml`. For ladertanken (attachment 1.30 m, hinge 0.09 m) the last factor is 1.33 at
+1.0 m depth and 1.36 at 0.98 m, and the gain is the table for the period (0.64-0.80). A piston
+moves the same at every height: x = (S / 2) / gain. A file is only right for the depth it was
+made for; note the depth with it.
+
+**Limits** (ladertanken; others in their yaml block): positions within ±0.146 m and speed below
+0.763 m/s. `play_dat --dry-run` checks every run against them; a file in mm is refused there,
+as its travel is 1000 times too large.
+
+**Layout:** little-endian; `int32` time step in whole milliseconds (10 or 20
+ms), `int32` number of channels, then `float32` frames, all channels of step 0, then of step 1,
+and so on. Channel 0 is the position; channel 1 the trigger (optional, not played yet); further
+channels are ignored.
+
+**Runs and rests.** Each run starts and ends at 0 (within 2 mm), with a ramp of a few periods at
+each end. Between runs the position must be exactly 0 for at least 1 s; that is how `play_dat`
+splits the file into runs. A `<file>.csv` next to the `.dat` with the columns `run`, `start_s`
+and `end_s` names the runs and their boundaries; without it they are found from the rests.
+
+**Check before the tank:** `play_dat <file> <wavemaker> --dry-run` lists each run with its period,
+largest position and peak speed, and says why any run would be refused. Compare the largest
+position with what you computed.
 
 ### Irregular waves (decided 2026-11-03)
 
