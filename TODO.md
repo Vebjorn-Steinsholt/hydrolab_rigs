@@ -14,6 +14,68 @@ the items kept there, and finished items, which are removed (see the git history
 
 ## High
 
+- [ ] **44. Rig test of items 20-25 before merging `bugfix-items-20-25` into `master`. (rig)** Planned 2026-11-06, ladertanken. (`rig_controller/src/controller_node.cpp`, `wave_trajectory.cpp`, `rig_web/scripts/web_server.py`)
+  Items 20-25 pass the unit tests (commit `ca87b35`), but item 25 changes how every regular wave starts away from upright, and item 24 changes what the page shows. Keep a hand near the e-stop.
+
+  **0. Code on the Pi** (ssh as `ladertanken`). Push the branch from the PC first: `git push origin bugfix-items-20-25`. Then on the Pi:
+
+  ```bash
+  sudo systemctl stop wavemaker@ladertanken
+  cd ~/ros_ws/src/hydrolab_rigs && git fetch && git checkout bugfix-items-20-25 && git pull
+  git log --oneline -3                      # the newest commits of the branch
+  cd ~/ros_ws && colcon build               # rig_interfaces changed: ReturnToUpright has SOFT_STOP
+  sudo systemctl start wavemaker@ladertanken
+  journalctl -u wavemaker@ladertanken -f -o cat     # leave open in a second ssh window
+  ```
+
+  Pass: `Summary: ... packages finished` with no failures; the journal shows `Managed nodes are active`, `Soft stop connected`, `Soft stop released`.
+  For the terminal steps below, in another ssh window:
+
+  ```bash
+  source ~/ros_ws/install/setup.bash
+  export ROS_DOMAIN_ID=1 NS=/wavemakers/ladertanken
+  ```
+
+  **1. `cancel_all_goals` right after start (22).** Restart and call it as soon as the journal shows `Managed nodes are active`:
+
+  ```bash
+  sudo systemctl stop wavemaker@ladertanken && sudo systemctl start wavemaker@ladertanken
+  ros2 service call $NS/cancel_all_goals rig_interfaces/srv/CancelAllGoals "{requester: cli}"
+  ```
+
+  Pass: `status=1` (`NO_ACTIVE_GOALS`), not `2` (`SERVER_UNAVAILABLE`). Then start a small wave from the page (1.0 s, H 0.026 m, 1/60) and call it again. Pass: `status=0` (`REQUEST_ACCEPTED`), `goals_canceling=1`, the wave stops and the page shows it stopped.
+
+  **2. Hold after Stop (21).** Start 1.3 s, H 0.085 m (1/30) from the page; press Stop mid-stroke. Pass: the paddle stops and holds where it is, no fault in the journal, and the next wave starts normally.
+
+  **3. Start blend far from upright (25).** Start 1.5 s, H 0.108 m (1/30; paddle amplitude 0.103 m) and press Stop near a crest, so the paddle holds about 0.1 m off upright. Then start 0.7 s, H 0.026 m (1/30; amplitude 0.015 m) from the page and watch the plot, or:
+
+  ```bash
+  ros2 topic echo $NS/wavemaker_setpoint --field data     # Ctrl-C when done
+  ```
+
+  Pass: the goal is accepted (no `rejecting` in the journal) and the paddle reaches the wave smoothly over 3-4 periods (2-3 s; from 0.10 m with the default return speed 0.1 m/s: 1.875 × 0.115 / (0.7 × 0.1) = 3.1 → 4 periods), not in one 0.7 s period. On ladertanken the old one-period blend (about 0.3 m/s) was also accepted, since the drive allows 0.76 m/s, so the difference is the slower start, not acceptance. Stop, return to upright from the page, and start the same wave from upright: it blends in over one period, as before.
+
+  **4. Soft stop during a return (24).** Get the paddle off upright again (step 3: Stop near a crest), press *Return to upright* on the page and engage the soft stop button during the move. Pass: the page shows `SOFT_STOP` (not `CONTROLLER_INACTIVE`); the journal shows `Soft stop engaged during return to upright`; the paddle holds, drive still enabled. Release the button, press *Return to upright* again. Pass: `SUCCESS`, at upright. From the terminal the same check reads:
+
+  ```bash
+  ros2 service call $NS/return_to_upright rig_interfaces/srv/ReturnToUpright "{requester: cli, tolerance: 0.0}"
+  ```
+
+  (`status=7` is `SOFT_STOP`.)
+
+  **5. Optional: fault during a return (20, 24).** With the paddle off upright, start a return and switch the drive's power off during it. Pass: `ACTUATOR_FAULT` with the drive's reason in `message` (not `CONTROLLER_INACTIVE`, not empty); the controller goes through `on_error`. Power on, `sudo systemctl stop wavemaker@ladertanken && sudo systemctl start wavemaker@ladertanken`, check the journal as in step 0.
+
+  **Pass on all: merge.** On the PC:
+
+  ```bash
+  cd ~/ros_ws/src/hydrolab_rigs
+  git switch master && git pull --ff-only
+  git merge --ff-only bugfix-items-20-25
+  git push origin master
+  ```
+
+  On the Pi, back to `master`: `cd ~/ros_ws/src/hydrolab_rigs && git checkout master && git pull`, then `cd ~/ros_ws && colcon build` and stop/start the service. Note the results in `rpi/README.md`, *Rig test*, and remove this item. If a step fails: note what the page and the journal showed, stay on the branch, and do not merge.
+
 - [ ] **43. Measure the generated waves with probes. (rig)** (`rig_controller/src/generate_waves.py`, the gain table in `wavemakers.yaml`)
   Item 38 (2026-11-05, `rpi/README.md`, *`generate_waves` on the rig*) played all four runs of `item38.dat` on ladertanken without faults, but no wave probes were available, so the wave heights were not measured. When probes are in the tank: measure the depth, generate the same matrix again (`matrix.csv` is in `~/wave_sessions/2026-11-05_item38` on the Pi, and in the copy taken off it), and play the whole file in one go: `play_dat item38.dat ladertanken`, without `--runs`, which plays runs 0-3 with the 60 s pauses between them, about 8 min in all. `play_dat` logs `run N (...)` with a timestamp as each run starts; use those times to match the probe data. Check on the probes that the tank has calmed before the next run starts; if not, raise `pause_s` and generate again. To repeat a single run, use `--runs N`. It first waits for the rest before run N in the file, about 60 s, and logs nothing while it waits. `item38.dat` has no `.txt` (item 39 came after it); generating it again makes one, and it goes with the probe data.
   Pass: the measured H of regular runs 0-2 (1/60 at 1.0 s, 1/40 at 1.5 s, 0.171 m at 1.3 s) is within the gain table's scatter (~6 %) of the target. Note the measured Hs of irregular run 3 (target 0.03 m, Tp 1.2 s); there is no pass limit yet. The gain table is for 1.0 m: note the depth with the result, which on 2026-11-05 was 0.98 m.
@@ -25,15 +87,6 @@ the items kept there, and finished items, which are removed (see the git history
   The drive's position tag (scaled as degrees) is used as metres unchanged, and velocity is converted with `/ 6` as if it were deg/s → rpm; the limits exist twice (`travel_minimum_m/maximum` and `min_position_m/max_position_m`). Once the drive scaling is confirmed on the rig (item 19 in [COMMISSIONING.md](COMMISSIONING.md)), add a proper linear conversion and derive the drive limits from the node limits. The unit conversion now goes through `DriveScale` (`rig_controller/src/drive_scale.hpp`, 2026-10-23); the duplicate limits remain.
 
 ## Low
-
-- [x] **26. Goal type is chosen by a parameter.** (`controller_node.cpp`, `play_dat.py`)
-  `mode_pregenerated` fixes at launch whether the controller takes regular waves or position lists, so playing a `.dat` file needs a relaunch, and a regular wave sent in pregenerated mode is rejected with "goal requires positions", which does not name the mode. Choose per goal instead (non-empty `positions` → pregenerated), remove `mode_pregenerated` (add it to the rename table as removed) and the relaunch from `play_dat.py`'s usage text, the launch files and `fake_controller.py --pregenerated`.
-  Decided 2026-10-29: the web page and the bridge start regular waves only; pregenerated motion is for `play_dat.py` (and other CLI clients). The bridge needs no change.
-  Done 2026-10-30: each goal picks its type (non-empty `positions` → pregenerated; positions together with height/period, or no sample_interval, are rejected); `mode_pregenerated` and `wavemaker_mode_pregenerated` are in the rename table as removed, so a leftover setting fails configure. Removed from `wavemakers.yaml`, `wavemakers.launch.py`, `bridge.launch.py`; `fake_controller.py` lost `--pregenerated`; `MoveRig.action`, README, OSCILLATOR.md and `play_dat.py` usage updated. `play_dat` now runs under `lab.launch.py` with the page open: the plot, Stop on the page and the soft stop act on its goals, and the web server's idle auto-stop counts every controller setpoint as motion. Tests: new `EachGoalPicksItsType`, `GoalWithPositionsAndWaveIsRejected` and removed-name cases in `test_controller_node`; all gtests pass; checked against `fake_controller` (play_dat, a regular goal and a both-types goal on one node) and the idle timer (`idle_timeout_s:=12`, 20 s run: shutdown 12 s after the run, not during). Rig test passed on ladertanken 2026-11-02 (commit `e096801`): checklist and results in `rpi/README.md`, *Rig test* → *Goal type per goal and `play_dat`*; next: merge `feat/oscillator` into `master`.
-
-- [x] **27. A regular wave from the terminal runs until it is cancelled.**
-  In bridge mode the heartbeat covers a lost client; from the terminal nothing does. Consider an optional `duration` in `MoveRig.action`.
-  Closed 2026-11-05: no `duration`. An operator who starts a wave from the terminal stops it there (Ctrl-C on `ros2 action send_goal`, or the soft stop).
 
 - [ ] **29. `IndraDrive::disable()` can block a lifecycle callback for up to 20 s.** (`drivers/mgate5101_driver/src/indradrive.cpp`)
   Accept, or use a shorter timeout for `disable()`.
