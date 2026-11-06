@@ -396,6 +396,57 @@ stayed flat within 2 %. Irregular run 3: Hm0 0.0347 m (target 0.030; about
 ±10 % from the 104 s record), H1/3 0.0324 m, Tp 1.18 s. Before each run the probe was still to
 within 1.3 mm, so the 60 s pauses are long enough.
 
+### Controller and driver fixes (TODO 20-25; run 2026-11-06)
+
+Checks the fixes on branch `bugfix-items-20-25` on the drive before they are merged: the start
+blend over whole periods (25), the `return_to_upright` replies (24), `cancel_all_goals` right
+after start (22), the hold after Stop (21), and the fault text (20). Keep a hand near the e-stop.
+
+0. **Code on the Pi.** Push the branch from the PC, then on the Pi:
+
+   ```bash
+   sudo systemctl stop wavemaker@ladertanken
+   cd ~/ros_ws/src/hydrolab_rigs && git fetch && git checkout bugfix-items-20-25 && git pull
+   cd ~/ros_ws && colcon build               # rig_interfaces changed: ReturnToUpright has SOFT_STOP
+   sudo systemctl start wavemaker@ladertanken
+   journalctl -u wavemaker@ladertanken -f -o cat     # in a second ssh window
+   ```
+
+   For the terminal steps: `source ~/ros_ws/install/setup.bash` and
+   `export ROS_DOMAIN_ID=1 NS=/wavemakers/ladertanken`.
+1. **`cancel_all_goals` (22).** Straight after `sudo systemctl stop wavemaker@ladertanken && sudo
+   systemctl start wavemaker@ladertanken`:
+   `ros2 service call $NS/cancel_all_goals rig_interfaces/srv/CancelAllGoals "{requester: cli}"`.
+   Expected: `status=1` (`NO_ACTIVE_GOALS`), not `2`. Again with a wave running (1.0 s, 0.026 m):
+   `status=0`, `goals_canceling=1`, the wave stops.
+2. **Hold after Stop (21).** 1.3 s, 0.085 m; Stop mid-stroke. Expected: the paddle holds where it
+   is, no fault, the next wave starts normally.
+3. **Start blend far from upright (25).** 1.5 s, 0.108 m, Stop near a crest (about 0.1 m off
+   upright); then 0.7 s, 0.026 m. Expected: accepted, and it blends in smoothly over 3-4 periods
+   (2-3 s), not one. From upright the same wave blends in over one period. To watch the setpoint:
+   `ros2 topic echo $NS/wavemaker_setpoint std_msgs/msg/Float64 --field data` (without the type,
+   `ros2 topic echo` can fail with `Could not determine the type`).
+4. **Soft stop during a return (24).** Off upright, *Return to upright*, and the soft stop during
+   the move. Expected: the page shows `SOFT_STOP`, the journal `Soft stop engaged during return to
+   upright`, the drive stays enabled. After the release, a second return ends in `SUCCESS`.
+5. **Fault during a return (20, 24), optional.** Off upright, start a return and switch the drive's
+   power off. Expected: `ACTUATOR_FAULT` with the drive's reason. Power on, stop and start the
+   service.
+
+**Run 2026-11-06 on ladertanken, branch `bugfix-items-20-25` (code as in `ca87b35`): all steps
+passed, including step 5.** Step 0: clean starts at 08:25 (drive `SW=0xC81E OM AF inpos`,
+`slave=live`). Step 1: `status=1` with the call waiting for the service, so it was answered as soon
+as the service existed; with a wave, `status=0`, `goals_canceling=1`. Step 2: held, and a new wave
+started at once. Step 3 as expected. Step 4: `Soft stop engaged during return to upright` 15 ms
+after the button, page `SOFT_STOP`, then `SUCCESS`. Step 5: the return loop logged `Actuator fault
+detected`, then `Driver fault: drive error F2026` (undervoltage in the power section); the page
+showed `ACTUATOR_FAULT: Drive error F2026`, and the controller went through `on_error` to
+unconfigured. After that the lifecycle manager logged `SERVER controller IS DOWN` (the bond is
+broken on leaving active) and, while resetting, `No transition matching 4/2 found for current state
+unconfigured`: the controller had already left through `on_error`. Unchanged by this branch.
+Also seen: at every start the controller logged `Soft stop connected` only after the activation
+ended, although the soft stop published its release during it (TODO 36, `sketch.md`).
+
 ## Oscillator
 
 The sloshing oscillator (LinMot drive behind an Arduino Uno, see `OSCILLATOR.md`) runs on the
