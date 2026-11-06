@@ -58,7 +58,7 @@ constexpr std::uint16_t kReadyAF         = 0xC000;   // 11 in operation, with to
 
 struct IndraDriveConfig {
     std::string name_prefix = "Drv.";  // tag names: <prefix>StatusWord etc.
-    int         profibus_address = 3;  // for the gateway live list check
+    int         profibus_address = 2;  // for the gateway live list check
 
     // Command limits enforced by move_to(). Position units are selected by
     // the controller: degrees for angular drives and meters for linear drives.
