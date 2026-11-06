@@ -38,6 +38,34 @@ from the ladertanken Pi, playing motion files, with the same safety behaviour as
 | Position limits | −211 … +211 mm | The drive's backstop; the controller's travel goes inside it |
 | Current position | about 0 mm | Mid-travel |
 
+From the parameter file `Default.par` (IndraWorks export 2026-11-06 10:31), compared with the
+wavemaker's `WMDefault.par`:
+
+| | Oscillator | Wavemaker | Meaning |
+|---|---|---|---|
+| Hardware | FWA MPB-**05**V20, HCS02.1E-W0028, MSK050C-0300 (`-UG1`, brake), CSB01.1**N**-PB | MPB-04V24, HCS03.1E-W0070, MSK071E-0450 (`-UG0`), CSB01.1C-PB | The GSD notes in `resources/profibus_gsd/Info_eng.txt` only list firmware up to MPB-04 |
+| P-0-4084 profile | 0xFFFE | 0xFFFE | ✓ |
+| S-0-0032 operating mode | 0x001B | 0x001B | ✓ |
+| P-0-4080 inputs | P-0-4078, **S-0-0051**, S-0-0040, S-0-0390 (14 bytes) | P-0-4078, S-0-0386, S-0-0040, S-0-0390 | ✓ length. S-0-0051 is the motor encoder position, the same as S-0-0386 with one encoder |
+| P-0-4081 outputs | P-0-4077, S-0-0258, S-0-0259, S-0-0108 (12 bytes) | the same | ✓ |
+| P-0-4088 master communication config | 0x002A | does not exist (new in MPB-05) | Unknown; check in the MPB-05 docs |
+| P-0-4076 fieldbus cycle time | 1000 µs | 2000 µs | — |
+| PROFIBUS address (P-0-4025) | not in the file | not in the file | Probably the rotary switches |
+| S-0-0076/77/78 position scaling | linear, 1 × 10⁻⁷ m = 0.0001 mm | rotary, 0.0001° | `drive_m_per_unit: 0.001` |
+| S-0-0044/45/46 velocity scaling | linear, 1 × 10⁻⁶ m/min = 0.001 mm/min | rotary, 0.0001 rpm | `drive_velocity_per_unit_per_s: 6.0` |
+| S-0-0160/161/162 acceleration scaling | linear, 0.001 mm/s² | rotary, 0.001 rad/s² | — |
+| S-0-0123 feed constant | 20 mm/rev | 10 °/rev | — |
+| S-0-0049/50 limits | +211 / −211 mm | +500 / −550° | — |
+| S-0-0057 position window | 0.1 mm | | `in_position_tol_deg: 0.1` |
+| S-0-0055 position polarities | 0x1F (all inverted) | 0x10 | Check which way + goes |
+| S-0-0091 velocity limit | 96 000 mm/min (1.6 m/s) | | — |
+| S-0-0260 positioning acceleration | 20 000 mm/s² (20 m/s²) | 1000 rad/s² | — |
+| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | **Limits the oscillation** (decision 5) |
+| P-0-0525 / P-0-0540 holding brake | 0x0004 / **5 Nm** | 0x0000 / 0 Nm | Brake configured; about 1.5 kN at 20 mm/rev |
+| P-0-0119 best possible deceleration | 0 | 0 | Check its meaning for a vertical axis |
+| S-0-0273 max drive-off delay | 10 000 ms | | — |
+| S-0-0108 feedrate override (stored) | 0 % | | `enable()` writes 100 % (`indradrive.cpp:197`) |
+
 ## How the code is built today (what decides the design)
 
 - Each controller node owns its own gateway connection: `IndraDriveActuator` creates one
@@ -105,14 +133,24 @@ from the ladertanken Pi, playing motion files, with the same safety behaviour as
    - The drive limits come from `travel_minimum_m/maximum_m` (one set of limits, not two).
      `max_velocity_rpm` / `hold_velocity_rpm` stay in velocity tag units (here 10 mm/min each;
      0.1 m/s = 600). The ±211 mm in the drive stay as the backstop.
-5. **Vertical axis: gravity, brake and acceleration.** Control word 0 (our fault path, and the
-   gateway fault value) removes torque. Confirm that the holding brake is controlled by the
-   drive (P-0-0525 and related), that the stop reaction is best possible deceleration followed
-   by the brake, and decide where the slide rests when disabled. The controller sends no
-   acceleration (`max_acceleration_mps2()` is infinite), so the drive's positioning acceleration
-   (S-0-0260, 0.001 mm/s²) limits every move. A sine of stroke `s` and period `T` needs
-   `a = (s/2)(2π/T)²`; for example, 20 mm at 1 s needs 395 mm/s². If S-0-0260 is lower, the slide
-   lags and the stroke shrinks.
+5. **Vertical axis: gravity, brake, acceleration and jerk.** Control word 0 (our fault path,
+   and the gateway fault value) removes torque.
+   - **Brake:** the motor has a 5 Nm holding brake, and the drive controls it (P-0-0525 =
+     0x0004, P-0-0540; motor `-UG1`). At 20 mm/rev that holds about 1.5 kN. Still check that the
+     stop reaction (P-0-0119 = 0) brakes the slide before the brake engages rather than letting
+     it coast, and decide where the slide rests when disabled.
+   - **The drive limits every move.** The controller sends no acceleration
+     (`max_acceleration_mps2()` is infinite), so the drive's positioning acceleration (S-0-0260
+     = 20 m/s²) and **jerk (S-0-0193 = 3 m/s³)** do.
+   - **Jerk is the binding limit.** A sine of stroke `s` and period `T` needs acceleration
+     `(s/2)(2π/T)²` and jerk `(s/2)(2π/T)³`. Examples:
+     - 20 mm at 1 s: 0.39 m/s², 2.5 m/s³.
+     - 20 mm at 0.8 s: 0.62 m/s², 4.8 m/s³.
+     - 50 mm at 2 s: 0.25 m/s², 0.78 m/s³.
+
+     Above 3 m/s³ the drive rounds the motion off, so the slide lags and the stroke shrinks.
+     Raising S-0-0193 changes the drive's existing setup, so decide that with whoever owns it.
+     Until then, keep test files under 3 m/s³ (T7 prints it).
 6. **One rig at a time stays enforced by the Pi services.** The vertical oscillator runs as
    `oscillator@ladertanken`, which cannot start while `wavemaker@ladertanken` runs. The
    oscillator launch gets an `oscillator` argument (`sloshing` or `vertical`), so the LinMot rig
@@ -154,8 +192,8 @@ with the `FakeMGate` from item 21):
   Rest before, between and after.
 - File: the layout `read_motion()` reads (`play_dat.py:88`): `<i4` time step in ms, `<i4`
   channels (2), then `<f4` frames of position (m, relative to upright) and trigger (0).
-- Print each run's peak speed and peak acceleration, so they can be compared with the drive's
-  limits (decision 5).
+- Print each run's peak speed, peak acceleration and peak jerk (third difference / dt³), and
+  warn above the drive's jerk of 3 m/s³ (S-0-0193; decision 5).
 
 ## Config
 
@@ -210,7 +248,7 @@ cd ~/ros_ws && source install/setup.bash
 
    1. Replug the PROFIBUS cable to the other drive. That drive's plug is the end of the line:
       termination ON.
-   2. Run the monitor (read only) and check that the position is the one you expect from
+   2. Run the monitor and check that the position is the one you expect from
       that drive: about 0 mm on the oscillator, the flap angle on the wavemaker.
 
       ```bash
@@ -218,11 +256,14 @@ cd ~/ros_ws && source install/setup.bash
       ```
 
    3. Only then start the matching service.
-1. **Drive layout, read only (decision 2).** In IndraWorks, compare the oscillator drive's
-   P-0-4084, P-0-4080, P-0-4081 and S-0-0032 with `indradrive.h:1-15`, and note S-0-0260
-   (positioning acceleration) and the brake settings. Change nothing yet.
+1. **Drive layout, read only (decision 2).** Done 2026-11-06 from `Default.par`: it matches
+   (see *The oscillator drive*).
 2. **Monitor.** With the oscillator plugged in, `mgate_example` must print `live`, a position
    near 0 that follows a jog from IndraWorks (mm), and the diag number IndraWorks shows.
+   **The monitor is not read-only.** It writes the whole output block every cycle
+   (`write_only_dirty = false`), starting with control word 0 (drive off). Never run it while a
+   controller runs. A jog from IndraWorks during the monitor needs IndraWorks to take control
+   (e.g. easy startup mode), because the bus is commanding drive off.
 3. Brake: switch the drive off at standstill at mid-height; the slide must not drop.
 4. **Driver-level test move, no controller running.** E-stop within reach:
 
@@ -331,12 +372,22 @@ Not planned yet. It needs phase 2 first.
 
 ## Open questions
 
-- Does the oscillator drive's cyclic layout match `indradrive.h` (Commissioning step 1)?
+- **Why the oscillator is `slave=DOWN` (2026-11-06).** The monitor on the Pi showed the
+  Modbus link fine (207 cycles, no errors, 2.8 ms) but no PROFIBUS data exchange: status word,
+  position and diag all 0. The drive's layout matches, so the candidates are:
+  - the address set on the rotary switches;
+  - cable, plug or termination;
+  - 24 V on the control section;
+  - a different PROFIBUS ident for MPB-05 / CSB01.1N, so the gateway rejects it as the wrong
+    slave type.
+
+  The gateway's diagnosis for slave 2 says which.
+- P-0-4088 (MPB-05 only, 0x002A): does it affect PROFIBUS?
 - Phase 2: which drive leaves address 2, the oscillator (wavemaker yaml unchanged) or the
   wavemaker (oscillator setup unchanged)?
-- Its positioning acceleration S-0-0260 and jerk: enough for the strokes and periods wanted?
+- Raise the jerk S-0-0193 (3 m/s³) for faster strokes? It changes the drive's existing setup.
 - Travel, stroke, max speed and rest position wanted for the vertical oscillator.
-- Does the motor have a holding brake; is the axis counterbalanced?
+- Is the axis counterbalanced, or does the motor hold the load? The brake is 5 Nm.
 - Which way + goes (up or down).
 - Rig name: `vertical`? It becomes the namespace `oscillators/vertical` and the `play_dat` name.
 - The soft stop on GPIO17: is the vertical rig wired to the same button as the wavemaker?
