@@ -331,7 +331,6 @@ Result MGateDriver::read_inputs() {
         std::lock_guard<std::mutex> lk(mtx_);
         in_.load_from_registers(regs.data(), words, 0);
     }
-    have_data_.store(true, std::memory_order_release);
     return {};
 }
 
@@ -381,6 +380,10 @@ void MGateDriver::poll_loop() {
             last = exchange();
             ok   = static_cast<bool>(last);
             online_.store(ok, std::memory_order_relaxed);
+            // Only after a whole cycle (outputs, inputs and status) and online_: wait_for_data()
+            // callers may check online() and the live list at once. The release also publishes
+            // the online_ store above.
+            if (ok) have_data_.store(true, std::memory_order_release);
         } else {
             have_data_.store(false, std::memory_order_release);
         }

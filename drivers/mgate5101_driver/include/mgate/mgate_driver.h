@@ -98,7 +98,8 @@ public:
     void stop();
     bool online() const noexcept { return online_.load(std::memory_order_relaxed); }
 
-    // Blocks until at least one successful input read has happened.
+    // Blocks until at least one full successful cycle (outputs, inputs, status) has happened,
+    // so online() is true and the status area is filled when it returns true.
     bool wait_for_data(int timeout_ms);
 
     // Called from the poll thread after every cycle. Keep it short.

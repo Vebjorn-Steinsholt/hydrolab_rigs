@@ -48,9 +48,9 @@ wavemaker's `WMDefault.par`:
 | S-0-0032 operating mode | 0x001B | 0x001B | ✓ |
 | P-0-4080 inputs | P-0-4078, **S-0-0051**, S-0-0040, S-0-0390 (14 bytes) | P-0-4078, S-0-0386, S-0-0040, S-0-0390 | ✓ length. S-0-0051 is the motor encoder position, the same as S-0-0386 with one encoder |
 | P-0-4081 outputs | P-0-4077, S-0-0258, S-0-0259, S-0-0108 (12 bytes) | the same | ✓ |
-| P-0-4088 master communication config | 0x002A | does not exist (new in MPB-05) | Unknown; check in the MPB-05 docs |
+| P-0-4088 master communication config | 0x002A | not in the file (default 0) | Bits 15/14 = 00: commands from PROFIBUS. **Bits 2/1 = 01: a bus failure is only a warning (E4xxx) and the last command is kept** (Reference Book R911297317-08, p. 1335). See *PROFIBUS diagnosis log* |
 | P-0-4076 fieldbus cycle time | 1000 µs | 2000 µs | — |
-| PROFIBUS address (P-0-4025) | not in the file | not in the file | Probably the rotary switches |
+| PROFIBUS address (P-0-4025) | **2** (read on the drive) | not in the file | P-0-4031 = 0x00020002 in both files |
 | S-0-0076/77/78 position scaling | linear, 1 × 10⁻⁷ m = 0.0001 mm | rotary, 0.0001° | `drive_m_per_unit: 0.001` |
 | S-0-0044/45/46 velocity scaling | linear, 1 × 10⁻⁶ m/min = 0.001 mm/min | rotary, 0.0001 rpm | `drive_velocity_per_unit_per_s: 6.0` |
 | S-0-0160/161/162 acceleration scaling | linear, 0.001 mm/s² | rotary, 0.001 rad/s² | — |
@@ -370,19 +370,92 @@ Not planned yet. It needs phase 2 first.
   the MGate's maximum number of Modbus TCP clients; and a launch or service that allows both
   rigs, which `refuse_if_busy.sh` deliberately prevents (shared web port, soft stop on GPIO17).
 
+## PROFIBUS diagnosis log (2026-11-06)
+
+**Status: the oscillator drive does not enter data exchange.** It rejects the gateway's
+parameter telegram with code 137 (0x89), meaning unknown. The address, cable, ident, data
+lengths and module configuration are verified as matching. The wavemaker drive on the same
+gateway, cable and slave 2 configuration is live at once.
+
+### Symptom
+
+`mgate_example` on the Pi: `slave=DOWN`, status word, position, velocity and diag all 0. The
+Modbus link is fine (207 cycles, no read or write errors, about 2.8 ms per cycle). The gateway
+status is `0003` (Operate), with an empty live list.
+
+### Checked and ruled out
+
+| What | How | Result |
+|---|---|---|
+| Pi ↔ gateway link | `mgate_example` statistics | OK |
+| Gateway, cable, plug, slave 2 setup | Wavemaker drive plugged back in | Live at once (`0003 0400`) |
+| Cable and plug | Wavemaker's cable on the oscillator | No change |
+| Termination | Both ends | ON at both |
+| Address | P-0-4025 on the drive; drive's fieldbus view | 2. The drive receives the gateway's 30 ms watchdog, which only arrives in Set_Prm |
+| Baud rate | Drive's fieldbus view | 1500 kBaud found |
+| Ident | Diagnosis octets 5-6; MGate Autoscan | `0x0107`, as in the GSD |
+| Data lengths | `Default.par` P-0-4080/4081; drive's fieldbus view | 2+4+4+4 = 14 in, 2+4+4+2 = 12 out; no parameter channel |
+| Module configuration | MGate Manager slave 2; MGate Autoscan | Both `00 00 D6 E5` (ParamCh not used, F-module not used, Input 7 Words, Output 6 Words) |
+| Fieldbus parameters vs the wavemaker | `Default.par` vs `WMDefault.par` | Same P-0-4074, P-0-4080/4081 lengths, P-0-4084 = 0xFFFE. Differ only in P-0-4088 and P-0-4076 (1000 vs 2000 µs) |
+| GSD | MGate's GSD folder copied to the stick | `RX030107.gsd` V3.00, identical to the repo copy. No newer GSD on the Windows PC |
+| User parameter data | MGate Manager slave 2 | `80 00 08`, as in the GSD |
+| DPV1 | First user parameter byte `80` → `00`, MGate restarted | Same diagnosis. Restored from the backup |
+| Easy startup mode | P-0-4085 / P-0-4086 | 0, not active |
+| Leftover state, IndraWorks holding control | Closed IndraWorks, power-cycled the control section | Still DOWN (display A0013) |
+| Per-slave diagnosis in the gateway's Modbus registers | FC4 read of 64 words from 768 | Only status and live list |
+| Earlier master configuration | Searched for a Configurator III project; LabVIEW code | None. The 2018 vertOSc project (cRIO-9113) used address 11, two axes, 24 out / 28 in: not this drive's setup |
+
+### What the drive reports
+
+- **P-0-4073** alternates between `Wait-Prm` and `Wait-Cfg`; warning E4005. `Wait-Cfg` means
+  the drive accepted a parameter telegram (Reference Book p. 1318), so it gets past the standard
+  part of Set_Prm, then falls back to `Wait-Prm`.
+- **Slave diagnosis** `42 05 00 FF 01 07 05 81 00 00 89`:
+
+  | Octet | Value | Meaning |
+  |---|---|---|
+  | 1 | `42` | Prm_Fault, Station_Not_Ready. Cfg_Fault is **not** set |
+  | 2 | `05` | Prm_Req (asks to be parameterized again), plus the always-1 bit |
+  | 3 | `00` | – |
+  | 4 | `FF` | No master has parameterized it |
+  | 5-6 | `0107` | Ident, matches the GSD |
+  | 7-11 | `05 81 00 00 89` | Device-related DPV1 status block, value 137. `RX030107.gsd` lists 128-136, all parameter-telegram errors; 137 is not defined |
+
+### Next steps
+
+1. **Gateway experiment** (reversible from the backup): slave 2's user parameters `80 00 08` →
+   `80 00 00` (clears the Prm_Structure flag: no structured blocks follow), then `00 00 00`.
+   For each try note the diagnosis bytes and P-0-4073. Whatever works must also be tested with
+   the wavemaker; if nothing works, Import the backup and check the wavemaker is live again.
+2. **Rexroth support:** what diagnosis value 137 means on MPB-05V20 / CSB01.1N-PB, which
+   parameter data it expects, and whether there is a GSD for MPx-05 and later. Send the type
+   code, the diagnosis bytes, the GSD name and `80 00 08`.
+3. **The carriage drive's firmware.** If it is also MPB-05 and runs on its KUNBUS master,
+   MPB-05 works with this GSD family, and the difference is in what the master sends.
+
+### Side findings
+
+- **P-0-4088 = 0x002A is a safety question for a vertical axis.** Bits 2/1 = 01 make a bus
+  failure only a warning and keep the last command (hence E4005). The wavemaker has the
+  default 00: bus failure is an F4xxx error with the drive's error reaction. The controller's
+  fault path (control word 0, MGate fault value) relies on that. Proposal: 0x0028 before the
+  oscillator moves under the controller; it changes the drive's existing setup.
+- **The MGate's output fault timeout may be off** (Autoscan showed timeout 0). COMMISSIONING
+  item 5 / Commissioning step 6 above: check it before any `--move`.
+- `S-0-0051` (oscillator) vs `S-0-0386` (wavemaker) as the position input: same length,
+  same value with one encoder.
+
+### Backups (USB stick `LADERSCHTIC`)
+
+- `Mgate Backup/mgate_ladertanken_wavemaker_OK_2026_11_06.dat`: gateway configuration with
+  the wavemaker working, including GSD files.
+- `Default.par` (oscillator), `WMDefault.par` (wavemaker): IndraWorks exports, 2026-11-06.
+
 ## Open questions
 
-- **Why the oscillator is `slave=DOWN` (2026-11-06).** The monitor on the Pi showed the
-  Modbus link fine (207 cycles, no errors, 2.8 ms) but no PROFIBUS data exchange: status word,
-  position and diag all 0. The drive's layout matches, so the candidates are:
-  - the address set on the rotary switches;
-  - cable, plug or termination;
-  - 24 V on the control section;
-  - a different PROFIBUS ident for MPB-05 / CSB01.1N, so the gateway rejects it as the wrong
-    slave type.
-
-  The gateway's diagnosis for slave 2 says which.
-- P-0-4088 (MPB-05 only, 0x002A): does it affect PROFIBUS?
+- **Why the oscillator rejects the parameter telegram (code 137).** See *PROFIBUS diagnosis
+  log*.
+- P-0-4088 bits 2/1: set the oscillator to 0x0028 (bus failure as error)?
 - Phase 2: which drive leaves address 2, the oscillator (wavemaker yaml unchanged) or the
   wavemaker (oscillator setup unchanged)?
 - Raise the jerk S-0-0193 (3 m/s³) for faster strokes? It changes the drive's existing setup.
