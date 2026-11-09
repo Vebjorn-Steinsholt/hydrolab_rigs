@@ -55,6 +55,11 @@ IndraDriveActuator::IndraDriveActuator(rclcpp_lifecycle::LifecycleNode & node)
   declare_parameter_if_missing(node, "step_timeout_ms", 10000);
   declare_parameter_if_missing(node, "drive_motion", std::string("linear"));
   declare_parameter_if_missing(node, "actuator_lead_m_per_degree", 0.0);
+  declare_parameter_if_missing(node, "drive_m_per_unit", 1.0);
+  declare_parameter_if_missing(node, "drive_velocity_per_unit_per_s", 1.0 / 6.0);
+  declare_parameter_if_missing(node, "drive_direction", 1);
+  declare_parameter_if_missing(node, "travel_minimum_m", 0.0);
+  declare_parameter_if_missing(node, "travel_maximum_m", 1.0);
 
   scale_ = DriveScale::from_parameters(node);
   poll_interval_ms_ = node.get_parameter("poll_interval_ms").as_int();
@@ -114,8 +119,10 @@ IndraDriveActuator::IndraDriveActuator(rclcpp_lifecycle::LifecycleNode & node)
     drive_config.min_position = node.get_parameter("min_position_deg").as_double();
     drive_config.max_position = node.get_parameter("max_position_deg").as_double();
   } else {
-    drive_config.min_position = node.get_parameter("min_position_m").as_double();
-    drive_config.max_position = node.get_parameter("max_position_m").as_double();
+    const double a = scale_.to_drive(node.get_parameter("travel_minimum_m").as_double());
+    const double b = scale_.to_drive(node.get_parameter("travel_maximum_m").as_double());
+    drive_config.min_position = std::min(a, b);
+    drive_config.max_position = std::max(a, b);
   }
   drive_config.max_velocity_rpm = node.get_parameter("max_velocity_rpm").as_double();
   drive_config.in_position_tol_deg = node.get_parameter("in_position_tol_deg").as_double();
@@ -229,9 +236,12 @@ bool IndraDriveActuator::write_setpoint(const ActuatorSetpoint & setpoint)
     return false;
   }
 
-  // setpoint.velocity is the positioning-speed limit for this move, not a target speed.
-  // IndraDrive expects a positive feedrate in rpm; direction comes from the target position.
-  const double velocity_rpm = std::max(0.1, std::abs(setpoint.velocity) / 6.0);
+// setpoint.velocity is the positioning-speed limit in position units per second (to_actuator_setpoint).
+// The drive wants a positive speed in velocity tag units; direction comes from the target position.
+// Clamped to max_velocity_rpm_: the controller's cap (max_velocity_mps) comes back here through
+// m/s, and rounding can land 1e-13 above the limit, which move_to() refuses and the node faults.
+  const double velocity_rpm = std::clamp(
+    std::abs(setpoint.velocity) * scale_.velocity_per_unit_per_s, 0.1, max_velocity_rpm_);
   if (!indradrive_->move_to(setpoint.position, velocity_rpm)) {
     return false;
   }
@@ -248,8 +258,8 @@ int IndraDriveActuator::update_period_ms() const
 
 double IndraDriveActuator::max_velocity_mps() const
 {
-  // Inverse of write_setpoint(): rpm = |velocity in actuator units per second| / 6.
-  return scale_.rate_to_m(max_velocity_rpm_ * 6.0);
+  // Inverse of write_setpoint(): position units per second = velocity units / velocity_per_unit_per_s.
+  return std::abs(scale_.rate_to_m(max_velocity_rpm_ / scale_.velocity_per_unit_per_s));
 }
 double IndraDriveActuator::max_acceleration_mps2() const
 {

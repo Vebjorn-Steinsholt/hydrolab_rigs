@@ -15,11 +15,13 @@ struct DriveScale
   double upright_drive{0.0};
   double upright_m{0.0};
   double m_per_unit{1.0};
+  double velocity_per_unit_per_s{1.0 / 6.0}; // velocity tag units per (position unit /s)
+  double direction{1.0}; // +1 or -1: rig (+ = up) to drive
 
-  double to_m(double drive) const{return upright_m + (drive - upright_drive) * m_per_unit;}
-  double to_drive(double m) const{return upright_drive + (m - upright_m) / m_per_unit;}
-  double rate_to_m(double drive_per_s) const{return drive_per_s * m_per_unit;}
-  double rate_to_drive(double m_per_s) const{return m_per_s / m_per_unit;}
+  double to_m(double drive) const{return upright_m + direction * (drive - upright_drive) * m_per_unit;}
+  double to_drive(double m) const{return upright_drive + direction * (m - upright_m) / m_per_unit;}
+  double rate_to_m(double r) const{return r * direction * m_per_unit;}
+  double rate_to_drive(double v) const{return direction * v / m_per_unit;}
 
   static DriveScale from_parameters(const rclcpp_lifecycle::LifecycleNode & node)
   {
@@ -29,8 +31,20 @@ struct DriveScale
     if (!std::isfinite(scale.upright_m)) {
       throw std::invalid_argument("upright_position_m must be finite");
     }
+    scale.direction = node.get_parameter("drive_direction").as_int();
+    if ((scale.direction != 1 && scale.direction != -1)) {
+      throw std::invalid_argument("drive_direction must be +1 or -1");
+    }
+    scale.velocity_per_unit_per_s = node.get_parameter("drive_velocity_per_unit_per_s").as_double();
+    if (!std::isfinite(scale.velocity_per_unit_per_s) || scale.velocity_per_unit_per_s <= 0.0) {
+      throw std::invalid_argument("drive_velocity_per_unit_per_s must be a positive finite value");
+    }
     if(motion == "linear") {
-      scale.upright_drive = scale.upright_m;
+      scale.m_per_unit = node.get_parameter("drive_m_per_unit").as_double();
+      if (!std::isfinite(scale.m_per_unit) || scale.m_per_unit <= 0.0) {
+        throw std::invalid_argument("drive_m_per_unit must be a positive finite value");
+      }
+      scale.upright_drive = scale.direction * scale.upright_m / scale.m_per_unit;
       return scale;
     }
     if(motion != "angular") {

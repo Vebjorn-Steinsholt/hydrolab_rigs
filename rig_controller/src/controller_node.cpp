@@ -49,8 +49,9 @@ using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface
 namespace
 {
 
-// The actuator for drive_name: "indradrive" (MGate gateway, the wavemakers) or "linmot"
-// (Arduino serial-to-CAN bridge, the oscillator). Throws on anything else, which fails configure.
+// The actuator for drive_name: "indradrive" (Rexroth IndraDrive behind an MGate gateway) or
+// "linmot" (Arduino serial-to-CAN bridge). Any rig can use either. Throws on anything else,
+// which fails configure.
 std::unique_ptr<rig_controller::Actuator> make_actuator(rclcpp_lifecycle::LifecycleNode & node)
 {
   const std::string name = node.get_parameter("drive_name").as_string();
@@ -62,7 +63,7 @@ std::unique_ptr<rig_controller::Actuator> make_actuator(rclcpp_lifecycle::Lifecy
   }
   if (name.empty()) {
     throw std::invalid_argument(
-        "drive_name must be set to 'indradrive' or 'linmot, or implemented as new drives in the future.");
+        "drive_name must be set to 'indradrive' or 'linmot', or implemented as new drives in the future.");
   }
   throw std::invalid_argument(
           "drive_name must be 'indradrive' or 'linmot', not '" + name + "'");
@@ -103,6 +104,9 @@ public:
     declare_parameter<double>("hinge_height", 0.0);
     declare_parameter<double>("actuator_upright_angle_deg", 0.0);
     declare_parameter<std::string>("drive_motion", "linear");
+    declare_parameter<double>("drive_velocity_per_unit_per_s", 1.0 / 6.0);
+    declare_parameter<double>("drive_m_per_unit", 1.0);
+    declare_parameter<int>("drive_direction", 1);
     if (get_parameter("drive_motion").as_string() == "linear") {
       declare_parameter<double>("travel_minimum_m", 0.0);
       declare_parameter<double>("travel_maximum_m", 1.0);

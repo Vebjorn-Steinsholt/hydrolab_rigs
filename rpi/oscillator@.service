@@ -1,5 +1,5 @@
 [Unit]
-Description=Sloshing oscillator on %i's Pi (oscillator.launch.py)
+Description=Oscillator on %i's Pi (oscillator.launch.py)
 Wants=network-online.target
 After=network-online.target
 
@@ -19,4 +19,4 @@ TimeoutStopSec=45
 Restart=no
 
 # No [Install] section on purpose: the unit cannot be enabled, so it never starts at boot.
-# The drive is switched on, and homes if needed, as soon as oscillator.launch.py runs.
+# The drive is switched on as soon as oscillator.launch.py runs; the LinMot also homes if needed.

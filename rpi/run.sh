@@ -15,7 +15,7 @@ case "${RIG:-wavemaker}" in
     ;;
   oscillator)
     launch=(oscillator_bringup oscillator.launch.py)
-    args=(port:="${PORT:-8080}")
+    args=(port:="${PORT:-8080}" oscillator:="${OSCILLATOR:-sloshing}")
     ;;
   *) echo "RIG must be wavemaker or oscillator, not '$RIG'" >&2; exit 1 ;;
 esac

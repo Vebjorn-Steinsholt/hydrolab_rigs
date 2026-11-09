@@ -27,3 +27,38 @@
 /oscillators/sloshing/bridge:
   ros__parameters:
     rig: oscillator                   # topic names: oscillator_state, oscillator_message
+
+/oscillators/vertical/controller:
+  ros__parameters:
+    rig: oscillator
+    drive_name: indradrive
+    driver_address: "192.168.1.70"   # the ladertanken gateway, slave 2 (replugged)
+    driver_port: 502
+    driver_unit_id: 1
+    input_base_reg: 0
+    input_word_count: 7              # 14 bytes: status, position, velocity, diag (U32)
+    output_base_reg: 0
+    output_word_count: 6             # 12 bytes: control, target, speed cap, override
+    input_uses_fc4: true
+    status_base_reg: 768
+    status_word_count: 9
+    poll_interval_ms: 20
+    write_only_dirty: false
+    profibus_address: 2
+    drive_motion: linear
+    drive_m_per_unit: 0.001              # T2: position tag in mm (0.0001 mm resolution)
+    drive_velocity_per_unit_per_s: 6.0   # T2: velocity tag in 10 mm/min (0.001 mm/min resolution)
+    drive_direction: -1                  # T2: + command moves the slide down; rig uses + = up
+    upright_position_m: 0.0          # drive position about 0 mm at mid-travel
+    travel_minimum_m: -0.200         # inside the drive's -211 mm
+    travel_maximum_m: 0.200          # inside the drive's +211 mm
+    max_velocity_rpm: 600.0          # velocity tag units: 600 x 10 mm/min = 0.1 m/s - set from the rig
+    hold_velocity_rpm: 60.0          # 10 mm/s
+    in_position_tol_deg: 0.1         # position tag units: 0.1 mm
+    step_timeout_ms: 10000
+    return_to_upright_max_velocity_mps: 0.02
+    # acceleration caps (max_goal_acceleration_mps2) and min_period_s: from the rig
+
+/oscillators/vertical/bridge:
+  ros__parameters:
+    rig: oscillator                   # topic names: oscillator_state, oscillator_message

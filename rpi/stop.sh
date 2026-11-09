@@ -11,7 +11,7 @@ source /opt/ros/jazzy/setup.bash
 source "$HOME/ros_ws/install/setup.bash"
 
 case "${RIG:-wavemaker}" in
-  oscillator) namespace=/oscillators/sloshing ;;
+    oscillator) namespace="/oscillators/${OSCILLATOR:-sloshing}" ;;
   *)          namespace="/wavemakers/$WAVEMAKER" ;;
 esac
 

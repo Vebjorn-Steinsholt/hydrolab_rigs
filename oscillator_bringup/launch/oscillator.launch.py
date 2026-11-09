@@ -1,14 +1,18 @@
 """
-Everything the sloshing oscillator runs.
+Everything an oscillator runs: sloshing (LinMot) or vertical (IndraDrive).
 
-Controller, bridge, lifecycle manager, soft stop and web page. Started on the Pi, normally
-through the oscillator service (see rpi/README.md):
+Controller, bridge, lifecycle manager, soft stop and web page, in oscillators/<oscillator>. The
+vertical oscillator's drive is on the ladertanken gateway. Started on the Pi, normally through the
+oscillator service (see rpi/README.md):
+...
 
-    ros2 launch oscillator_bringup oscillator.launch.py port:=8080
 
-The lifecycle manager configures and activates the controller at start, which homes the drive
-if it is not homed (about 20 s, the slide moves to its home stop). Ctrl-C (SIGINT) stops
-everything and the controller switches the drive off.
+    ros2 launch oscillator_bringup oscillator.launch.py port:=8080                       # sloshing
+    ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical port:=8080
+
+The lifecycle manager configures and activates the controller at start, which switches the
+drive on. The LinMot also homes if it is not homed (about 20 s, the slide moves to its home
+stop). Ctrl-C (SIGINT) stops everything and the controller switches the drive off.
 """
 
 from ament_index_python.packages import get_package_share_directory
@@ -19,16 +23,21 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-NAMESPACE = 'oscillators/sloshing'
+OSCILLATORS = ['sloshing', 'vertical']
 
 
 def generate_launch_description():
+    namespace = ['oscillators/', LaunchConfiguration('oscillator')]
     config_file = get_package_share_directory('oscillator_bringup') + '/config/oscillator.yaml'
     web_launch = get_package_share_directory('rig_web') + '/launch/web.launch.py'
     bond_timeout = ParameterValue(LaunchConfiguration('bond_timeout'), value_type=float)
 
     return LaunchDescription([
         DeclareLaunchArgument('port', default_value='8080', description='Web page port'),
+        DeclareLaunchArgument(
+            'oscillator', default_value='sloshing', choices=OSCILLATORS,
+            description='Which oscillator: sloshing (LinMot) or vertical (IndraDrive on the '
+                        'ladertanken gateway). Picks its yaml blocks and its namespace'),
         DeclareLaunchArgument(
             'soft_stop_pin', default_value='17', description='GPIO pin for soft stop button'),
         DeclareLaunchArgument(
@@ -42,7 +51,7 @@ def generate_launch_description():
         LifecycleNode(
             package='rig_controller',
             executable='controller_node',
-            namespace=NAMESPACE,
+            namespace=namespace,
             name='controller',
             parameters=[config_file, {'bond_timeout': bond_timeout}],
             output='screen',
@@ -50,7 +59,7 @@ def generate_launch_description():
         LifecycleNode(
             package='rig_controller',
             executable='bridge_node',
-            namespace=NAMESPACE,
+            namespace=namespace,
             name='bridge',
             parameters=[config_file, {'bond_timeout': bond_timeout}],
             output='screen',
@@ -60,7 +69,7 @@ def generate_launch_description():
         Node(
             package='nav2_lifecycle_manager',
             executable='lifecycle_manager',
-            namespace=NAMESPACE,
+            namespace=namespace,
             name='lifecycle_manager',
             parameters=[{
                 'autostart': True,
@@ -76,7 +85,7 @@ def generate_launch_description():
         Node(
             package='rig_controller',
             executable='soft_stop',
-            namespace=NAMESPACE,
+            namespace=namespace,
             name='soft_stop',
             parameters=[{
                 'pin': ParameterValue(LaunchConfiguration('soft_stop_pin'), value_type=int),
@@ -87,6 +96,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(web_launch),
             launch_arguments={
                 'rig': 'oscillator',
+                'namespace': namespace,
                 'port': LaunchConfiguration('port'),
                 'idle_timeout_s': LaunchConfiguration('idle_timeout_s'),
             }.items(),

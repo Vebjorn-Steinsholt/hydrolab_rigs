@@ -1,6 +1,8 @@
 # Sketch: IndraDrive C vertical oscillator on the ladertanken MGate
 
-Line numbers are as of commit `6b994c7` plus the uncommitted work on `bugfix-items-20-25`.
+Line numbers are as of commit `6b994c7` plus the uncommitted work on `bugfix-items-20-25`, except
+*Your tasks* and *Task details*: commit `3befe17` on `feat-vertical-oscillator` plus the
+uncommitted T2, T3 and T4 work (2026-11-09).
 
 ## Scope (2026-11-06)
 
@@ -37,13 +39,16 @@ from the ladertanken Pi, playing motion files, with the same safety behaviour as
 | Torque/force resolution | 0.1 % | Not in the cyclic data |
 | Position limits | −211 … +211 mm | The drive's backstop; the controller's travel goes inside it |
 | Current position | about 0 mm | Mid-travel |
+| Direction (measured 2026-11-09) | **+ command = down** | The rig uses + = up, so T2 flips the sign: `drive_direction: -1` (decision 4) |
+| Scaling check (2026-11-09) | `--move` +5: drive 4.925 mm, sensor 4.940 mm at 1.68 mm/s | `drive_m_per_unit: 0.001` and `drive_velocity_per_unit_per_s: 6.0` confirmed (see *PROFIBUS diagnosis log*, first move) |
+| Power section | Needs mains switched on at the cabinet (button) | Without it the drive stays at A0013 (`bb`) and `enable()` times out waiting for `Ab` |
 
 From the parameter file `Default.par` (IndraWorks export 2026-11-06 10:31), compared with the
 wavemaker's `WMDefault.par`:
 
 | | Oscillator | Wavemaker | Meaning |
 |---|---|---|---|
-| Hardware | FWA MPB-**05**V20, HCS02.1E-W0028, MSK050C-0300 (`-UG1`, brake), CSB01.1**N**-PB | MPB-04V24, HCS03.1E-W0070, MSK071E-0450 (`-UG0`), CSB01.1C-PB | The GSD notes in `resources/profibus_gsd/Info_eng.txt` only list firmware up to MPB-04 |
+| Hardware | FWA MPB-**05**V20, HCS02.1E-W0028, MSK050C-0300 (`-UG1`, brake), CSB01.1**N**-PB | MPB-04V24, HCS03.1E-W0070, MSK071E-0450 (`-UG0`), CSB01.1C-PB | **MPx-05 needs `RX060107.gsd`** (Fail_Safe): the repo's GSD files only cover up to MPB-04. See *PROFIBUS diagnosis log* |
 | P-0-4084 profile | 0xFFFE | 0xFFFE | ✓ |
 | S-0-0032 operating mode | 0x001B | 0x001B | ✓ |
 | P-0-4080 inputs | P-0-4078, **S-0-0051**, S-0-0040, S-0-0390 (14 bytes) | P-0-4078, S-0-0386, S-0-0040, S-0-0390 | ✓ length. S-0-0051 is the motor encoder position, the same as S-0-0386 with one encoder |
@@ -57,7 +62,7 @@ wavemaker's `WMDefault.par`:
 | S-0-0123 feed constant | 20 mm/rev | 10 °/rev | — |
 | S-0-0049/50 limits | +211 / −211 mm | +500 / −550° | — |
 | S-0-0057 position window | 0.1 mm | | `in_position_tol_deg: 0.1` |
-| S-0-0055 position polarities | 0x1F (all inverted) | 0x10 | Check which way + goes |
+| S-0-0055 position polarities | 0x1F (all inverted) | 0x10 | Result: + = down. Left unchanged; the sign is flipped in the controller (`drive_direction: -1`) |
 | S-0-0091 velocity limit | 96 000 mm/min (1.6 m/s) | | — |
 | S-0-0260 positioning acceleration | 20 000 mm/s² (20 m/s²) | 1000 rad/s² | — |
 | S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | **Limits the oscillation** (decision 5) |
@@ -130,6 +135,11 @@ wavemaker's `WMDefault.par`:
    - `drive_velocity_per_unit_per_s`: velocity tag units per (position tag unit per second).
      **6.0** here (1 mm/s = 60 mm/min = 6 × 10 mm/min). Angular default **1/6** (deg/s → rpm).
      It replaces the `/ 6` in `write_setpoint()` and the `* 6.0` in `max_velocity_mps()`.
+   - `drive_direction`: +1 or −1, the sign between rig coordinates (+ = up) and drive
+     coordinates. **−1 here** (+ command moves down, measured 2026-11-09); default +1 keeps
+     ladertanken unchanged. It applies to setpoints, position feedback and the drive limits
+     (min and max swap on the drive side). The velocity cap and `max_velocity_mps()` use
+     magnitudes only, so the cap stays positive. The drive's S-0-0055 stays as it is.
    - The drive limits come from `travel_minimum_m/maximum_m` (one set of limits, not two).
      `max_velocity_rpm` / `hold_velocity_rpm` stay in velocity tag units (here 10 mm/min each;
      0.1 m/s = 600). The ±211 mm in the drive stay as the backstop.
@@ -160,18 +170,15 @@ wavemaker's `WMDefault.par`:
 
 ## Your tasks
 
-| # | File | Where | What | Done when |
-|---|---|---|---|---|
-| T2 | `rig_controller/src/drive_scale.hpp`, `indradrive_actuator.cpp` | `DriveScale::from_parameters` linear branch; `write_setpoint()` (234); `max_velocity_mps()` (252); limits (113-119) | Decision 4: `drive_m_per_unit`, `drive_velocity_per_unit_per_s`, limits from travel | A 10 mm goal moves 10 mm; a 0.05 m/s cap is sent as 300; ladertanken's numbers unchanged |
-| T3 | `rig_controller/src/controller_node.cpp` | `make_actuator()` (52-68), `on_configure` rig checks | Decision 3: `rig: oscillator` + `indradrive` configures | Fake gateway: configure and activate succeed |
-| T4 | `oscillator_bringup/config/oscillator.yaml` | new block after `sloshing` | The vertical oscillator's parameters (see *Config*). It must be in this file: `play_dat` / `rig_limits` look the name up there | `play_dat ... vertical --rig oscillator --dry-run` prints the right limits and namespace |
-| T5 | `oscillator_bringup/launch/oscillator.launch.py`, `rpi/run.sh`, `/etc/default/oscillator` on the Pi | `NAMESPACE`; `oscillator)` case | Decision 6: launch argument `oscillator` (default `sloshing`) → namespace `oscillators/<name>`; `run.sh` passes `oscillator:="${OSCILLATOR:-sloshing}"`; the Pi sets `OSCILLATOR=vertical`. The docstring and homing comments are LinMot-specific | `sudo systemctl start oscillator@ladertanken` brings up `/oscillators/vertical/controller`; it refuses while the wavemaker runs |
-| T7 | new tool, e.g. `rig_controller/src/make_osc_dat.py` | stopgap for *Oscillator motion generator* | Sine test runs as a `.dat` (spec below) | `play_dat FILE --rig oscillator ... --dry-run` lists every run as `OK` |
-| T8 | `rig_controller/src/rig_limits.py` | `limits_from_parameters` linear branch (87-92) | Speed limit for a linear IndraDrive from T2's parameters: `max_velocity_rpm / drive_velocity_per_unit_per_s × drive_m_per_unit` | `play_dat` without `--max-velocity-mps` uses the drive's limit |
-| T9 | `README.md`, `COMMISSIONING.md`, `TODO.md` | parameter table; new rig section; replug procedure; item 19 | Document the rig, close item 19 | — |
-| T10 (optional) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed for the first test: the defaults suit the oscillator | `ros2 run mgate5101_driver mgate_example --move --step 50` moves 50 mm and back |
+| # | File | Where | What | Done when | Left (2026-11-09) |
+|---|---|---|---|---|---|
+| T5 | the ladertanken Pi: `/etc/systemd/system/oscillator@.service`, `/etc/default/oscillator` | — | Decision 6: install the changed unit, set `OSCILLATOR=vertical` | `sudo systemctl start oscillator@ladertanken` brings up `/oscillators/vertical/controller`; it refuses while the wavemaker runs | Pi install, checks. **Decide: switching between sloshing and vertical** |
+| T7 | new tool, e.g. `rig_controller/src/make_osc_dat.py` | stopgap for *Oscillator motion generator* | Sine test runs as a `.dat` (spec below) | `play_dat FILE --rig oscillator ... --dry-run` lists every run as `OK` | All. Ramp: cosine (decided) |
+| T8 | `rig_controller/src/rig_limits.py`, `wavemaker_bringup/config/wavemakers.yaml` | `limits_from_parameters` linear branch (87-92); lilletanken and mclab blocks | Speed limit for a linear IndraDrive from T2's parameters: `max_velocity_rpm / drive_velocity_per_unit_per_s × drive_m_per_unit` | `play_dat` without `--max-velocity-mps` uses the drive's limit | All, plus `max_velocity_rpm: 100.0` in lilletanken's and mclab's blocks (decided) |
+| T9 | `README.md`, `COMMISSIONING.md`, `TODO.md`, `rpi/README.md` | parameter table; new rig section; replug procedure; items 19 and 30 | Document the rig, close item 19 | — | All |
+| T10 (optional) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed: `--move` did its job on 2026-11-09 | `ros2 run mgate5101_driver mgate_example --move --step 50` moves 50 mm and back | Not needed now |
 
-Order: T2 → T3/T4 → T5 → T7 → T8; T9 alongside.
+Order: T5 → T7 → T8; T9 alongside.
 
 Tests Claude can write once you hand them over (`rig_controller/test/test_indradrive_actuator.cpp`,
 with the `FakeMGate` from item 21):
@@ -180,57 +187,205 @@ with the `FakeMGate` from item 21):
   PosVelocity (300 units = 3000 mm/min = 50 mm/s). `max_velocity_mps()` with
   `max_velocity_rpm: 600` returns 0.1. The angular defaults leave ladertanken's numbers
   unchanged.
-- `test_rig_limits.py` for T8: the same 0.1 m/s from the yaml.
+- T2 with `drive_direction: -1`: a +0.1 m setpoint writes raw −1 000 000 (−100 mm), a raw
+  drive position of +50 mm reads back as −0.05 m, the speed cap is still +3 000 000, and
+  travel −0.2…+0.2 m becomes drive limits −200…+200 mm with min and max swapped.
+- `test_rig_limits.py` for T8: the same 0.1 m/s from the yaml. The existing
+  `test_linear_indradrive_has_no_speed_limit` (`test_rig_limits.py:37-40`) expects `None` and
+  fails after T8; it then expects 100 / (1/6) × 1 = 600 m/s from the yaml's `max_velocity_rpm: 100.0`
+  (factor 1: their units are not set yet, TODO item 19).
+- T3: configure → activate with the vertical block's parameters (including `drive_direction` as
+  the int `-1`) on the fake gateway, in `test_controller_node.cpp`.
 
 ### T7 spec: oscillator test file
 
 - Arguments: output file, then runs as `STROKE_M:PERIOD_S:PERIODS`; options `--dt-ms` (default
   20, as `generate_waves --dt`), `--ramp-periods` (2), `--pause-s` (5, at least 1: `play_dat`
   splits runs at 1 s of rest).
-- Each run: a sine of half the stroke, a whole number of periods, the amplitude ramped linearly
-  at both ends (as `apply_ramps` in `generate_waves.py:301`), first and last sample exactly 0.
-  Rest before, between and after.
+- Each run: a sine of half the stroke, a whole number of periods, the amplitude ramped at both
+  ends, first and last sample exactly 0. Rest before, between and after.
 - File: the layout `read_motion()` reads (`play_dat.py:88`): `<i4` time step in ms, `<i4`
   channels (2), then `<f4` frames of position (m, relative to upright) and trigger (0).
 - Print each run's peak speed, peak acceleration and peak jerk (third difference / dt³), and
   warn above the drive's jerk of 3 m/s³ (S-0-0193; decision 5).
 
-## Config
+**Ramp shape: cosine (decided 2026-11-09, option (a) below).** A linear ramp (as `apply_ramps` in `generate_waves.py:301`) makes the
+amplitude's slope jump from A/T_ramp to 0 at the ramp's ends. That happens where sin = 0, so the
+velocity stays continuous, but the acceleration steps by 2Aω/T_ramp, and the third difference
+sees that as a jerk spike of about step / dt. Computed for stroke 20 mm, T = 1 s, dt 20 ms,
+2 ramp periods:
 
-Block for T4, in `oscillator_bringup/config/oscillator.yaml`. The gateway part is ladertanken's,
-because the oscillator takes the wavemaker's place on slave 2:
+| Ramp | Peak speed | Peak accel. | Peak jerk (3rd difference) |
+|---|---|---|---|
+| Linear (`apply_ramps`) | 0.063 m/s | 0.39 m/s² | **5.6 m/s³** |
+| Cosine | 0.063 m/s | 0.40 m/s² | 2.7 m/s³ |
+| Steady sine, `(s/2)(2π/T)ⁿ` | 0.063 | 0.39 | 2.5 |
 
-```yaml
-/oscillators/vertical/controller:
-  ros__parameters:
-    rig: oscillator
-    drive_name: indradrive
-    driver_address: "192.168.1.70"   # the ladertanken gateway, slave 2 (replugged)
-    driver_port: 502
-    driver_unit_id: 1
-    input_base_reg: 0
-    input_word_count: 7              # 14 bytes: status, position, velocity, diag (U32)
-    output_base_reg: 0
-    output_word_count: 6             # 12 bytes: control, target, speed cap, override
-    input_uses_fc4: true
-    status_base_reg: 768
-    status_word_count: 9
-    poll_interval_ms: 20
-    write_only_dirty: false
-    profibus_address: 2
-    drive_motion: linear
-    drive_m_per_unit: 0.001              # T2: position tag in mm (0.0001 mm resolution)
-    drive_velocity_per_unit_per_s: 6.0   # T2: velocity tag in 10 mm/min (0.001 mm/min resolution)
-    upright_position_m: 0.0          # drive position about 0 mm at mid-travel
-    travel_minimum_m: -0.200         # inside the drive's -211 mm
-    travel_maximum_m: 0.200          # inside the drive's +211 mm
-    max_velocity_rpm: 600.0          # velocity tag units: 600 x 10 mm/min = 0.1 m/s - set from the rig
-    hold_velocity_rpm: 60.0          # 10 mm/s
-    in_position_tol_deg: 0.1         # position tag units: 0.1 mm
-    step_timeout_ms: 10000
-    return_to_upright_max_velocity_mps: 0.02
-    # acceleration caps (max_goal_acceleration_mps2) and min_period_s: from the rig
+The spike grows as dt shrinks, so with a linear ramp the warning fires on files the drive
+handles: its jerk limit only smooths the step a little. Either:
+
+- (a) **Cosine ramp (recommended):** `r = (1 - np.cos(np.pi * np.linspace(0, 1, n_ramp))) / 2`
+  in place of `apply_ramps`' `linspace`. Its slope is 0 at both ends, so the measured peak
+  matches the sine's.
+- (b) Keep the linear ramp and warn on the steady-state jerk `(s/2)(2π/T)³`, printing the
+  measured peak next to it.
+
+Structure:
+
+| Function | Does |
+|---|---|
+| `parse_run(text) -> (stroke_m, period_s, periods)` | Splits `"0.02:1.0:10"`; stroke > 0, period > 0, periods a whole number ≥ 2 × ramp periods + 1 |
+| `make_run(stroke_m, period_s, periods, dt_s, ramp_periods) -> ndarray` | Sine with ramps, exactly 0 at both ends |
+| `peaks(x, dt_s) -> (v, a, j)` | `np.abs(np.diff(x, k)).max() / dt_s**k` for k = 1, 2, 3 |
+| `write_dat(path, dt_ms, x)` | Header and frames |
+| `main()` | Rest, runs and rest; prints the table and warnings; writes the file |
+
+Details that matter for `play_dat`:
+
+- **Samples:** `n = round(periods * period_s / dt_s) + 1`, `t = np.arange(n) * dt_s`. The `+ 1`
+  puts the last sample on `t = periods × T`, where sin = 0. Refuse a period that is not a whole
+  number of samples (0.7 s at 20 ms is 35, 0.73 s is 36.5): the run would stop mid-period and
+  the ramp would force the end to 0.
+- **Rest:** `np.zeros(round(pause_s / dt_s))`. `play_dat` splits only where |x| is at most the
+  threshold (default **exact zeros**) and the speed is at most 1e-6 m/s for at least 1 s
+  (`play_dat.py:53-54`), so the rest must be real `0.0`; float32 keeps it exact.
+- **Positions:** metres relative to upright (`play_dat.py:10`). Upright is 0 here and + is up
+  after T2, so the sine is the rig position directly.
+- **Writing:**
+
+  ```python
+  with open(path, 'wb') as f:
+      np.array([dt_ms, 2], dtype='<i4').tofile(f)
+      np.column_stack([x, np.zeros_like(x)]).astype('<f4').tofile(f)
+  ```
+
+- **Peaks** on the float64 array, before the float32 cast.
+- **Output**, for example:
+
+  ```
+  run  stroke_m  period_s  periods  v_peak  a_peak  j_peak   duration_s
+  1    0.005     2.0       10       0.008   0.025   0.08     20.0
+  2    0.020     0.8       20       0.079   0.62    4.84 !   16.0
+  ! jerk above 3.0 m/s^3 (S-0-0193): the drive will round the motion off
+  ```
+
+- **Install** next to `play_dat` in `rig_controller/CMakeLists.txt` (57-61); Claude can add it:
+
+  ```cmake
+  install(PROGRAMS src/make_osc_dat.py
+    DESTINATION lib/${PROJECT_NAME}
+    RENAME make_osc_dat
+  )
+  ```
+
+- **Check:**
+
+  ```bash
+  ros2 run rig_controller make_osc_dat osc_test.dat 0.005:2:10 0.02:1:10
+  ros2 run rig_controller play_dat osc_test.dat vertical --rig oscillator --max-velocity-mps 0.05 --dry-run
+  ```
+
+  Every run `OK`, and as many runs as `STROKE:PERIOD:PERIODS` arguments.
+
+## Task details
+
+What is left of each task, with the reasons. Done parts are left out.
+
+### T5: the Pi
+
+The repo part is done (launch argument `oscillator`, `run.sh`, `stop.sh`, the unit's texts). Left:
+putting it on the ladertanken Pi, the switching decision, and the checks on the rig.
+
+**On the Pi, after `git pull` and `colcon build`:** the unit file changed, so copy it again:
+
+```bash
+sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/oscillator@.service /etc/systemd/system/
+sudo systemctl daemon-reload
 ```
+
+Then pick the vertical oscillator:
+
+```bash
+sudoedit /etc/default/oscillator     # add: OSCILLATOR=vertical
+cat /etc/default/oscillator          # ROS_DOMAIN_ID=1, PORT=8080, OSCILLATOR=vertical
+```
+
+The file exists if the sloshing rig was installed (rpi/README.md, *Oscillator*); if not, create it
+with `ROS_DOMAIN_ID` as in `/etc/default/wavemaker` (run.sh refuses domain 0 or none). The
+service requires the file (`EnvironmentFile=` without `-`).
+
+**Decide: switching between sloshing and vertical.** Both run on the ladertanken Pi as the same
+unit, `oscillator@ladertanken`, and the unit's instance (`%i`) is the Pi user, not the
+oscillator. With `OSCILLATOR=vertical` in the file, `start_oscillator.bat` and `systemctl start
+oscillator@ladertanken` start the vertical rig, and the sloshing rig only after editing it back.
+Options:
+
+- (a) **Edit the file to switch (recommended for phase 1):** one line, no new unit. Only one rig
+  is connected and tested at a time anyway. Add the switch to the replug procedure
+  (*Commissioning* step 0).
+- (b) A second unit, `vertical@.service`, with `Environment=OSCILLATOR=vertical`. Then
+  `refuse_if_busy.sh` takes a list of units (wavemaker and the other oscillator), the wavemaker's
+  unit and `windows/_rig.bat` learn the third rig, and the sudoers line gets two more commands.
+
+**Check, in order:**
+
+1. On the Pi, with the oscillator drive plugged in and its mains on (*Commissioning* step 0):
+
+   ```bash
+   sudo systemctl start oscillator@ladertanken
+   journalctl -u oscillator@ladertanken -f -o cat     # "Drive status: ..." from the controller
+   ros2 node list   # /oscillators/vertical/{controller,bridge,lifecycle_manager,soft_stop,web}
+   ```
+
+2. The page on port 8080 shows the bridge's state (`ready`), which proves the bridge block and
+   the web namespace.
+3. `sudo systemctl stop oscillator@ladertanken` finishes in a few seconds, not 15 s
+   (`stop.sh`), and the drive switches off with the brake holding.
+4. With `wavemaker@ladertanken` running, starting `oscillator@ladertanken` is refused
+   (`refuse_if_busy.sh`, already there).
+5. The sloshing rig still starts with `OSCILLATOR` removed or set to `sloshing`, when it is
+   connected (or check with `--show-args` and the default).
+
+### T8: rig_limits
+
+`rig_controller/src/rig_limits.py`, linear branch (87-92):
+
+```python
+    else:
+        min_m = required(params, 'travel_minimum_m', name, source)
+        max_m = required(params, 'travel_maximum_m', name, source)
+        if drive == 'linmot':
+            max_velocity = params.get('max_velocity_mps', LINMOT_MAX_VELOCITY_MPS)
+        else:  # indradrive: as IndraDriveActuator::max_velocity_mps()
+            max_velocity = (required(params, 'max_velocity_rpm', name, source)
+                            / params.get('drive_velocity_per_unit_per_s', 1 / 6)
+                            * params.get('drive_m_per_unit', 1.0))
+```
+
+- No direction here, so no `abs`: the result is already positive.
+- `required` as in the angular branch: the controller's default (100) would give a wrong limit
+  without anyone seeing it.
+- **lilletanken and mclab: add `max_velocity_rpm` to both blocks (decided 2026-11-09).** They
+  have none in `wavemakers.yaml` (55-81), so after this `play_dat` on them would fail with
+  "max_velocity_rpm not set". Add `max_velocity_rpm: 100.0` to each block: the controller's
+  default, which they already run with unseen, now visible. Replace it with the drive's value
+  when they are deployed (TODO item 19 note, T9). Keep `required` in the code.
+- Add `drive_scale.hpp` to the rules the module docstring lists (5-8).
+- **Check:** `play_dat osc_test.dat vertical --rig oscillator --dry-run` runs without
+  `--max-velocity-mps` and shows `0.1000 m/s`.
+
+### T9: documentation
+
+| File | Where | What |
+|---|---|---|
+| `README.md` | *Actuator and limits* (103-113) | `drive_motion`: drop "Linear units are not verified yet (TODO 19)". The `travel_* / min_position_m` row: IndraDrive linear uses only `travel_*`; `min/max_position_m` are LinMot only. Add `drive_m_per_unit` (default 1), `drive_velocity_per_unit_per_s` (default 1/6, the deg/s → rpm rule) and `drive_direction` (±1, int). `max_velocity_rpm` / `hold_velocity_rpm`: velocity tag units, rpm only on angular drives |
+| `README.md` | new section after *Running a wavemaker* | Vertical oscillator (ladertanken): `oscillator:=vertical`, replugging (link to COMMISSIONING), `make_osc_dat` → `play_dat` |
+| `COMMISSIONING.md` | new section | The replug procedure (*Commissioning* step 0) and steps 2-7 with the results so far (2026-11-09: live, brake, +5 mm move, direction) |
+| `TODO.md` | item 19 (24-25) | Close it: the three parameters and one set of limits. lilletanken and mclab still need their factors from their drives when deployed: a short note or a new item |
+| `TODO.md` | item 30 (32-33) | Half done: the actuator always declares `travel_*`; the controller still declares them only for linear rigs |
+| `rpi/README.md` | `/etc/default/oscillator` | `OSCILLATOR=` |
+
+Claude can write the README and docstring parts once you hand them over.
 
 ## Commissioning (on the rig, one rig at a time)
 
@@ -247,7 +402,9 @@ cd ~/ros_ws && source install/setup.bash
    ```
 
    1. Replug the PROFIBUS cable to the other drive. That drive's plug is the end of the line:
-      termination ON.
+      termination ON. The oscillator needs slave 2's user parameters `C0 00 08` (Fail_Safe);
+      if the wavemaker does not run with them, Import the matching MGate configuration
+      (*PROFIBUS diagnosis log*, backups).
    2. Run the monitor and check that the position is the one you expect from
       that drive: about 0 mm on the oscillator, the flap angle on the wavemaker.
 
@@ -255,9 +412,13 @@ cd ~/ros_ws && source install/setup.bash
       ~/ros_ws/build/mgate5101_driver/mgate_example
       ```
 
-   3. Only then start the matching service.
+   3. Only then start the matching service. The oscillator's mains must be switched on at the
+      cabinet (display A0012 `Ab`, not A0013 `bb`) before anything can enable it.
 1. **Drive layout, read only (decision 2).** Done 2026-11-06 from `Default.par`: it matches
    (see *The oscillator drive*).
+
+   Steps 2-4 done 2026-11-09 (live, brake holding, `--move` +5 mm and back; see *PROFIBUS
+   diagnosis log*, first move). Step 6 (fault timeout) is still open.
 2. **Monitor.** With the oscillator plugged in, `mgate_example` must print `live`, a position
    near 0 that follows a jog from IndraWorks (mm), and the diag number IndraWorks shows.
    **The monitor is not read-only.** It writes the whole output block every cycle
@@ -298,6 +459,10 @@ cd ~/ros_ws && source install/setup.bash
 
    Ctrl-C cancels the current run and stops the program. Then increase stroke and frequency
    step by step, watching the lag against S-0-0260 (decision 5).
+   From where the lag or the mechanics become a problem, set `max_goal_acceleration_mps2` and
+   `min_period_s` in the vertical block (0 = no limit until then; only the drive's acceleration
+   and jerk limit the motion). The controller then rejects a goal that is too steep instead of
+   the drive rounding it off.
 
 Back to the wavemaker: step 0 the other way round, then `start_wavemaker.bat` or
 `sudo systemctl start wavemaker@ladertanken`.
@@ -370,12 +535,55 @@ Not planned yet. It needs phase 2 first.
   the MGate's maximum number of Modbus TCP clients; and a launch or service that allows both
   rigs, which `refuse_if_busy.sh` deliberately prevents (shared web port, soft stop on GPIO17).
 
-## PROFIBUS diagnosis log (2026-11-06)
+## PROFIBUS diagnosis log (2026-11-06 – 2026-11-09)
 
-**Status: the oscillator drive does not enter data exchange.** It rejects the gateway's
-parameter telegram with code 137 (0x89), meaning unknown. The address, cable, ident, data
-lengths and module configuration are verified as matching. The wavemaker drive on the same
-gateway, cable and slave 2 configuration is live at once.
+**Status: solved 2026-11-09.** The oscillator drive (MPB-05) requires a Fail_Safe master and
+rejected the parameter telegram with code 137 = "FailSafe not supp. by contr.". Slave 2's user
+parameters `80 00 08` → **`C0 00 08`** fixed it: P-0-4073 `Data-Exch WD+`, `slave=live`. See
+*Cause and fix* below; the sections after it are the 2026-11-06 search, kept for reference.
+
+### Cause and fix (2026-11-09)
+
+- A newer Rexroth GSD set (`Profibus/` on the stick: RX04, RX06, RX08, RX16, RX17 and a new
+  `Info_eng.txt`) says: *"For the firmware release MPX05 the GSD File RX060107.GSD (GSD-Revision
+  5) has to be used. Older GSD Files (RX010107.GSD/RX040107.GSD) can not be used for the
+  firmware release MPX05."* The repo's `resources/profibus_gsd/` only has the 2006 set.
+- `RX060107.gsd` defines `Value(137)="FailSafe not supp. by contr."`. Against `RX030107.gsd` it
+  sets `Fail_Safe=1` (was 0) and the first user parameter byte `0xC0` (DPV1 + Fail_Safe; was
+  `0x80`). The modules and their identifiers are the same (`00 00 D6 E5`).
+- Fix applied: on slave 2, still set up from `RX030107.gsd`, user parameters `C0 00 08`.
+  **Gap:** the MGate still treats slave 2 as `Fail_Safe=0`; only the drive is told. Whether the
+  MGate's Clear state turns the drive off is checked by the kill test (Commissioning step 6).
+  Setting up slave 2 from `RX060107.gsd` is the proper form (at the latest in phase 2, when the
+  oscillator gets its own slave). Re-adding slave 2 from RX03 silently restores `80 00 08`.
+- Not yet checked: the wavemaker (MPB-04) with `C0 00 08`. `Info_eng.txt` assigns MPB-04 to
+  `RX040107.gsd` (Fail_Safe=0).
+
+### After the fix (2026-11-09)
+
+- **`wait_for_data()` race** in `MGateDriver`: it returned after the first input read, before
+  the status area and `online_` were set, so `mgate_example --move` failed at once with
+  "gateway offline" and `slave=DOWN`. Fixed: `have_data_` is set only after a whole successful
+  cycle (`mgate_driver.cpp`, `poll_loop()`). The controller was not affected (it waits 200 ms).
+- **Mains:** `enable()` timed out waiting for `Ab` (status word 0x488E, A0013 `bb`). The power
+  section needs mains switched on at the cabinet (a button); then A0012 `Ab`.
+- After every `mgate_example` run the drive shows A0050 (parameter mode): `shutdown()` sends
+  control word 0 on purpose. The next `enable()` switches back to operating mode.
+- **Brake:** holds the slide with the drive disabled.
+- **First move** (`mgate_example --move`, +5 units at 10 units, sensor "6047 Position" logged
+  in `TestOscillator.bin` on the stick, catman, 200 Hz):
+
+  | | Drive feedback | Sensor | Expected |
+  |---|---|---|---|
+  | Step | 4.925 mm | 4.940 mm | 5 mm |
+  | Speed (10-90 %) | – | 1.68 mm/s | 10 units = 100 mm/min = 1.67 mm/s |
+  | Back at start | 0.027 mm off | 0.027 mm off | – |
+  | Direction | – | sensor value rose; sensor counts down as + | **+ command = down** |
+
+  Enable `Ab` → `AF` → A0108 and disable were clean; 159 cycles, no errors. The velocity
+  feedback (S-0-0040) jitters about ±0.8 mm/s at standstill.
+- Not yet done before the oscillator runs under the controller: MGate output fault timeout
+  (about 500 ms, fault value 0) and the kill test; P-0-4088 → 0x0028 (decision pending).
 
 ### Symptom
 
@@ -421,22 +629,21 @@ status is `0003` (Operate), with an empty live list.
   | 5-6 | `0107` | Ident, matches the GSD |
   | 7-11 | `05 81 00 00 89` | Device-related DPV1 status block, value 137. `RX030107.gsd` lists 128-136, all parameter-telegram errors; 137 is not defined |
 
-### Next steps
+### Tried before the cause was found (2026-11-06 – 2026-11-09)
 
-1. **Gateway experiment** (reversible from the backup): slave 2's user parameters `80 00 08` →
-   `80 00 00` (clears the Prm_Structure flag: no structured blocks follow), then `00 00 00`.
-   For each try note the diagnosis bytes and P-0-4073. Whatever works must also be tested with
-   the wavemaker; if nothing works, Import the backup and check the wavemaker is live again.
-2. **Rexroth support:** what diagnosis value 137 means on MPB-05V20 / CSB01.1N-PB, which
-   parameter data it expects, and whether there is a GSD for MPx-05 and later. Send the type
-   code, the diagnosis bytes, the GSD name and `80 00 08`.
-3. **The carriage drive's firmware.** If it is also MPB-05 and runs on its KUNBUS master,
-   MPB-05 works with this GSD family, and the difference is in what the master sends.
+- User parameters `00 00 00` (DPV1 and structure flag off): identical diagnosis, code 137. The
+  Fail_Safe bit was 0 in every try.
+- Windows PC searched for newer GSD files (with and without the KUNBUS folders): only the 2006
+  Indramat set; KUNBUS Configurator III holds no Rexroth GSD. IndraWorks Ds 14V24 ships none.
+- The cRIO master's FPGA build (`C:\NIFPGA\compilation\ladertanken_...CScRIO-PBDP-Mast...`):
+  no slave configuration in it.
+- gsd-db.org / gsd-db.com unreachable; Rexroth support not available.
 
 ### Side findings
 
 - **P-0-4088 = 0x002A is a safety question for a vertical axis.** Bits 2/1 = 01 make a bus
-  failure only a warning and keep the last command (hence E4005). The wavemaker has the
+  failure only a warning and keep the last command (hence E4005). With Fail_Safe now on, the
+  drive's reaction to the master's Clear state also goes through these bits. The wavemaker has the
   default 00: bus failure is an F4xxx error with the drive's error reaction. The controller's
   fault path (control word 0, MGate fault value) relies on that. Proposal: 0x0028 before the
   oscillator moves under the controller; it changes the drive's existing setup.
@@ -450,17 +657,21 @@ status is `0003` (Operate), with an empty live list.
 - `Mgate Backup/mgate_ladertanken_wavemaker_OK_2026_11_06.dat`: gateway configuration with
   the wavemaker working, including GSD files.
 - `Default.par` (oscillator), `WMDefault.par` (wavemaker): IndraWorks exports, 2026-11-06.
+- `Profibus/`: the newer Rexroth GSD set (RX04-RX17) with `Info_eng.txt`.
+- `TestOscillator.bin`: sensor log of the first move (2026-11-09).
+- To do: export the MGate configuration with `C0 00 08` as the oscillator's backup.
 
 ## Open questions
 
-- **Why the oscillator rejects the parameter telegram (code 137).** See *PROFIBUS diagnosis
-  log*.
+- Does the wavemaker (MPB-04) run with slave 2's user parameters `C0 00 08`? If not, Import
+  the matching MGate configuration when switching drives (Commissioning step 0).
+- Set up slave 2 from `RX060107.gsd` instead of RX03 with edited user parameters? Add the newer
+  GSD set to `resources/profibus_gsd/`?
 - P-0-4088 bits 2/1: set the oscillator to 0x0028 (bus failure as error)?
 - Phase 2: which drive leaves address 2, the oscillator (wavemaker yaml unchanged) or the
   wavemaker (oscillator setup unchanged)?
 - Raise the jerk S-0-0193 (3 m/s³) for faster strokes? It changes the drive's existing setup.
 - Travel, stroke, max speed and rest position wanted for the vertical oscillator.
 - Is the axis counterbalanced, or does the motor hold the load? The brake is 5 Nm.
-- Which way + goes (up or down).
 - Rig name: `vertical`? It becomes the namespace `oscillators/vertical` and the `play_dat` name.
 - The soft stop on GPIO17: is the vertical rig wired to the same button as the wavemaker?
