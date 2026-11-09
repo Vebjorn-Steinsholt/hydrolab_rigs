@@ -1,8 +1,7 @@
 # Sketch: IndraDrive C vertical oscillator on the ladertanken MGate
 
 Line numbers are as of commit `6b994c7` plus the uncommitted work on `bugfix-items-20-25`, except
-*Your tasks* and *Task details*: commit `3befe17` on `feat-vertical-oscillator` plus the
-uncommitted T2, T3 and T4 work (2026-11-09).
+*Your tasks* and *Task details*: commit `cecf951` on `feat-vertical-oscillator` (2026-11-09).
 
 ## Scope (2026-11-06)
 
@@ -65,7 +64,7 @@ wavemaker's `WMDefault.par`:
 | S-0-0055 position polarities | 0x1F (all inverted) | 0x10 | Result: + = down. Left unchanged; the sign is flipped in the controller (`drive_direction: -1`) |
 | S-0-0091 velocity limit | 96 000 mm/min (1.6 m/s) | | — |
 | S-0-0260 positioning acceleration | 20 000 mm/s² (20 m/s²) | 1000 rad/s² | — |
-| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | **Limits the oscillation** (decision 5) |
+| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | Expected to limit the oscillation; below 3 m/s³ it did not (decision 5) |
 | P-0-0525 / P-0-0540 holding brake | 0x0004 / **5 Nm** | 0x0000 / 0 Nm | Brake configured; about 1.5 kN at 20 mm/rev |
 | P-0-0119 best possible deceleration | 0 | 0 | Check its meaning for a vertical axis |
 | S-0-0273 max drive-off delay | 10 000 ms | | — |
@@ -80,27 +79,19 @@ wavemaker's `WMDefault.par`:
   drive-internal interpolation (S-0-0032), and P-0-4080/4081 = status, position, velocity, diag
   in; control, target, speed cap, override out. The tags carry the factor 0.0001 and call the
   units "deg" and "rpm" (`indradrive.cpp:27-33`).
-- **Linear IndraDrive scaling is unfinished, and this drive hits it (TODO item 19):**
-  - Position: `DriveScale`'s linear branch has `m_per_unit = 1` (`drive_scale.hpp`). A 0.1 m
-    goal is sent as 0.1 and becomes **0.1 mm**. The controller's limits (`min/max_position_m`)
-    are checked in the same wrong unit.
-  - Velocity: `write_setpoint()` sends `max(0.1, |v| / 6)` (`indradrive_actuator.cpp:234`),
-    the deg/s → rpm rule, with `v` in position tag units per second. Today `v` is the metre
-    value (0.05 for 0.05 m/s), so the cap is clamped to 0.1 units = **1 mm/min**. With only
-    the position factor fixed, `v` = 50 mm/s and the cap is 8.3 units = 1.4 mm/s, still
-    **36 × too low**, because the drive needs `6 × v`. `max_velocity_mps()` (252) has the
-    inverse error.
-  - The errors are on the safe side (small, slow moves), but the rig cannot run until T2 is done.
-- **Only one rig runs on the Pi at a time, already.** `wavemaker@` and `oscillator@` refuse to
-  start while the other runs (`rpi/refuse_if_busy.sh`, which also catches a launch by hand
-  through the web port), and `windows/_rig.bat` stops the other before starting one. But the
-  `oscillator` case in `rpi/run.sh` always starts `oscillator.launch.py`, which hard-codes the
-  LinMot rig (`NAMESPACE = 'oscillators/sloshing'`).
+- **Linear IndraDrive scaling (TODO item 19)** was unfinished: a 0.1 m goal became 0.1 mm and
+  the speed cap was 36 × too low. Fixed by T2 (2026-11-09): `drive_m_per_unit`,
+  `drive_velocity_per_unit_per_s`, `drive_direction`, limits from travel.
+- **Only one rig runs on the Pi at a time.** `wavemaker@` and `oscillator@` refuse to start while
+  the other runs (`rpi/refuse_if_busy.sh`, which also catches a launch by hand through the web
+  port), and `windows/_rig.bat` stops the other before starting one. Since T5 (2026-11-09) the
+  oscillator launch takes `oscillator:=sloshing|vertical`, set through `OSCILLATOR=` in
+  `/etc/default/oscillator`.
 - **`play_dat` already plays to an oscillator** (`--rig oscillator`, action `move_oscillator`).
   With a rig name it reads limits and namespace from `oscillator.yaml` (`rig_limits.py:20`).
   For a linear IndraDrive, `rig_limits` gives no speed limit (`rig_limits.py:87-92`), so
   `--max-velocity-mps` is required until T8. `generate_waves` is wavemakers only; the
-  oscillator generator is a TODO (*Oscillator motion generator*).
+  oscillator's generator is T7 (`generate_oscillations`).
 - **`mgate_example` works on the oscillator as it is**, because blocks 0/0 and address 2 are
   the same (`drivers/mgate5101_driver/examples/example_main.cpp`). `--move` steps +5 and back
   at 10: on this drive **5 mm at 100 mm/min (1.7 mm/s)**, about 3 s each way. Its limits default
@@ -108,7 +99,10 @@ wavemaker's `WMDefault.par`:
   backstop; that is fine for a 5 mm step from about 0. It is built but not installed
   (`~/ros_ws/build/mgate5101_driver/mgate_example`).
 
-## Decisions (proposed)
+## Decisions
+
+All implemented on 2026-11-09 except where noted.
+
 
 1. **Phase 1: replug, don't daisy-chain, while the address stays 2.** This is temporary, until
    the daisy-chain cable is delivered. Two slaves with one address on one line would collide. The gateway, `wavemakers.yaml` and the oscillator drive stay as they are.
@@ -146,39 +140,43 @@ wavemaker's `WMDefault.par`:
 5. **Vertical axis: gravity, brake, acceleration and jerk.** Control word 0 (our fault path,
    and the gateway fault value) removes torque.
    - **Brake:** the motor has a 5 Nm holding brake, and the drive controls it (P-0-0525 =
-     0x0004, P-0-0540; motor `-UG1`). At 20 mm/rev that holds about 1.5 kN. Still check that the
-     stop reaction (P-0-0119 = 0) brakes the slide before the brake engages rather than letting
-     it coast, and decide where the slide rests when disabled.
+     0x0004, P-0-0540; motor `-UG1`). At 20 mm/rev that holds about 1.5 kN. It held at every
+     switch-off on 2026-11-09, including the kill test (unloaded). Still open: whether the stop
+     reaction (P-0-0119 = 0) brakes the slide before the brake engages under load, and where the
+     slide rests when disabled.
    - **The drive limits every move.** The controller sends no acceleration
      (`max_acceleration_mps2()` is infinite), so the drive's positioning acceleration (S-0-0260
      = 20 m/s²) and **jerk (S-0-0193 = 3 m/s³)** do.
-   - **Jerk is the binding limit.** A sine of stroke `s` and period `T` needs acceleration
+   - **Jerk was expected to be the binding limit.** A sine of stroke `s` and period `T` needs acceleration
      `(s/2)(2π/T)²` and jerk `(s/2)(2π/T)³`. Examples:
      - 20 mm at 1 s: 0.39 m/s², 2.5 m/s³.
      - 20 mm at 0.8 s: 0.62 m/s², 4.8 m/s³.
      - 50 mm at 2 s: 0.25 m/s², 0.78 m/s³.
 
-     Above 3 m/s³ the drive rounds the motion off, so the slide lags and the stroke shrinks.
-     Raising S-0-0193 changes the drive's existing setup, so decide that with whoever owns it.
-     Until then, keep test files under 3 m/s³ (T7 prints it).
+     Above 3 m/s³ the drive rounds the motion off. **Measured 2026-11-09 (unloaded): below 3 m/s³
+     the stroke loss does not depend on the jerk** (20 mm and 10 mm at 1 s both 89.7 %); it
+     depends on the period (*Commissioning*, waves 3-5; *Open questions*, tracking). Keep files
+     under 3 m/s³ anyway: `generate_oscillations` warns above it. Raising S-0-0193 is for the drive
+     tuning with Robert.
 6. **One rig at a time stays enforced by the Pi services.** The vertical oscillator runs as
    `oscillator@ladertanken`, which cannot start while `wavemaker@ladertanken` runs. The
    oscillator launch gets an `oscillator` argument (`sloshing` or `vertical`), so the LinMot rig
    keeps working.
-7. **Files are played with `play_dat` as they are.** Until the oscillator generator exists, a
-   small stopgap tool makes sine test files (task T7). Pass `--max-velocity-mps` until T8.
+7. **Files are played with `play_dat` as they are,** made by `generate_oscillations` (T7, built
+   like `generate_waves`). Pass `--max-velocity-mps` until T8. Single waves also run from the web
+   page (height = stroke, period).
 
 ## Your tasks
 
 | # | File | Where | What | Done when | Left (2026-11-09) |
 |---|---|---|---|---|---|
-| T5 | the ladertanken Pi: `/etc/systemd/system/oscillator@.service`, `/etc/default/oscillator` | — | Decision 6: install the changed unit, set `OSCILLATOR=vertical` | `sudo systemctl start oscillator@ladertanken` brings up `/oscillators/vertical/controller`; it refuses while the wavemaker runs | Pi install, checks. **Decide: switching between sloshing and vertical** |
-| T7 | new tool, e.g. `rig_controller/src/make_osc_dat.py` | stopgap for *Oscillator motion generator* | Sine test runs as a `.dat` (spec below) | `play_dat FILE --rig oscillator ... --dry-run` lists every run as `OK` | All. Ramp: cosine (decided) |
+| T5 | the ladertanken Pi | — | Decision 6: the last checks | Refused while the wavemaker runs; the sloshing rig still starts | Two checks at the next rig switch. **Decide: switching between sloshing and vertical** |
+| T7 | new `rig_controller/src/generate_oscillations.py` and `motion_files.py` | the *Oscillator motion generator* | A test-matrix generator built like `generate_waves` (spec below) | `play_dat FILE vertical --rig oscillator --dry-run` lists every run as `OK` | All: step 1 `motion_files.py`, step 2 the script |
 | T8 | `rig_controller/src/rig_limits.py`, `wavemaker_bringup/config/wavemakers.yaml` | `limits_from_parameters` linear branch (87-92); lilletanken and mclab blocks | Speed limit for a linear IndraDrive from T2's parameters: `max_velocity_rpm / drive_velocity_per_unit_per_s × drive_m_per_unit` | `play_dat` without `--max-velocity-mps` uses the drive's limit | All, plus `max_velocity_rpm: 100.0` in lilletanken's and mclab's blocks (decided) |
 | T9 | `README.md`, `COMMISSIONING.md`, `TODO.md`, `rpi/README.md` | parameter table; new rig section; replug procedure; items 19 and 30 | Document the rig, close item 19 | — | All |
 | T10 (optional) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed: `--move` did its job on 2026-11-09 | `ros2 run mgate5101_driver mgate_example --move --step 50` moves 50 mm and back | Not needed now |
 
-Order: T5 → T7 → T8; T9 alongside.
+Order: T5 → T8 → T7; T9 alongside.
 
 Tests Claude can write once you hand them over (`rig_controller/test/test_indradrive_actuator.cpp`,
 with the `FakeMGate` from item 21):
@@ -196,96 +194,432 @@ with the `FakeMGate` from item 21):
   (factor 1: their units are not set yet, TODO item 19).
 - T3: configure → activate with the vertical block's parameters (including `drive_direction` as
   the int `-1`) on the fake gateway, in `test_controller_node.cpp`.
+- T7 step 1: `test_source_commit_of_an_installed_copy` patches `motion_files.__file__` instead of
+  `gw.__file__`; nothing else in `test_generate_waves.py` changes.
+- T7 step 2: `test_generate_oscillations.py` beside `test_generate_waves.py`: the matrix reader
+  (each kind, the error messages), stroke → amplitude, the cosine ramp's ends, the jerk column and
+  warning, the vertical block's limits, and a file that `play_dat` reads back.
 
-### T7 spec: oscillator test file
+### T7 spec: `generate_oscillations`, the oscillator's `generate_waves` (decided 2026-11-09)
 
-- Arguments: output file, then runs as `STROKE_M:PERIOD_S:PERIODS`; options `--dt-ms` (default
-  20, as `generate_waves --dt`), `--ramp-periods` (2), `--pause-s` (5, at least 1: `play_dat`
-  splits runs at 1 s of rest).
-- Each run: a sine of half the stroke, a whole number of periods, the amplitude ramped at both
-  ends, first and last sample exactly 0. Rest before, between and after.
-- File: the layout `read_motion()` reads (`play_dat.py:88`): `<i4` time step in ms, `<i4`
-  channels (2), then `<f4` frames of position (m, relative to upright) and trigger (0).
-- Print each run's peak speed, peak acceleration and peak jerk (third difference / dt³), and
-  warn above the drive's jerk of 3 m/s³ (S-0-0193; decision 5).
+The oscillator gets a generator built like `generate_waves.py`: a test matrix in, the same four
+files out (`.dat`, run table `.csv`, record `.txt`, plot `.png`), checked by reading the file back
+with `play_dat`. It is the *Oscillator motion generator* in TODO.md (its decisions of 2026-11-03 hold: its own
+script, the same file contract). Regular and irregular, as the wavemaker.
 
-**Ramp shape: cosine (decided 2026-11-09, option (a) below).** A linear ramp (as `apply_ramps` in `generate_waves.py:301`) makes the
-amplitude's slope jump from A/T_ramp to 0 at the ramp's ends. That happens where sin = 0, so the
-velocity stays continuous, but the acceleration steps by 2Aω/T_ramp, and the third difference
-sees that as a jerk spike of about step / dt. Computed for stroke 20 mm, T = 1 s, dt 20 ms,
-2 ramp periods:
+**What differs from `generate_waves`:**
 
-| Ramp | Peak speed | Peak accel. | Peak jerk (3rd difference) |
-|---|---|---|---|
-| Linear (`apply_ramps`) | 0.063 m/s | 0.39 m/s² | **5.6 m/s³** |
-| Cosine | 0.063 m/s | 0.40 m/s² | 2.7 m/s³ |
-| Steady sine, `(s/2)(2π/T)ⁿ` | 0.063 | 0.39 | 2.5 |
+| | `generate_waves` | `generate_oscillations` |
+|---|---|---|
+| Rig | `wavemakers.yaml`, a wavemaker name | `oscillator.yaml`, an oscillator name (`vertical`, `sloshing`), through `rig_limits('oscillator', ...)` |
+| Regular input | wave height H or steepness 1/x, period | **stroke** (peak to peak, m), period. No steepness: there is no wave |
+| Irregular input | Hs, Tp, γ (JONSWAP of the water surface) | **significant stroke** (4σ of the position, the analogue of Hs = 4σ), Tp, γ: JONSWAP **shape** for the slide's motion |
+| Physics | wavenumber, stroke ratio, transfer gain (`paddle_amplitude`, `paddle_amplitudes`) | none: amplitude = stroke / 2; spectrum amplitudes are the slide's |
+| `--water-depth` | yes | no |
+| Ramp | linear (`apply_ramps`) | **cosine** (see below) |
+| Checks | travel, speed, acceleration, start/end at upright | the same, **plus jerk**: printed per run, warning above `--max-jerk-mps3` (default 3.0, the IndraDrive's S-0-0193). A warning, not a skip: the drive rounds the motion off, it does not refuse it |
+| Run table columns | `height_m`, `steepness`, `gain`, `paddle_std_m`, ... | `stroke_m`, `amplitude_m`, `sig_stroke_m`, `std_m`, `peak_m`, `peak_jerk_mps3` |
+| `play_dat` command printed | `play_dat FILE ladertanken --dry-run` | `play_dat FILE vertical --rig oscillator --dry-run` |
 
-The spike grows as dt shrinks, so with a linear ramp the warning fires on files the drive
-handles: its jerk limit only smooths the step a little. Either:
+**Test matrix** (same rules as the wavemaker's: one row per run, file order, each row fills its
+kind's columns):
 
-- (a) **Cosine ramp (recommended):** `r = (1 - np.cos(np.pi * np.linspace(0, 1, n_ramp))) / 2`
-  in place of `apply_ramps`' `linspace`. Its slope is 0 at both ends, so the measured peak
-  matches the sine's.
-- (b) Keep the linear ramp and warn on the steady-state jerk `(s/2)(2π/T)³`, printing the
-  measured peak next to it.
+```csv
+kind,period_s,stroke_m,n_periods,sig_stroke_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,2.0,0.020,10,,,,,,2,5
+regular,1.0,0.010,10,,,,,,2,5
+irregular,,,,0.010,1.5,3.3,120,1,3,10
+```
 
-Structure:
+| Column | Kind | Meaning |
+|---|---|---|
+| `kind` | both | `regular` (default) or `irregular` |
+| `period_s` | regular | period [s] |
+| `stroke_m` | regular | stroke, peak to peak [m] (amplitude = stroke / 2) |
+| `n_periods` | regular | length in periods, ramps included |
+| `sig_stroke_m` | irregular | significant stroke, 4σ of the position [m] |
+| `tp_s` | irregular | peak period [s] |
+| `gamma` | irregular | JONSWAP peak enhancement; empty = 3.3, 1.0 = Pierson–Moskowitz |
+| `duration_s` | irregular | length [s], ramps included |
+| `seed` | irregular | random phases |
+| `n_ramp` | both | ramp at each end, in periods (regular) or peak periods (irregular) |
+| `pause_s` | both | rest after the run, at least 1 s |
 
-| Function | Does |
-|---|---|
-| `parse_run(text) -> (stroke_m, period_s, periods)` | Splits `"0.02:1.0:10"`; stroke > 0, period > 0, periods a whole number ≥ 2 × ramp periods + 1 |
-| `make_run(stroke_m, period_s, periods, dt_s, ramp_periods) -> ndarray` | Sine with ramps, exactly 0 at both ends |
-| `peaks(x, dt_s) -> (v, a, j)` | `np.abs(np.diff(x, k)).max() / dt_s**k` for k = 1, 2, 3 |
-| `write_dat(path, dt_ms, x)` | Header and frames |
-| `main()` | Rest, runs and rest; prints the table and warnings; writes the file |
+**Cosine ramp.** A linear ramp steps the acceleration at the ramp's ends; the third difference sees
+a jerk spike of about step / dt (stroke 20 mm, T = 1 s, dt 20 ms, 2 ramp periods: 5.6 m/s³ against
+2.5 for the sine; a cosine ramp gives 2.7). With a jerk check that spike would warn on files the
+drive handles. Cosine: `r = (1 - np.cos(np.pi * np.linspace(0, 1, n_ramp))) / 2`, same ends as
+`apply_ramps` (first 0, last exactly 0). The wavemaker keeps its linear ramp.
 
-Details that matter for `play_dat`:
+**Decided 2026-11-09: (a) the shared module `motion_files.py`, and the name `generate_oscillations`.**
 
-- **Samples:** `n = round(periods * period_s / dt_s) + 1`, `t = np.arange(n) * dt_s`. The `+ 1`
-  puts the last sample on `t = periods × T`, where sin = 0. Refuse a period that is not a whole
-  number of samples (0.7 s at 20 ms is 35, 0.73 s is 36.5): the run would stop mid-period and
-  the ramp would force the end to 0.
-- **Rest:** `np.zeros(round(pause_s / dt_s))`. `play_dat` splits only where |x| is at most the
-  threshold (default **exact zeros**) and the speed is at most 1e-6 m/s for at least 1 s
-  (`play_dat.py:53-54`), so the rest must be real `0.0`; float32 keeps it exact.
-- **Positions:** metres relative to upright (`play_dat.py:10`). Upright is 0 here and + is up
-  after T2, so the sine is the rig position directly.
-- **Writing:**
+#### T7 step 1: `motion_files.py` (move code, behaviour unchanged)
+
+**Goal.** Everything in `generate_waves.py` that is about the motion file and not about waves
+moves into a new module, `rig_controller/src/motion_files.py`. After this step `generate_waves`
+behaves exactly as before: the same command line, the same four files, byte for byte. That is
+what makes step 1 safe to do on its own, and why it is one commit.
+
+**Why a pure move first.** If the move and the new script come together and a test fails, it is
+unclear which one broke it. With 78 tests on `generate_waves` and a byte-identical `.dat` as the
+yardstick, step 1 is either clearly right or clearly wrong.
+
+**1.1 Make a reference file before touching anything.** On the PC, in the repo:
+
+```bash
+mkdir -p /tmp/t7ref && cd /tmp/t7ref
+cat > m.csv <<'END'
+kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,1.0,,1/60,30,,,,,,3,5
+regular,1.3,0.171,,30,,,,,,3,5
+irregular,,,,,0.04,1.2,3.3,120,1,5,10
+END
+python3 ~/ros_ws/src/hydrolab_rigs/rig_controller/src/generate_waves.py ladertanken m.csv -o before \
+  --config ~/ros_ws/src/hydrolab_rigs/wavemaker_bringup/config/wavemakers.yaml --no-plot
+```
+
+Keep `before.dat` and `before.csv`. (The `.txt` differs anyway: date and commit.)
+
+**1.2 Create `motion_files.py`.** Module docstring: move the two contract paragraphs from the top
+of `generate_waves.py` (*Contract with play_dat.py*, *Contract with the controller*, lines 8-32)
+here, because they describe the file, not the waves. `generate_waves`'s docstring keeps its first
+paragraph and points to `motion_files` for the contract.
+
+Imports it needs: `from collections.abc import Callable`, `csv`, `from datetime import datetime`,
+`math`, `os`, `shlex`, `subprocess`, `from typing import TypeVar`, `numpy as np`, `play_dat`. Not
+`rig_limits`: the module gets limits passed in, it never reads a yaml.
+
+Then move these, in this order (the order of the file):
+
+| From `generate_waves.py` | In `motion_files.py` | Change |
+|---|---|---|
+| `G = 9.81` (54) | `G = 9.81` | None. `jonswap` uses it, so it lives with `jonswap`; `generate_waves` imports it back for its wave physics. Keeping the formula unchanged is what keeps the `.dat` byte-identical |
+| `T = TypeVar('T')`, `number` (234-245) | same | None |
+| `apply_ramps` (301-312) | `apply_ramps(x, n_ramp_samples, shape='linear')` | New argument, see 1.3 |
+| `SIGMA_1`, `SIGMA_2` (318-319) | same | None (they are `jonswap`'s defaults). `F_MIN_FACTOR` / `F_MAX_FACTOR` stay in `generate_waves`: they are each generator's band choice |
+| `frequency_grid`, `jonswap`, `wave_amplitudes`, `random_phases`, `synthesize`, `synthesize_direct` (322-395, not `paddle_amplitudes`) | same | None. `wave_amplitudes` keeps its name (a test uses it); its docstring can say "amplitudes of a spectrum" |
+| `check_run` (432-461) | `check_run(limits, x, dt, max_velocity_mps)` | Rename `wm` → `limits` in the signature and body; the docstring says what `limits` needs: `upright_m`, `min_m`, `max_m`, `max_acceleration_mps2` |
+| `assemble` (464-490) | `assemble(runs, dt, check)` | Generalised, see 1.4 |
+| `write_motion` (493-500) | same | None |
+| `write_run_table` (503-513) | `write_run_table(path, rows, columns)` | The column list becomes an argument |
+| `source_commit` (516-530) | same | None |
+| `write_record` (533-561) | `write_record(path, program, argv, config, rig_lines, dt, speed, summary, matrix_path)` | Generalised, see 1.5 |
+| `verify_with_play_dat` (564-578) | `verify_with_play_dat(dat_path, limits, max_velocity_mps)` | `wm` → `limits` |
+| `plot_motion` (581-621) | `plot_motion(png_path, limits, frames, rows, dt, max_velocity_mps, show=False)` | `wm` → `limits`. It only uses `name`, `min_m`, `max_m`, `upright_m`, which `RigLimits` has too |
+
+**1.3 `apply_ramps` with a shape.**
+
+```python
+def apply_ramps(x, n_ramp_samples: int, shape: str = 'linear'):
+    """Ramp 0 -> 1 at the start and 1 -> 0 at the end; the run ends exactly at upright.
+
+    'linear' (the wavemaker's) or 'cosine' (the oscillator's: its slope is 0 at both ends, so the
+    acceleration does not step where the ramp meets the steady part).
+    """
+    ...the existing length check...
+    ramp = np.linspace(0.0, 1.0, n_ramp_samples)
+    if shape == 'cosine':
+        ramp = (1.0 - np.cos(np.pi * ramp)) / 2.0
+    elif shape != 'linear':
+        raise ValueError(f"ramp shape '{shape}' must be linear or cosine")
+    ...the rest unchanged...
+```
+
+The default keeps every existing call (`generate_waves`, the two `apply_ramps` tests) unchanged.
+
+**1.4 `assemble` without the wavemaker.** Today it loops over specs, calls `regular_signal` or
+`irregular_signal` by type, checks with `check_run(wm, ...)`, and builds frames and rows. The
+loop's bookkeeping (lead-in, run numbers, start and end times, pauses, skipping) is shared; making
+the signal and checking it are not. So:
+
+```python
+def assemble(runs, dt: float, check):
+    """
+    Frames (n x 2: position, trigger) and run-table rows, in file order.
+
+    runs: (x, row, pause_s) per run, x relative to upright, row the generator's own fields.
+    check(x): the reasons the run would be refused; a run with any is skipped.
+    """
+    ...the existing body, with
+        for index, (x, row, pause_s) in enumerate(runs):
+    instead of building x and row from the spec, check(x) instead of check_run(wm, ...),
+    and pause_s instead of spec.pause_s...
+```
+
+`generate_waves` keeps a wrapper with the old signature, because the tests call
+`gw.assemble(wm, specs, dt, max_velocity_mps)`:
+
+```python
+def run_signal(wm, spec, dt):
+    """(x, row, pause_s) for one spec of the test matrix."""
+    if isinstance(spec, RegularSpec):
+        x, row = regular_signal(wm, spec, dt)
+    elif isinstance(spec, IrregularSpec):
+        x, row = irregular_signal(wm, spec, dt)
+    else:
+        raise TypeError(f'unknown spec {type(spec).__name__}')
+    return x, row, spec.pause_s
+
+
+def assemble(wm, specs, dt, max_velocity_mps):
+    runs = [run_signal(wm, spec, dt) for spec in specs]
+    return motion_files.assemble(
+        runs, dt, lambda x: motion_files.check_run(wm, x, dt, max_velocity_mps))
+```
+
+One visible difference: the old loop raised `TypeError(f'run {index}: ...')` with the run number.
+No test or user hits it (the matrix reader only makes the two types), so the message may lose
+the number.
+
+**1.5 `write_record` without the wavemaker.** The lines must come out in the same order, because
+`test_main_end_to_end` and `test_record_depth_from_the_yaml` read them. The common lines are
+`generated`, `command`, `folder`, `commit`, `config`, then the rig's lines, then `dt`,
+`max speed`, `result`, an empty line, and the test matrix:
+
+```python
+def write_record(path, program, argv, config, rig_lines, dt, speed, summary, matrix_path):
+    """<output>.txt: what the file was made from, to read the measurements and to make it again."""
+    with open(matrix_path) as f:
+        matrix = f.read().rstrip('\n')
+    lines = [
+        f'generated    {datetime.now().astimezone().isoformat(timespec="seconds")}',
+        f'command      {program} {shlex.join(argv)}',
+        f'folder       {os.getcwd()}',
+        f'commit       {source_commit()}',
+        f'config       {os.path.realpath(config)}',
+        *rig_lines,
+        f'dt           {dt} s',
+        f'max speed    {speed}',
+        f'result       {summary}',
+        '',
+        f'test matrix {matrix_path}:',
+        matrix,
+    ]
+    ...write as before...
+```
+
+`generate_waves.write_record` keeps its old signature and builds `rig_lines`
+(`wavemaker    ladertanken (flap)`, `water depth  ...`) and the `speed` text exactly as today,
+then calls this one with `program='generate_waves'`.
+
+**1.6 Change `generate_waves.py`.**
+
+- Remove the moved definitions. Add `import motion_files`, and import the moved names that its
+  own code or the tests use:
 
   ```python
-  with open(path, 'wb') as f:
-      np.array([dt_ms, 2], dtype='<i4').tofile(f)
-      np.column_stack([x, np.zeros_like(x)]).astype('<f4').tofile(f)
+  import motion_files
+  from motion_files import (  # noqa: F401  re-exported: test_generate_waves uses gw.<name>
+      G, SIGMA_1, SIGMA_2, apply_ramps, check_run, frequency_grid, jonswap, number,
+      random_phases, source_commit, synthesize, synthesize_direct, verify_with_play_dat,
+      wave_amplitudes, write_motion)
   ```
 
-- **Peaks** on the float64 array, before the float32 cast.
-- **Output**, for example:
+  The `noqa` is needed because flake8 (part of `colcon test`) flags names imported but not
+  used in this file (`synthesize_direct`, `source_commit`, ...).
+- Keep wrappers for the three functions whose signature changed: `assemble` (1.4),
+  `write_run_table(path, rows)` calling `motion_files.write_run_table(path, rows, WAVE_COLUMNS)`
+  with today's column list as the module constant `WAVE_COLUMNS`, and `write_record` (1.5).
+- `plot_motion` is called by `main` only: call `motion_files.plot_motion` there, no wrapper.
+- Drop imports `generate_waves` no longer uses (`csv`, `datetime`, `shlex`, `subprocess`, ...):
+  flake8 flags them too.
 
-  ```
-  run  stroke_m  period_s  periods  v_peak  a_peak  j_peak   duration_s
-  1    0.005     2.0       10       0.008   0.025   0.08     20.0
-  2    0.020     0.8       20       0.079   0.62    4.84 !   16.0
-  ! jerk above 3.0 m/s^3 (S-0-0193): the drive will round the motion off
-  ```
+**1.7 Install the module.** `rig_controller/CMakeLists.txt` line 79:
+`install(FILES src/play_dat.py src/rig_limits.py src/motion_files.py ...)`. Without it the
+installed `generate_waves` fails on `import motion_files`. (Claude can do this line.)
 
-- **Install** next to `play_dat` in `rig_controller/CMakeLists.txt` (57-61); Claude can add it:
+**1.8 The one test change** (Claude): `test_source_commit_of_an_installed_copy` patches
+`gw.__file__`; `source_commit` now reads `motion_files.__file__`, so the test patches that.
 
-  ```cmake
-  install(PROGRAMS src/make_osc_dat.py
-    DESTINATION lib/${PROJECT_NAME}
-    RENAME make_osc_dat
-  )
-  ```
+**1.9 Check.**
 
-- **Check:**
+```bash
+cd ~/ros_ws/src/hydrolab_rigs
+python3 -m pytest rig_controller/test/test_generate_waves.py rig_controller/test/test_play_dat.py -q   # all green
+cd /tmp/t7ref && python3 ~/ros_ws/src/hydrolab_rigs/rig_controller/src/generate_waves.py ladertanken m.csv -o after \
+  --config ~/ros_ws/src/hydrolab_rigs/wavemaker_bringup/config/wavemakers.yaml --no-plot
+cmp before.dat after.dat && cmp before.csv after.csv && echo identical
+cd ~/ros_ws && colcon build --packages-select rig_controller && colcon test --packages-select rig_controller
+colcon test-result --verbose | grep -E "flake8|pep257|Summary"
+ros2 run rig_controller generate_waves ladertanken /tmp/t7ref/m.csv -o /tmp/t7ref/installed --no-plot   # installed copy runs
+```
 
-  ```bash
-  ros2 run rig_controller make_osc_dat osc_test.dat 0.005:2:10 0.02:1:10
-  ros2 run rig_controller play_dat osc_test.dat vertical --rig oscillator --max-velocity-mps 0.05 --dry-run
-  ```
+**Done when:** the tests are green (only 1.8 changed), `identical` is printed, flake8 and pep257
+are clean, and the installed `generate_waves` runs.
 
-  Every run `OK`, and as many runs as `STROKE:PERIOD:PERIODS` arguments.
+#### T7 step 2: `generate_oscillations.py`
+
+**Goal.** A new program, built like `generate_waves.py` and using `motion_files` for everything
+that is not oscillator-specific. Reading `generate_waves.py` side by side is the easiest way to
+write it: the sections below follow its order.
+
+**2.1 The module docstring.** What it does (motion files for one oscillator from a test matrix),
+that the contract with `play_dat` and the controller is in `motion_files`, and the difference to
+`generate_waves` in one sentence: the input is the slide's stroke, there is no wave physics.
+
+**2.2 The oscillator.** No dataclass of its own is needed:
+
+```python
+limits = rig_limits.load_limits('oscillator', args.oscillator, config)
+```
+
+`RigLimits` has `name`, `namespace`, `upright_m`, `min_m`, `max_m`, `max_velocity_mps` (from T8 for
+`vertical`; the LinMot default for `sloshing`) and `max_acceleration_mps2` (the lower of the goal
+cap and the LinMot's limit; `None` for `vertical` today). That is everything `check_run`,
+`verify_with_play_dat` and `plot_motion` need. The default `config` is
+`rig_limits.default_config_path('oscillator')`, as `generate_waves.default_config_path` does for
+the wavemakers.
+
+**2.3 The test matrix.** Dataclasses as in `generate_waves` (197-219), with the oscillator's
+fields:
+
+```python
+@dataclass
+class RunSpec:
+    n_ramp: int        # periods (regular) or peak periods (irregular) of ramp
+    pause_s: float     # rest after the run, >= play_dat.MIN_GAP_S (1 s)
+
+@dataclass
+class RegularSpec(RunSpec):
+    period_s: float
+    stroke_m: float    # peak to peak
+    n_periods: int     # including ramps
+
+@dataclass
+class IrregularSpec(RunSpec):
+    sig_stroke_m: float  # 4 sigma of the position
+    tp_s: float
+    gamma: float         # 3.3 typical; 1.0 = Pierson-Moskowitz
+    duration_s: float    # whole run, ramps included
+    seed: int
+```
+
+`read_test_matrix(path)` as in `generate_waves` (248-285), with `motion_files.number` for each
+required column. Simpler than the wavemaker's: no `height_m` / `steepness` either-or. Columns per
+kind: all `kind` (default `regular`), `n_ramp`, `pause_s`; regular `period_s`, `stroke_m`,
+`n_periods`; irregular `sig_stroke_m`, `tp_s`, `gamma` (default 3.3), `duration_s`, `seed`. An
+unknown kind is an error with the row number, as in the wavemaker's.
+
+Checks the wavemaker's reader does not make, but cheap here and with clear messages: `stroke_m`
+and `sig_stroke_m` > 0; `period_s`, `tp_s` > 0; `pause_s` >= `play_dat.MIN_GAP_S`; `n_periods`
+>= 2 × `n_ramp` (else `apply_ramps` refuses it later with a sample count, which is harder to read).
+
+**2.4 Regular runs.**
+
+```python
+def regular_signal(spec: RegularSpec, dt: float):
+    amplitude = spec.stroke_m / 2.0
+    n = round(spec.n_periods * spec.period_s / dt)
+    t = np.arange(1, n + 1) * dt
+    x = amplitude * np.sin(2.0 * math.pi / spec.period_s * t)
+    x = motion_files.apply_ramps(x, round(spec.n_ramp * spec.period_s / dt), shape='cosine')
+    row = {'kind': 'regular', 'period_s': spec.period_s, 'stroke_m': spec.stroke_m,
+           'amplitude_m': round(amplitude, 5)}
+    return x, row
+```
+
+The same sample grid as the wavemaker's (`t` from `dt` to `n·dt`), so the last sample sits on a
+whole number of periods.
+
+**2.5 Irregular runs.** As `generate_waves.irregular_signal` (397-414) without the wave-to-paddle
+step:
+
+```python
+F_MIN_FACTOR = 0.5   # band fp/2 .. 3 fp, as the wavemaker's
+F_MAX_FACTOR = 3.0
+
+def irregular_signal(spec: IrregularSpec, dt: float):
+    fp = 1.0 / spec.tp_s
+    n, f, df, n_samples = motion_files.frequency_grid(
+        spec.duration_s, dt, F_MIN_FACTOR * fp, F_MAX_FACTOR * fp)
+    a = motion_files.wave_amplitudes(
+        motion_files.jonswap(f, df, spec.sig_stroke_m, spec.tp_s, spec.gamma), df)
+    x = motion_files.synthesize(n, a, motion_files.random_phases(spec.seed, len(f)), n_samples)
+    x = motion_files.apply_ramps(x, round(spec.n_ramp * spec.tp_s / dt), shape='cosine')
+    row = {'kind': 'irregular', 'peak_period_s': spec.tp_s, 'sig_stroke_m': spec.sig_stroke_m,
+           'gamma': spec.gamma, 'seed': spec.seed,
+           'f_min_hz': round(float(f[0]), 4), 'f_max_hz': round(float(f[-1]), 4),
+           'std_m': round(float(x.std()), 5), 'peak_m': round(float(np.abs(x).max()), 5)}
+    return x, row
+```
+
+Why `sig_stroke_m` goes straight into `jonswap`'s `hs_m`: `jonswap` scales the spectrum so that
+4·√m0 equals that argument. For the water that is Hs; for the slide it is 4σ of the position, which
+is what *significant stroke* means here. Nothing else changes.
+
+**2.6 Jerk.** The drive's limit S-0-0193 (3 m/s³) is not a refusal, so it is a column and a
+warning, not a `check_run` issue:
+
+```python
+def peak_jerk(x, dt: float) -> float:
+    """max |third difference| / dt^3, as play_dat computes speed and acceleration."""
+    return float(np.abs(np.diff(x, 3)).max() / dt ** 3)
+```
+
+After each signal, `row['peak_jerk_mps3'] = round(peak_jerk(x, dt), 3)`, and if it is above
+`args.max_jerk_mps3` print `run N: peak jerk J m/s^3 above M: the drive rounds the motion off`.
+Expect irregular runs to show high jerk sooner than regular ones: jerk grows with f³, so the top
+of the band (3·fp) dominates.
+
+**2.7 Run table columns.**
+
+```python
+OSCILLATION_COLUMNS = ['run', 'start_s', 'end_s', 'kind',
+                       'period_s', 'stroke_m', 'amplitude_m',                    # regular
+                       'peak_period_s', 'sig_stroke_m', 'gamma', 'seed',         # irregular
+                       'f_min_hz', 'f_max_hz', 'std_m', 'peak_m',
+                       'peak_jerk_mps3', 'status']
+```
+
+`run`, `start_s`, `end_s` and `status` are what `play_dat` reads (`read_run_table`); the rest is
+for people.
+
+**2.8 `main`.** The same shape as `generate_waves.main` (624-678):
+
+| Step | Content |
+|---|---|
+| Arguments | `oscillator` (name in `oscillator.yaml`), `test_matrix`, `-o/--output` (required), `--config`, `--dt` (0.02), `--max-velocity-mps`, `--max-jerk-mps3` (3.0), `--no-plot`, `--show`. No `--water-depth` |
+| Limits | `rig_limits.load_limits('oscillator', ...)`; `max_velocity = args.max_velocity_mps or limits.max_velocity_mps`; if `None`, `parser.error` naming `--max-velocity-mps` (before T8, for `vertical`) |
+| Signals | `runs = [run_signal(spec, dt) for spec in read_test_matrix(...)]`, with the jerk added to each row |
+| Files | `motion_files.assemble(runs, dt, lambda x: motion_files.check_run(limits, x, dt, max_velocity))`, then `write_motion`, `write_run_table(..., OSCILLATION_COLUMNS)`, `verify_with_play_dat(dat, limits, max_velocity)`, `write_record(..., program='generate_oscillations', rig_lines=[f'oscillator   {limits.name}', f'max jerk     {args.max_jerk_mps3} m/s^3 (warning only)'], ...)`, `plot_motion` unless `--no-plot` |
+| Output | `<output>.dat: N runs, M skipped, X min`, then the command: `ros2 run rig_controller play_dat <output>.dat <name> --rig oscillator --dry-run`, plus `--max-velocity-mps` if it came from the command line and `--config` if one was given |
+
+The same warning as the wavemaker's README applies: `-o session` would overwrite `session.csv`.
+Refusing `-o` equal to the matrix's base name is cheap here.
+
+**2.9 Install.** Next to `generate_waves` in `rig_controller/CMakeLists.txt` (63-66):
+
+```cmake
+# Generates oscillator motion files (.dat + run table) for play_dat (see the script's docstring).
+install(PROGRAMS src/generate_oscillations.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME generate_oscillations
+)
+```
+
+**2.10 Check.**
+
+```bash
+mkdir -p /tmp/t7osc && cd /tmp/t7osc
+cat > session.csv <<'END'
+kind,period_s,stroke_m,n_periods,sig_stroke_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,2.0,0.020,10,,,,,,2,5
+regular,1.0,0.010,10,,,,,,2,5
+irregular,,,,0.010,1.5,3.3,120,1,3,10
+END
+ros2 run rig_controller generate_oscillations vertical session.csv -o session_osc
+ros2 run rig_controller play_dat session_osc.dat vertical --rig oscillator --dry-run
+```
+
+**Done when:** three runs, none skipped; `play_dat` lists every run `OK` with the limits and
+namespace `/oscillators/vertical`; the `.png` shows the runs inside ±0.2 m; the `.txt` names the
+oscillator and the yaml; the run table's `peak_jerk_mps3` is about 0.31 for run 0 and 1.24 for run 1
+((s/2)(2π/T)³; the cosine ramp adds a little);
+and `sloshing` works too (`generate_oscillations sloshing ...`, LinMot limits). Tests:
+`test_generate_oscillations.py` (Claude).
+
+**Needs first:** T8 (the vertical oscillator's speed limit from `rig_limits`) for step 2; without
+it the script needs `--max-velocity-mps`, as linear wavemakers do today. Step 1 does not need it.
 
 ## Task details
 
@@ -293,26 +627,20 @@ What is left of each task, with the reasons. Done parts are left out.
 
 ### T5: the Pi
 
-The repo part is done (launch argument `oscillator`, `run.sh`, `stop.sh`, the unit's texts). Left:
-putting it on the ladertanken Pi, the switching decision, and the checks on the rig.
+Left: two checks for when the rigs are switched, and the switching decision.
 
-**On the Pi, after `git pull` and `colcon build`:** the unit file changed, so copy it again:
-
-```bash
-sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/oscillator@.service /etc/systemd/system/
-sudo systemctl daemon-reload
-```
-
-Then pick the vertical oscillator:
-
-```bash
-sudoedit /etc/default/oscillator     # add: OSCILLATOR=vertical
-cat /etc/default/oscillator          # ROS_DOMAIN_ID=1, PORT=8080, OSCILLATOR=vertical
-```
-
-The file exists if the sloshing rig was installed (rpi/README.md, *Oscillator*); if not, create it
-with `ROS_DOMAIN_ID` as in `/etc/default/wavemaker` (run.sh refuses domain 0 or none). The
-service requires the file (`EnvironmentFile=` without `-`).
+1. **Refusal, on the wavemaker side.** With the wavemaker drive plugged in and
+   `wavemaker@ladertanken` running, `sudo systemctl start oscillator@ladertanken` fails with
+   `wavemaker@ladertanken is running; stop it first` (`refuse_if_busy.sh`). Only with the
+   wavemaker drive plugged in: the wavemaker's yaml on the oscillator drive would read mm as flap
+   degrees (decision 1).
+2. **The sloshing rig, when it is connected.** Remove `OSCILLATOR` from `/etc/default/oscillator`
+   (or set `sloshing`) and start; the journal shows `LinMot: homed` and the nodes are in
+   `/oscillators/sloshing`.
+3. **Afterwards.** The Pi stays on `feat-vertical-oscillator`, so the wavemaker runs this branch's
+   code too. T2 leaves ladertanken's numbers unchanged (the tests check it), but the first wavemaker
+   run after the switch should be a small wave. Back to `master` once the branch is merged:
+   `git checkout master && git pull`, `colcon build`.
 
 **Decide: switching between sloshing and vertical.** Both run on the ladertanken Pi as the same
 unit, `oscillator@ladertanken`, and the unit's instance (`%i`) is the Pi user, not the
@@ -327,24 +655,12 @@ Options:
   `refuse_if_busy.sh` takes a list of units (wavemaker and the other oscillator), the wavemaker's
   unit and `windows/_rig.bat` learn the third rig, and the sudoers line gets two more commands.
 
-**Check, in order:**
+### T7: generate_oscillations
 
-1. On the Pi, with the oscillator drive plugged in and its mains on (*Commissioning* step 0):
-
-   ```bash
-   sudo systemctl start oscillator@ladertanken
-   journalctl -u oscillator@ladertanken -f -o cat     # "Drive status: ..." from the controller
-   ros2 node list   # /oscillators/vertical/{controller,bridge,lifecycle_manager,soft_stop,web}
-   ```
-
-2. The page on port 8080 shows the bridge's state (`ready`), which proves the bridge block and
-   the web namespace.
-3. `sudo systemctl stop oscillator@ladertanken` finishes in a few seconds, not 15 s
-   (`stop.sh`), and the drive switches off with the brake holding.
-4. With `wavemaker@ladertanken` running, starting `oscillator@ladertanken` is refused
-   (`refuse_if_busy.sh`, already there).
-5. The sloshing rig still starts with `OSCILLATOR` removed or set to `sloshing`, when it is
-   connected (or check with `--show-args` and the default).
+Spec and plan: *T7 spec* above. In order: T8 first (the speed limit `generate_oscillations` reads
+through `rig_limits`), then step 1 (`motion_files.py`, a pure move: 78 tests green and a
+byte-identical `.dat`), then step 2 (the script). Claude reviews each step and runs the tests;
+the test changes are Claude's once handed over.
 
 ### T8: rig_limits
 
@@ -371,21 +687,37 @@ Options:
   default, which they already run with unseen, now visible. Replace it with the drive's value
   when they are deployed (TODO item 19 note, T9). Keep `required` in the code.
 - Add `drive_scale.hpp` to the rules the module docstring lists (5-8).
-- **Check:** `play_dat osc_test.dat vertical --rig oscillator --dry-run` runs without
-  `--max-velocity-mps` and shows `0.1000 m/s`.
+- **Check:**
+
+  ```bash
+  cd ~/ros_ws/src/hydrolab_rigs/rig_controller/src
+  python3 -c "import rig_limits; print(rig_limits.load_limits('oscillator', 'vertical').max_velocity_mps)"   # 0.1
+  python3 -c "import rig_limits; print(rig_limits.load_limits('wavemaker', 'mclab').max_velocity_mps)"       # 600.0
+  python3 -c "import rig_limits; print(rig_limits.load_limits('wavemaker', 'ladertanken').max_velocity_mps)" # 0.7632, unchanged
+  ```
+
+  Later, `play_dat <file> vertical --rig oscillator --dry-run` without `--max-velocity-mps`
+  shows `0.1000 m/s`. 600 m/s for mclab is right for its placeholder factor 1 and shows the
+  factor is not set yet (TODO item 19).
+- Tests: `test_rig_limits.py` (Claude, see the list above).
 
 ### T9: documentation
+
+What happened on 2026-11-09 and the new parameters, in the files people read. Claude can write
+these once you hand them over.
 
 | File | Where | What |
 |---|---|---|
 | `README.md` | *Actuator and limits* (103-113) | `drive_motion`: drop "Linear units are not verified yet (TODO 19)". The `travel_* / min_position_m` row: IndraDrive linear uses only `travel_*`; `min/max_position_m` are LinMot only. Add `drive_m_per_unit` (default 1), `drive_velocity_per_unit_per_s` (default 1/6, the deg/s → rpm rule) and `drive_direction` (±1, int). `max_velocity_rpm` / `hold_velocity_rpm`: velocity tag units, rpm only on angular drives |
-| `README.md` | new section after *Running a wavemaker* | Vertical oscillator (ladertanken): `oscillator:=vertical`, replugging (link to COMMISSIONING), `make_osc_dat` → `play_dat` |
-| `COMMISSIONING.md` | new section | The replug procedure (*Commissioning* step 0) and steps 2-7 with the results so far (2026-11-09: live, brake, +5 mm move, direction) |
-| `TODO.md` | item 19 (24-25) | Close it: the three parameters and one set of limits. lilletanken and mclab still need their factors from their drives when deployed: a short note or a new item |
+| `README.md` | new section after *Running a wavemaker* | Vertical oscillator (ladertanken): `oscillator:=vertical` and `OSCILLATOR=`, replugging (link to COMMISSIONING), the page, Stop holds in place and *Return to upright* |
+| `README.md` | after *Generating motion files* (after T7) | *Generating oscillator motion files*: the test matrix with stroke columns, `generate_oscillations`, its four files, the jerk warning, `play_dat ... --rig oscillator` |
+| `COMMISSIONING.md` | item 5 (38-41) | MGate fault timeout set 2026-11-09 (slave 2, slot 4, 500 ms, fault value 0); kill test passed on the oscillator (A0108 → C0401, brake holds). Left: the kill test on the wavemaker drive. Note: only one Modbus client on slave 2's outputs while a rig runs |
+| `COMMISSIONING.md` | new section *Vertical oscillator* | The replug procedure (*Commissioning* step 0 here) and steps 2-7 with the results (direction, scaling, the five no-load waves, kill test) and the open loaded tests |
+| `TODO.md` | item 19 (24-25) | Close it: the three parameters and one set of limits. lilletanken and mclab still need their factors (and a real `max_velocity_rpm`) when deployed: a short note or a new item |
 | `TODO.md` | item 30 (32-33) | Half done: the actuator always declares `travel_*`; the controller still declares them only for linear rigs |
-| `rpi/README.md` | `/etc/default/oscillator` | `OSCILLATOR=` |
-
-Claude can write the README and docstring parts once you hand them over.
+| `TODO.md` | *Oscillator motion generator* (269-297) | In progress: the decisions of 2026-11-09 (test matrix like the wavemaker's, regular and irregular, `motion_files.py`, `generate_oscillations`); for the vertical rig too, not only sloshing |
+| `TODO.md` | new item | Tracking under changing loads (*Open questions*): drive tuning with Robert (about 2026-11-23); record and report the measured motion per run |
+| `rpi/README.md` | *Oscillator* (450-) | Both oscillators on one unit; `OSCILLATOR=` in `/etc/default/oscillator` and how to switch (after the T5 decision); the LinMot-only homing texts; stopping one unit per command (the sudoers rule); a stop after a crashed controller takes about 45 s and ends `Failed` |
 
 ## Commissioning (on the rig, one rig at a time)
 
@@ -412,20 +744,94 @@ cd ~/ros_ws && source install/setup.bash
       ~/ros_ws/build/mgate5101_driver/mgate_example
       ```
 
+      **In parameter mode the monitor shows nothing useful.** After a `mgate_example` run or a
+      service stop the drive is in A0050 (control word 0). The monitor then prints
+      `SW=0x0888 PM --` with position, velocity and diag exactly 0 (seen 2026-11-09): the drive
+      sends no actual values. And ladertanken's upright is 0° (`actuator_upright_angle_deg`), so a
+      wavemaker at upright reads near 0 too. Identify the drive by the plug and its display; the
+      position check then happens in the controller's `Drive status` line after `enable()`
+      (operating mode, target parked on the current position, so nothing moves).
    3. Only then start the matching service. The oscillator's mains must be switched on at the
       cabinet (display A0012 `Ab`, not A0013 `bb`) before anything can enable it.
 1. **Drive layout, read only (decision 2).** Done 2026-11-06 from `Default.par`: it matches
    (see *The oscillator drive*).
 
    Steps 2-4 done 2026-11-09 (live, brake holding, `--move` +5 mm and back; see *PROFIBUS
-   diagnosis log*, first move). Step 6 (fault timeout) is still open.
+   diagnosis log*, first move). Step 6 (fault timeout): see below.
+
+   Under the controller 2026-11-09 (`oscillator@ladertanken`, `OSCILLATOR=vertical`, commit
+   `cecf951`): configure and activate clean, `Drive status: SW=0xC81E OM AF inpos pos=0.0814`
+   (the target parked on the position, nothing moved), all nodes in `/oscillators/vertical`, the
+   page connected and idle. `systemctl stop` took 4.5 s with the ordered shutdown (bridge, then
+   controller, 0.33 s) before SIGINT.
+
+   **Step 6, first try 2026-11-09 failed:** after `kill -9` the drive stayed at A0108 (enabled,
+   holding position) because the MGate's output fault timeout was 0 (off). Switching off by hand
+   after a dead controller: `systemctl stop`, then `mgate_example` for 1-2 s (it writes control
+   word 0), or the E-stop.
+
+   **Step 6 passed 2026-11-09 after the fix:** in MGate Manager, slave 2, slot 4 (`0xE5 Output 6
+   Words`, output 0…11) had timeout 0; set to 500 ms, fault value all `00` (the user parameters
+   `C0 00 08` untouched). `kill -9` on the controller: A0108 → C0401 (the same code as after
+   control word 0 from `mgate_example`) at once, the brake holding: the drive off without
+   anything on the Pi. The setting is
+   on slave 2, so it covers the wavemaker too; its kill test is COMMISSIONING item 5. Only one
+   Modbus client may touch slave 2's output block while a rig runs: any access restarts the
+   MGate's timer.
+   After a fault switch-off the drive stays in C0401 (status word `OM Ab`); the next service
+   start recovers it: `enable()` → A0108, `SW=0xC81E OM AF` in 0.3 s. The service stop after a
+   `kill -9` takes about 45 s: the lifecycle manager waits for the dead controller and is killed
+   (SIGINT 20 s, SIGTERM 25 s, then SIGKILL; the unit ends `Failed with result 'exit-code'`).
+
+   **First wave 2026-11-09 16:14** (page: height 0.005 m, period 2 s, about 5 periods; bag
+   `~/bags/osc_first_wave` on the lab PC, recorded from the PC over domain 1):
+   `oscillator_actuator_setpoint = −1.000 × setpoint` (mm), so `drive_direction: -1` and
+   `drive_m_per_unit` act as intended; position follows with a lag of about 160 ms (8 control
+   cycles; 0.07 mm rms after the shift, 0.87 mm without); stroke 4.87 of 5.00 mm (97 %). The
+   wave started from 0.92 mm, where the earlier unrecorded run had stopped. Stop on the page
+   halts in place (by design, README *Check and play*); *Return to upright* brings it to 0.
+
+   **Second wave 2026-11-09 16:16** (height 0.02 m, period 2 s, 34.6 s; bag
+   `~/bags/osc_wave_20mm_2s`): actuator = −1.000 × setpoint; lag about 180 ms (9 cycles; 0.28 mm
+   rms after the shift); stroke 19.46 of 20.00 mm (97.3 %), steady from the 2nd period. Both
+   waves start up (about +2 mm), then the ramp grows. Stop at +8.1 mm held there; *Return to
+   upright* 8.1 → 0 mm in 1.0 s (setpoint peak 15 mm/s, under
+   `return_to_upright_max_velocity_mps: 0.02`), the position 0.4 mm behind at the last sample.
+
+   **Third wave 2026-11-09 16:19** (height 0.02 m, period 1 s, 10 periods; bag
+   `~/bags/osc_wave_20mm_1s`; computed jerk 2.5 m/s³, drive limit 3): lag again about 180 ms (now
+   65° of phase); stroke **17.9 of 20.0 mm (89.7 %)**, symmetric (±8.95 mm), steady from the 2nd
+   period. At 2 s the same stroke reached 97.3 %.
+
+   **Fourth wave 2026-11-09 16:21** (10 mm, 1 s, jerk 1.2 m/s³; bag `~/bags/osc_wave_10mm_1s`):
+   89.7 %, lag 180 ms, the same as 20 mm at 1 s. **The loss depends on the period, not on the jerk
+   limit:** linear, a fixed 180 ms lag. Suspect: the positioning-speed cap, peak speed ×
+   `positioning_velocity_margin` (default 1.2, not set in the vertical block), too low for the
+   drive to catch up after the lag.
+
+   **Fifth wave 2026-11-09 16:32** (10 mm, 1 s, `positioning_velocity_margin: 2.0` on the Pi only;
+   bag `~/bags/osc_wave_10mm_1s_m2`): 89.7 % again, lag 160 ms. **The speed cap is not the cause.**
+   The two periods fit one first-order lag: τ = 76 ms at 2 s, 78 ms at 1 s (amplitude
+   1/√(1+(ωτ)²)), plus about 100 ms of pure delay. In `Default.par`: Kv S-0-0104 = 1.00
+   (1000/min), a position-loop time constant of 60 ms if it acts without feedforward; velocity
+   feedforward P-0-0040 = 100 %, command smoothing P-0-0099 = 0, average filter P-0-0041 = 0.
+   Open: where the 77 ms comes from (Kv with the drive's interpolation of a target that steps every
+   20 ms is the candidate), and whether to fix it in the drive (with its owner) or compensate the
+   stroke per period in the controller or the files.
+
+   **All five waves were without load and without water** (bare slide). They are a no-load
+   baseline: direction, scaling, Stop and return are right, and a period-dependent loss exists
+   even unloaded. Don't tune or compensate from them. Under load: repeat 5 and 20 mm at 2 s and the
+   brake test (step 3), then a sweep at a fixed stroke (e.g. 10 mm at 3, 2, 1.5, 1, 0.8 s; a T7
+   file played with `play_dat`), with current and torque watched in IndraWorks.
 2. **Monitor.** With the oscillator plugged in, `mgate_example` must print `live`, a position
    near 0 that follows a jog from IndraWorks (mm), and the diag number IndraWorks shows.
    **The monitor is not read-only.** It writes the whole output block every cycle
    (`write_only_dirty = false`), starting with control word 0 (drive off). Never run it while a
    controller runs. A jog from IndraWorks during the monitor needs IndraWorks to take control
    (e.g. easy startup mode), because the bus is commanding drive off.
-3. Brake: switch the drive off at standstill at mid-height; the slide must not drop.
+3. Brake: switch the drive off at standstill at mid-height; the slide must not drop. Done
+   unloaded (2026-11-09); repeat with the load.
 4. **Driver-level test move, no controller running.** E-stop within reach:
 
    ```bash
@@ -436,29 +842,36 @@ cd ~/ros_ws && source install/setup.bash
    with the brake holding. Note which way + goes. Ctrl-C mid-move must halt and disable. A
    5 mm move confirms the position factor (`drive_m_per_unit: 0.001`). About 3 s per move
    confirms the velocity factor (5 mm at 100 mm/min).
-5. Start the oscillator (needs T2-T5) and check the limits:
+5. Dry run of a file (needs T7, and T8 to drop `--max-velocity-mps`):
 
    ```bash
    sudo systemctl start oscillator@ladertanken
-   ros2 run rig_controller play_dat osc_test.dat vertical --rig oscillator --max-velocity-mps 0.05 --dry-run
+   ros2 run rig_controller generate_oscillations vertical session.csv -o session_osc
+   ros2 run rig_controller play_dat session_osc.dat vertical --rig oscillator --dry-run
    ```
 
    The first line must show the travel (−0.2…0.2 m) and upright from the yaml, and
-   `namespace /oscillators/vertical`. Drop `--max-velocity-mps` after T8.
+   `namespace /oscillators/vertical`.
 6. **Fault timeout:** with the drive enabled, kill the controller (`kill -9` on the
    `controller_node` process). The drive must switch off within about 500 ms (MGate fault
    timeout, COMMISSIONING item 5: set for slave 2, so it covers the oscillator too) and the
    brake must hold the slide.
-7. Play a small file first (e.g. stroke 5 mm, period 2 s), recording setpoint and position:
+7. Waves. Done from the web page 2026-11-09, unloaded (waves 1-5 above). Next, with the load:
+   a file from `generate_oscillations` played with `play_dat`, recorded from the lab PC (the PC
+   sees domain 1; no copying afterwards):
 
    ```bash
-   ros2 bag record -o ~/bags/osc_test \
-     /oscillators/vertical/oscillator_actuator_setpoint /oscillators/vertical/oscillator_position &
-   ros2 run rig_controller play_dat osc_test.dat vertical --rig oscillator --max-velocity-mps 0.05
+   # lab PC
+   source /opt/ros/jazzy/setup.bash && export ROS_DOMAIN_ID=1
+   ros2 bag record -o ~/bags/<name> --topics /oscillators/vertical/oscillator_actuator_setpoint \
+     /oscillators/vertical/oscillator_position /oscillators/vertical/oscillator_setpoint \
+     /oscillators/vertical/oscillator_velocity /oscillators/vertical/oscillator_state
+   # Pi
+   ros2 run rig_controller play_dat session_osc.dat vertical --rig oscillator
    ```
 
    Ctrl-C cancels the current run and stops the program. Then increase stroke and frequency
-   step by step, watching the lag against S-0-0260 (decision 5).
+   step by step, watching the stroke and lag (*Open questions*, tracking).
    From where the lag or the mechanics become a problem, set `max_goal_acceleration_mps2` and
    `min_period_s` in the vertical block (0 = no limit until then; only the drive's acceleration
    and jerk limit the motion). The controller then rejects a goal that is too steep instead of
@@ -582,8 +995,8 @@ parameters `80 00 08` → **`C0 00 08`** fixed it: P-0-4073 `Data-Exch WD+`, `sl
 
   Enable `Ab` → `AF` → A0108 and disable were clean; 159 cycles, no errors. The velocity
   feedback (S-0-0040) jitters about ±0.8 mm/s at standstill.
-- Not yet done before the oscillator runs under the controller: MGate output fault timeout
-  (about 500 ms, fault value 0) and the kill test; P-0-4088 → 0x0028 (decision pending).
+- MGate output fault timeout (500 ms, fault value 0) and the kill test: done 2026-11-09
+  (*Commissioning* step 6). P-0-4088 → 0x0028: decision pending (*Open questions*).
 
 ### Symptom
 
@@ -647,8 +1060,8 @@ status is `0003` (Operate), with an empty live list.
   default 00: bus failure is an F4xxx error with the drive's error reaction. The controller's
   fault path (control word 0, MGate fault value) relies on that. Proposal: 0x0028 before the
   oscillator moves under the controller; it changes the drive's existing setup.
-- **The MGate's output fault timeout may be off** (Autoscan showed timeout 0). COMMISSIONING
-  item 5 / Commissioning step 6 above: check it before any `--move`.
+- **The MGate's output fault timeout was off** (timeout 0 on slave 2's output module). Set to
+  500 ms on 2026-11-09 (*Commissioning* step 6).
 - `S-0-0051` (oscillator) vs `S-0-0386` (wavemaker) as the position input: same length,
   same value with one encoder.
 
@@ -659,9 +1072,22 @@ status is `0003` (Operate), with an empty live list.
 - `Default.par` (oscillator), `WMDefault.par` (wavemaker): IndraWorks exports, 2026-11-06.
 - `Profibus/`: the newer Rexroth GSD set (RX04-RX17) with `Info_eng.txt`.
 - `TestOscillator.bin`: sensor log of the first move (2026-11-09).
-- To do: export the MGate configuration with `C0 00 08` as the oscillator's backup.
+- To do: export the MGate configuration as it is now (`C0 00 08`, fault timeout 500 ms) as the
+  oscillator's backup, if not done after the 2026-11-09 change.
 
 ## Open questions
+
+- **Tracking under changing loads (2026-11-09).** Unloaded, the slide follows with a lag of
+  about 77 ms (first order) plus 100 ms delay: 97 % of the stroke at 2 s, 90 % at 1 s
+  (*Commissioning*, waves 1-5). The load is not fixed: different models, profiles, water
+  resistance and depths, so one fixed correction cannot hold. Options: (1) a stiffer drive
+  (Kv S-0-0104 = 1.0, acceleration feedforward S-0-0348 / P-0-1126 = 0; with the drive's owner);
+  (2) always record and report the measured motion per run (`oscillator_position`); (3) per-setup
+  calibration with a T7 sweep and a gain table per period (the controller's table is wavemaker
+  only today); (4) amplitude correction during the run (closed loop, steady sines only).
+  Recommended: 1 and 2 first. **To decide with the experimenters:** must the slide reach the
+  requested stroke exactly, or is it enough to know exactly what it did?
+  **Tuning (option 1) waits for Robert, back about 2026-11-23.** Until then: code.
 
 - Does the wavemaker (MPB-04) run with slave 2's user parameters `C0 00 08`? If not, Import
   the matching MGate configuration when switching drives (Commissioning step 0).
@@ -670,8 +1096,8 @@ status is `0003` (Operate), with an empty live list.
 - P-0-4088 bits 2/1: set the oscillator to 0x0028 (bus failure as error)?
 - Phase 2: which drive leaves address 2, the oscillator (wavemaker yaml unchanged) or the
   wavemaker (oscillator setup unchanged)?
-- Raise the jerk S-0-0193 (3 m/s³) for faster strokes? It changes the drive's existing setup.
+- Raise the jerk S-0-0193 (3 m/s³) for faster strokes? Part of the drive tuning with Robert.
 - Travel, stroke, max speed and rest position wanted for the vertical oscillator.
 - Is the axis counterbalanced, or does the motor hold the load? The brake is 5 Nm.
-- Rig name: `vertical`? It becomes the namespace `oscillators/vertical` and the `play_dat` name.
-- The soft stop on GPIO17: is the vertical rig wired to the same button as the wavemaker?
+- The soft stop on GPIO17: the vertical rig uses it (released at every start, 2026-11-09). Is the
+  button within reach of the vertical rig, or only at the wavemaker?
