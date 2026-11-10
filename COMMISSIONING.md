@@ -117,6 +117,11 @@ the wavemaker's drive). Plan and full log: [oscillator_sketch.md](oscillator_ske
 - Under the controller (2026-11-09): configure and activate clean, nothing moves at enable, all
   nodes in `/oscillators/vertical`, the page connected; `systemctl stop` in 4.5 s with the ordered
   shutdown.
+- `generate_oscillations` file played (2026-11-10, no load, from the PC, bag in
+  `~/oscillator_sessions/2026-11-10_rigtest`): 10 mm at 2 s, 10 mm at 1 s, irregular 10 mm Tp 1.5 s.
+  Setpoints equal the file within 0.003 mm; slide stroke 97.3 %, 89.5 %, 4σ 92.9 %; lag 190, 170,
+  160 ms; start and end within 0.1 mm of upright. The first attempt was refused: the soft stop was
+  engaged and released 10 s later.
 - Kill test (item 5): passed after the MGate fault timeout was set. After a fault switch-off the
   drive shows C0401; the next service start recovers it.
 - Five waves from the page, no load, no water (bags on the lab PC, `~/bags/osc_*`): drive command

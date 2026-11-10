@@ -287,7 +287,9 @@ limits, upright and namespace from `oscillator.yaml` (`play_dat <file> vertical 
 **Status (2026-11-10): done.** `rig_controller/src/generate_oscillations.py`, installed as
 `ros2 run rig_controller generate_oscillations`, with the shared code in `motion_files.py`, tests in
 `test_generate_oscillations.py` and the README section *Generating oscillator motion files*.
-Not yet played on the rig: the first file goes with the tracking work (item 46).
+Played on the rig 2026-11-10 (ladertanken, vertical, no load): three runs of 10 mm (regular 2 s and 1 s,
+irregular Tp 1.5 s for 60 s) from the PC with `play_dat`; the controller's setpoints equal the file
+within 0.003 mm, the slide reached 97 % / 90 % / 93 % (4σ) with 160-190 ms lag, as item 46.
 
 #### Decided (2026-11-09)
 

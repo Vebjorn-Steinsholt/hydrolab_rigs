@@ -372,7 +372,13 @@ unchanged. If the oscillator's existing setup must keep 2, move the wavemaker in
 the numbers (open question).
 
 Switching from phase 1:
-1. Change the address, wire the chain, and set termination at both ends only.
+1. Change the address, wire the chain, and set termination at both ends only. Chain wired
+   2026-11-10: MGate (termination ON) → wavemaker (OFF) → oscillator (ON). The oscillator's
+   P-0-4025 was set to 3 in IndraWorks. While the MGate is connected, IndraWorks refuses the
+   write (it says the parameter is write protected) and can't switch the phase: the master holds
+   the drive in phase 2 (`mgate_example`: `PM`), and the write needs phase 4. It works with the
+   PROFIBUS plug pulled from the drive: pick "phase switch to phase 4", write, save, then
+   power-cycle the control voltage.
 2. Add slave 3 on the gateway and read the address map.
 3. Edit the oscillator's yaml (`input_base_reg`, `output_base_reg`, `profibus_address`).
 4. Do the phase 2 code tasks below (block-size check, address-check tool, `mgate_example`
