@@ -401,6 +401,7 @@ def with_namespace(argv: list[str], limits) -> list[str]:
 LIMIT_PARAMETERS = [
     'drive_name', 'drive_motion', 'upright_position_m', 'actuator_lead_m_per_degree',
     'actuator_upright_angle_deg', 'min_position_deg', 'max_position_deg', 'max_velocity_rpm',
+    'drive_m_per_unit', 'drive_velocity_per_unit_per_s',
     'travel_minimum_m', 'travel_maximum_m', 'max_velocity_mps', 'max_acceleration_mps2',
     'max_goal_acceleration_mps2',
 ]

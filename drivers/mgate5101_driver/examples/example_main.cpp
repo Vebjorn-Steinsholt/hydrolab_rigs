@@ -1,9 +1,17 @@
 // example_main.cpp - Rexroth IndraDrive (HCS03 / CSB01.1C-PB, MPB-04) behind
 // an MGate 5101-PBM-MN at 192.168.1.70.
 //
-//   mgate_example            monitor only: prints drive status, never commands it
-//   mgate_example --move     clears errors, enables, moves +5 deg and back at
-//                            10 rpm, disables. Ctrl+C halts and disables.
+//   mgate_example            monitor slave 2 (the wavemaker) at registers 0 / 0
+//   mgate_example --input-base 7 --output-base 6 --profibus-address 3
+//                            monitor slave 3 (the vertical oscillator, daisy chain)
+//   mgate_example --move --profibus-address N [--input-base I --output-base O]
+//                            clears errors, enables, moves +5 units and back at
+//                            10 units, disables. Ctrl+C halts and disables.
+//
+// The monitor does not command a move, but it is not read only: it writes the
+// whole output block (control word 0) every cycle and at exit. Never run it on
+// a block whose rig is running. --move needs --profibus-address so it cannot
+// pick a drive by default.
 //
 // Before --move: set a fault timeout (200-500 ms, fault value 00) on the
 // MGate's "Output 6 Words" module, and keep the E-stop within reach.
@@ -16,7 +24,9 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <string>
 #include <thread>
 
 #include "mgate/indradrive.h"
@@ -33,6 +43,24 @@ void on_sigint(int) {
 }
 
 void sleep_ms(int ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
+
+void usage() {
+    std::fprintf(stderr,
+                 "usage: mgate_example [--move] [--input-base REG] [--output-base REG]\n"
+                 "                     [--profibus-address N]\n"
+                 "  defaults: registers 0 / 0, address 2 (the wavemaker); the vertical\n"
+                 "  oscillator is --input-base 7 --output-base 6 --profibus-address 3.\n"
+                 "  --move requires --profibus-address.\n");
+}
+
+// Parses a whole decimal number in [lo, hi]; false on anything else.
+bool parse_int(const char* text, long lo, long hi, long& out) {
+    char* end = nullptr;
+    const long v = std::strtol(text, &end, 10);
+    if (end == text || *end != '\0' || v < lo || v > hi) return false;
+    out = v;
+    return true;
+}
 
 int monitor(MGateDriver& drv, IndraDrive& drive) {
     for (int i = 0; i < 50; ++i) {
@@ -85,16 +113,52 @@ int test_move(IndraDrive& drive) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const bool do_move = argc > 1 && std::strcmp(argv[1], "--move") == 0;
+    bool do_move = false;
+    long input_base = 0, output_base = 0, profibus_address = -1;  // -1: not given
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        long* target = nullptr;
+        long lo = 0, hi = 0;
+        if (a == "--move") {
+            do_move = true;
+            continue;
+        } else if (a == "--input-base") {
+            target = &input_base; hi = 0x02FF;   // below the status area at 0x0300
+        } else if (a == "--output-base") {
+            target = &output_base; hi = 0x02FF;
+        } else if (a == "--profibus-address") {
+            target = &profibus_address; lo = 1; hi = 125;
+        } else if (a == "--help" || a == "-h") {
+            usage();
+            return 0;
+        } else {
+            std::fprintf(stderr, "unknown option %s\n", argv[i]);
+            usage();
+            return 2;
+        }
+        if (i + 1 >= argc || !parse_int(argv[i + 1], lo, hi, *target)) {
+            std::fprintf(stderr, "%s needs a number in %ld..%ld\n", a.c_str(), lo, hi);
+            return 2;
+        }
+        ++i;
+    }
+    if (do_move && profibus_address < 0) {
+        std::fprintf(stderr, "--move needs --profibus-address (2 wavemaker, 3 oscillator)\n");
+        return 2;
+    }
+    if (profibus_address < 0) profibus_address = 2;
+    std::printf("registers in %ld / out %ld, PROFIBUS address %ld\n",
+                input_base, output_base, profibus_address);
 
     GatewayConfig cfg;
     cfg.host    = "192.168.1.70";
     cfg.port    = 502;
     cfg.unit_id = 1;
 
-    cfg.input_base_reg    = 0x0000;
+    cfg.input_base_reg    = static_cast<std::uint16_t>(input_base);
     cfg.input_word_count  = 7;
-    cfg.output_base_reg   = 0x0000;  // same address as inputs: FC16 goes to the output area
+    // FC16 goes to the output area even where the address equals an input register.
+    cfg.output_base_reg   = static_cast<std::uint16_t>(output_base);
     cfg.output_word_count = 6;
     cfg.input_uses_fc4    = true;
 
@@ -112,6 +176,7 @@ int main(int argc, char** argv) {
     MGateDriver drv(cfg);
 
     IndraDriveConfig dcfg;
+    dcfg.profibus_address = static_cast<int>(profibus_address);
     dcfg.max_velocity_rpm = 50.0;  // commissioning cap; move_to() rejects anything faster
     IndraDrive drive(drv, dcfg);
 

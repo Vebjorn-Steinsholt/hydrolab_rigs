@@ -1,36 +1,34 @@
 # Sketch: IndraDrive C vertical oscillator on the ladertanken MGate
 
-Line numbers are as of commit `6b994c7` plus the uncommitted work on `bugfix-items-20-25`, except
-*Your tasks* and *Task details*: commit `cecf951` on `feat-vertical-oscillator` (2026-11-09).
+Line numbers are as of `feat-vertical-oscillator` on 2026-11-10 where checked; older ones may
+be a few lines off.
 
 ## Scope (2026-11-06)
 
-- **Phase 1, now: replugging, for developing and testing the code only.** It lasts until the
-  daisy-chain cable is delivered. The oscillator drive keeps PROFIBUS address **2**, as the
-  wavemaker drive does, so its existing setup is untouched. Only one of the two drives is on
-  the gateway's PROFIBUS cable at a time.
-- **Phase 2, when the cable arrives: daisy chain**
-  ([Phase 2: daisy chain](#phase-2-daisy-chain-when-the-cable-arrives)). Both drives stay on the
-  line, so one of them needs a different address. One rig still runs at a time. Running both at
-  once is deferred beyond that.
+- **Phase 1 (2026-11-06 – 2026-11-10): replugging.** The oscillator drive had PROFIBUS
+  address 2, as the wavemaker drive does, and the cable was replugged between the two.
+- **Phase 2, since 2026-11-10: daisy chain**
+  ([Phase 2: daisy chain](#phase-2-daisy-chain-done-2026-11-10)). Both drives stay on the line;
+  the oscillator is PROFIBUS address 3 (MGate slave 3, registers 7 / 6), the wavemaker keeps 2
+  (0 / 0). One rig still runs at a time. Running both at once is TODO 47.
 - **Phase 1 work carries over.** Everything that differs between the phases is in the yaml
   (blocks, PROFIBUS address), so the change is a config edit plus the phase 2 tasks, not a
   rewrite.
 - **The oscillator is developed by playing motion files** (`play_dat --rig oscillator`).
 - **You write the code.** Each task says what to build, where, and how to check it. Claude
-  writes tests and docs when you hand them over.
+  writes tests and docs, and maintains `mgate_example` (handed over 2026-11-10).
 
 ## Goal
 
 A second Rexroth IndraDrive C (rotary motor, linear drive scaling) runs a vertical oscillator.
-Connect it to the ladertanken MGate (`192.168.1.70`) in place of the wavemaker drive and run it
-from the ladertanken Pi, playing motion files, with the same safety behaviour as the wavemaker.
+It is daisy-chained behind the wavemaker drive on the ladertanken MGate (`192.168.1.70`) and
+runs from the ladertanken Pi, playing motion files, with the same safety behaviour as the wavemaker.
 
 ## The oscillator drive (read 2026-11-06)
 
 | | Value | Meaning for the code |
 |---|---|---|
-| PROFIBUS address | 2 | Same as the wavemaker: the gateway's slave 2, blocks 0/0, unchanged |
+| PROFIBUS address | 3 since 2026-11-10 (2 before) | MGate slave 3, inputs at register 7, outputs at 6; the wavemaker is slave 2 at 0 / 0 |
 | Scaling type | linear (the drive converts motor turns to mm) | `drive_motion: linear` |
 | Position resolution | 0.0001 mm | Tag factor 0.0001 → the "deg" tag is **mm** |
 | Velocity resolution | 0.001 mm/min | Tag factor 0.0001 → the "rpm" tag is **10 mm/min** per unit (1 mm/s = 6 units) |
@@ -54,7 +52,7 @@ wavemaker's `WMDefault.par`:
 | P-0-4081 outputs | P-0-4077, S-0-0258, S-0-0259, S-0-0108 (12 bytes) | the same | ✓ |
 | P-0-4088 master communication config | 0x002A | not in the file (default 0) | Bits 15/14 = 00: commands from PROFIBUS. **Bits 2/1 = 01: a bus failure is only a warning (E4xxx) and the last command is kept** (Reference Book R911297317-08, p. 1335). See *PROFIBUS diagnosis log* |
 | P-0-4076 fieldbus cycle time | 1000 µs | 2000 µs | — |
-| PROFIBUS address (P-0-4025) | **2** (read on the drive) | not in the file | P-0-4031 = 0x00020002 in both files |
+| PROFIBUS address (P-0-4025) | **3** since 2026-11-10 (2 when read) | not in the file (2) | P-0-4031 = 0x00020002 in both files. Writable only with the PROFIBUS plug pulled; takes effect after a 24 V restart (*Phase 2*) |
 | S-0-0076/77/78 position scaling | linear, 1 × 10⁻⁷ m = 0.0001 mm | rotary, 0.0001° | `drive_m_per_unit: 0.001` |
 | S-0-0044/45/46 velocity scaling | linear, 1 × 10⁻⁶ m/min = 0.001 mm/min | rotary, 0.0001 rpm | `drive_velocity_per_unit_per_s: 6.0` |
 | S-0-0160/161/162 acceleration scaling | linear, 0.001 mm/s² | rotary, 0.001 rad/s² | — |
@@ -73,8 +71,10 @@ wavemaker's `WMDefault.par`:
 ## How the code is built today (what decides the design)
 
 - Each controller node owns its own gateway connection: `IndraDriveActuator` creates one
-  `MGateDriver` and one `IndraDrive` (`rig_controller/src/indradrive_actuator.cpp:138-139`).
-  The blocks, sizes and status area are parameters; ladertanken uses 0/7 in, 0/6 out, status 768/9.
+  `MGateDriver` and one `IndraDrive` (`rig_controller/src/indradrive_actuator.cpp:145-146`).
+  The blocks, sizes and status area are parameters: the wavemaker uses inputs 0 (7 words),
+  outputs 0 (6 words); the oscillator 7 and 6; status 768/9 for both. `IndraDrive` refuses any
+  other block size (T1).
 - `IndraDrive` assumes a fixed cyclic layout (`indradrive.h:1-15`): P-0-4084 = 0xFFFE,
   drive-internal interpolation (S-0-0032), and P-0-4080/4081 = status, position, velocity, diag
   in; control, target, speed cap, override out. The tags carry the factor 0.0001 and call the
@@ -82,7 +82,7 @@ wavemaker's `WMDefault.par`:
 - **Linear IndraDrive scaling (TODO item 19)** was unfinished: a 0.1 m goal became 0.1 mm and
   the speed cap was 36 × too low. Fixed by T2 (2026-11-09): `drive_m_per_unit`,
   `drive_velocity_per_unit_per_s`, `drive_direction`, limits from travel.
-- **Only one rig runs on the Pi at a time.** `wavemaker@` and `oscillator@` refuse to start while
+- **Only one rig runs on the Pi at a time (TODO 47 will allow wavemaker + vertical).** `wavemaker@` and `oscillator@` refuse to start while
   the other runs (`rpi/refuse_if_busy.sh`, which also catches a launch by hand through the web
   port), and `windows/_rig.bat` stops the other before starting one. Since T5 (2026-11-09) the
   oscillator launch takes `oscillator:=sloshing|vertical`, set through `OSCILLATOR=` in
@@ -92,8 +92,9 @@ wavemaker's `WMDefault.par`:
   For a linear IndraDrive, `rig_limits` derives the speed limit from `max_velocity_rpm` and the
   drive's units (T8, 2026-11-09), so `--max-velocity-mps` is optional. `generate_waves` is wavemakers only; the
   oscillators have `generate_oscillations` (T7, done 2026-11-10).
-- **`mgate_example` works on the oscillator as it is**, because blocks 0/0 and address 2 are
-  the same (`drivers/mgate5101_driver/examples/example_main.cpp`). `--move` steps +5 and back
+- **`mgate_example` reaches the oscillator with options:** `--input-base 7 --output-base 6
+  --profibus-address 3` (`drivers/mgate5101_driver/examples/example_main.cpp`); without them it is
+  the wavemaker. `--move` refuses without `--profibus-address`. It steps +5 and back
   at 10: on this drive **5 mm at 100 mm/min (1.7 mm/s)**, about 3 s each way. Its limits default
   to −550…500 (`IndraDriveConfig`), outside ±211 mm, so the drive's limits are the only
   backstop; that is fine for a 5 mm step from about 0. It is built but not installed
@@ -113,9 +114,11 @@ All implemented on 2026-11-09 except where noted.
    - So the order is: stop the service, replug, then check before enabling. Stop the running
      service (`systemctl stop`), replug, label the plug, and check the monitor output against
      the drive you expect before starting the matching service (Commissioning, step 0).
+   **Ended 2026-11-10 with phase 2:** both drives are on the line at their own addresses and
+   blocks, so each yaml can only reach its own drive. No replugging.
 2. **The oscillator drive must speak the layout `IndraDrive` expects.** It sits on the gateway's
-   slave 2, whose modules are 7 words in / 6 words out. Check its P-0-4084, P-0-4080/4081 and
-   S-0-0032 against `indradrive.h:1-15`, **read only**. If the lengths differ, the drive does
+   slave 3 (slave 2 in phase 1), whose modules are 7 words in / 6 words out. Check its
+   P-0-4084, P-0-4080/4081 and S-0-0032 against `indradrive.h:1-15`, **read only**. If the lengths differ, the drive does
    not enter data exchange (live bit 0), which is safe: nothing moves. If the lists differ, the
    tags read the wrong values. Either way, decide then whether to change the drive's lists
    (which touches its existing setup) or make the tag table configurable.
@@ -158,8 +161,10 @@ All implemented on 2026-11-09 except where noted.
      depends on the period (*Commissioning*, waves 3-5; *Open questions*, tracking). Keep files
      under 3 m/s³ anyway: `generate_oscillations` warns above it. Raising S-0-0193 is for the drive
      tuning with Robert.
-6. **One rig at a time stays enforced by the Pi services.** The vertical oscillator runs as
-   `oscillator@ladertanken`, which cannot start while `wavemaker@ladertanken` runs. The
+6. **One rig at a time stays enforced by the Pi services, for now.** The vertical oscillator runs
+   as `oscillator@ladertanken`, which cannot start while `wavemaker@ladertanken` runs. TODO 47
+   will allow the wavemaker and the vertical oscillator together (*Deferred* below); sloshing
+   and vertical never run together. The
    oscillator launch gets an `oscillator` argument (`sloshing` or `vertical`), so the LinMot rig
    keeps working.
 7. **Files are played with `play_dat` as they are,** made by `generate_oscillations` (T7, built
@@ -168,12 +173,12 @@ All implemented on 2026-11-09 except where noted.
 
 ## Your tasks
 
-| # | File | Where | What | Done when | Left (2026-11-09) |
+| # | File | Where | What | Done when | Left (2026-11-10) |
 |---|---|---|---|---|---|
-| T5 | the ladertanken Pi | — | Decision 6: the last checks | Refused while the wavemaker runs; the sloshing rig still starts | Two checks at the next rig switch |
-| T10 (optional) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed: `--move` did its job on 2026-11-09 | `ros2 run mgate5101_driver mgate_example --move --step 50` moves 50 mm and back | Not needed now |
+| T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
+| T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed: `--move` did its job on 2026-11-09; the block and address options are done (2026-11-10) | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
 
-Order: T5's checks at the next rig switch. T7 (`generate_oscillations`, with tests and README
+Order: T5's check when the sloshing rig is connected. T7 (`generate_oscillations`, with tests and README
 section) and T9 were done 2026-11-10.
 
 ## Task details
@@ -182,17 +187,13 @@ What is left of each task, with the reasons. Done parts are left out.
 
 ### T5: the Pi
 
-Left: two checks for when the rigs are switched.
+Left: one check. The refusal passed 2026-11-10: with `wavemaker@ladertanken` running,
+`sudo systemctl start oscillator@ladertanken` failed in `ExecStartPre` (`refuse_if_busy.sh`).
 
-1. **Refusal, on the wavemaker side.** With the wavemaker drive plugged in and
-   `wavemaker@ladertanken` running, `sudo systemctl start oscillator@ladertanken` fails with
-   `wavemaker@ladertanken is running; stop it first` (`refuse_if_busy.sh`). Only with the
-   wavemaker drive plugged in: the wavemaker's yaml on the oscillator drive would read mm as flap
-   degrees (decision 1).
-2. **The sloshing rig, when it is connected.** Remove `OSCILLATOR` from `/etc/default/oscillator`
+1. **The sloshing rig, when it is connected.** Remove `OSCILLATOR` from `/etc/default/oscillator`
    (or set `sloshing`) and start; the journal shows `LinMot: homed` and the nodes are in
    `/oscillators/sloshing`.
-3. **Afterwards.** The Pi stays on `feat-vertical-oscillator`, so the wavemaker runs this branch's
+2. **Afterwards.** The Pi stays on `feat-vertical-oscillator`, so the wavemaker runs this branch's
    code too. T2 leaves ladertanken's numbers unchanged (the tests check it), but the first wavemaker
    run after the switch should be a small wave. Back to `master` once the branch is merged:
    `git checkout master && git pull`, `colcon build`.
@@ -217,26 +218,15 @@ cd ~/ros_ws && source install/setup.bash
    sudo systemctl stop wavemaker@ladertanken     # or oscillator@ladertanken
    ```
 
-   1. Replug the PROFIBUS cable to the other drive. That drive's plug is the end of the line:
-      termination ON. The oscillator needs slave 2's user parameters `C0 00 08` (Fail_Safe);
-      if the wavemaker does not run with them, Import the matching MGate configuration
-      (*PROFIBUS diagnosis log*, backups).
-   2. Run the monitor and check that the position is the one you expect from
-      that drive: about 0 mm on the oscillator, the flap angle on the wavemaker.
-
-      ```bash
-      ~/ros_ws/build/mgate5101_driver/mgate_example
-      ```
-
-      **In parameter mode the monitor shows nothing useful.** After a `mgate_example` run or a
-      service stop the drive is in A0050 (control word 0). The monitor then prints
-      `SW=0x0888 PM --` with position, velocity and diag exactly 0 (seen 2026-11-09): the drive
-      sends no actual values. And ladertanken's upright is 0° (`actuator_upright_angle_deg`), so a
-      wavemaker at upright reads near 0 too. Identify the drive by the plug and its display; the
-      position check then happens in the controller's `Drive status` line after `enable()`
-      (operating mode, target parked on the current position, so nothing moves).
-   3. Only then start the matching service. The oscillator's mains must be switched on at the
-      cabinet (display A0012 `Ab`, not A0013 `bb`) before anything can enable it.
+   Since phase 2 (2026-11-10) nothing is replugged: the wavemaker is slave 2 (blocks 0 / 0),
+   the oscillator slave 3 (7 / 6), each yaml reaches only its own drive.
+   1. For the oscillator: mains on at the cabinet (display A0012 `Ab`, not A0013 `bb`) and
+      `OSCILLATOR=vertical` in `/etc/default/oscillator`.
+   2. Start the matching service; the controller's `Drive status` line is the check (`OM AF`,
+      the position where the slide or flap stands).
+   3. **`mgate_example` without options is slave 2 (the wavemaker)**; the oscillator is
+      `--input-base 7 --output-base 6 --profibus-address 3`. In parameter mode it shows
+      `SW=0x0888 PM --` with everything 0 (the drive sends no actual values).
 1. **Drive layout, read only (decision 2).** Done 2026-11-06 from `Default.par`: it matches
    (see *The oscillator drive*).
 
@@ -258,10 +248,9 @@ cd ~/ros_ws && source install/setup.bash
    Words`, output 0…11) had timeout 0; set to 500 ms, fault value all `00` (the user parameters
    `C0 00 08` untouched). `kill -9` on the controller: A0108 → C0401 (the same code as after
    control word 0 from `mgate_example`) at once, the brake holding: the drive off without
-   anything on the Pi. The setting is
-   on slave 2, so it covers the wavemaker too; its kill test is COMMISSIONING item 5. Only one
-   Modbus client may touch slave 2's output block while a rig runs: any access restarts the
-   MGate's timer.
+   anything on the Pi. Since phase 2 each slave has its own setting (slave 3: the oscillator).
+   The timer runs per slave: another rig's writes do not keep a dead rig alive (*Test 1*,
+   2026-11-10). Only one Modbus client may write a slave's output block while its rig runs.
    After a fault switch-off the drive stays in C0401 (status word `OM Ab`); the next service
    start recovers it: `enable()` → A0108, `SW=0xC81E OM AF` in 0.3 s. The service stop after a
    `kill -9` takes about 45 s: the lifecycle manager waits for the dead controller and is killed
@@ -308,7 +297,8 @@ cd ~/ros_ws && source install/setup.bash
    even unloaded. Don't tune or compensate from them. Under load: repeat 5 and 20 mm at 2 s and the
    brake test (step 3), then a sweep at a fixed stroke (e.g. 10 mm at 3, 2, 1.5, 1, 0.8 s; a T7
    file played with `play_dat`), with current and torque watched in IndraWorks.
-2. **Monitor.** With the oscillator plugged in, `mgate_example` must print `live`, a position
+2. **Monitor.** `mgate_example --input-base 7 --output-base 6 --profibus-address 3` must print
+   `live`, a position
    near 0 that follows a jog from IndraWorks (mm), and the diag number IndraWorks shows.
    **The monitor is not read-only.** It writes the whole output block every cycle
    (`write_only_dirty = false`), starting with control word 0 (drive off). Never run it while a
@@ -319,7 +309,7 @@ cd ~/ros_ws && source install/setup.bash
 4. **Driver-level test move, no controller running.** E-stop within reach:
 
    ```bash
-   ~/ros_ws/build/mgate5101_driver/mgate_example --move
+   ~/ros_ws/build/mgate5101_driver/mgate_example --move --profibus-address 3 --input-base 7 --output-base 6
    ```
 
    The slide must go 5 mm up or down and back at about 1.7 mm/s, then the drive switches off
@@ -338,8 +328,8 @@ cd ~/ros_ws && source install/setup.bash
    `namespace /oscillators/vertical`.
 6. **Fault timeout:** with the drive enabled, kill the controller (`kill -9` on the
    `controller_node` process). The drive must switch off within about 500 ms (MGate fault
-   timeout, COMMISSIONING item 5: set for slave 2, so it covers the oscillator too) and the
-   brake must hold the slide.
+   timeout on slave 3, COMMISSIONING item 5) and the brake must hold the slide. Passed again on
+   the daisy chain 2026-11-10 (*Phase 2*).
 7. Waves. Done from the web page 2026-11-09, unloaded (waves 1-5 above). Next, with the load:
    a file from `generate_oscillations` played with `play_dat`, recorded from the lab PC (the PC
    sees domain 1; no copying afterwards):
@@ -361,17 +351,40 @@ cd ~/ros_ws && source install/setup.bash
    and jerk limit the motion). The controller then rejects a goal that is too steep instead of
    the drive rounding it off.
 
-Back to the wavemaker: step 0 the other way round, then `start_wavemaker.bat` or
+Back to the wavemaker: stop `oscillator@ladertanken`, then `start_wavemaker.bat` or
 `sudo systemctl start wavemaker@ladertanken`.
 
-## Phase 2: daisy chain (when the cable arrives)
+## Phase 2: daisy chain (done 2026-11-10)
 
-Both drives on one line, one rig running at a time. One drive must leave address 2. The
-sections below assume the oscillator moves to 3, which keeps the wavemaker and its yaml
-unchanged. If the oscillator's existing setup must keep 2, move the wavemaker instead and swap
-the numbers (open question).
+Both drives on one line, one rig running at a time. The oscillator moved to address 3; the
+wavemaker and `wavemakers.yaml` are unchanged.
 
-Switching from phase 1:
+**Result 2026-11-10:**
+- MGate: slave 2 (wavemaker) user parameters `80 00 08`, input bytes 0-13, output 0-11; slave 3
+  (oscillator) `C0 00 08`, input 14-27 (register 7), output 12-23 (register 6). Both: modules
+  ParamCh not used ×2, Input 7 Words, Output 6 Words, output timeout 500 ms, fault value 0.
+  Live list `0x0C` (addresses 2 and 3).
+- `oscillator.yaml`: `input_base_reg: 7`, `output_base_reg: 6`, `profibus_address: 3`.
+- Vertical run 1 of `rigtest.dat` played over the chain; the wavemaker's block untouched.
+- Kill tests (`kill -9` on `controller_node`, both blocks logged at 10 Hz, read only): the
+  oscillator left `AF` about 0.6 s later (→ C0401), the wavemaker about 0.5 s later (→ `0x0888`
+  parameter mode, as after a service stop; its slave has no Fail_Safe). The other drive's block
+  unchanged both times. `sudo pkill -9 -f controller_node` also matches its own `sudo`; use
+  `'[c]ontroller_node'`.
+- T5 refusal: `oscillator@` refused while `wavemaker@` runs.
+
+**Learned on the way (2026-11-10):**
+- The MGate assigns each slave's bytes when it is added and never moves them. After slave 2 was
+  re-added it landed behind slave 3; delete both and add slave 2 first, then 3. The start
+  addresses cannot be typed in.
+- The MGate's scan fills user parameters from the old GSD (`80 00 08`); slave 3 needs
+  `C0 00 08` typed in.
+- MGate status `diag` with octet 1 `01` (`station_non_existent`) and P-0-4073 `baud search` on
+  the drive: no bus signal at the drive (here a wrong cable at the oscillator).
+- A cleared bus fault: the wavemaker showed F4009 after being powered off on the chain; clear it
+  before starting its service.
+
+What was done, in order (kept for the record):
 1. Change the address, wire the chain, and set termination at both ends only. Chain wired
    2026-11-10: MGate (termination ON) → wavemaker (OFF) → oscillator (ON). The oscillator's
    P-0-4025 was set to 3 in IndraWorks. While the MGate is connected, IndraWorks refuses the
@@ -381,30 +394,15 @@ Switching from phase 1:
    power-cycle the control voltage.
 2. Add slave 3 on the gateway and read the address map.
 3. Edit the oscillator's yaml (`input_base_reg`, `output_base_reg`, `profibus_address`).
-4. Do the phase 2 code tasks below (block-size check, address-check tool, `mgate_example`
-   address options).
-5. Drop the replug procedure (Commissioning step 0) from the docs.
-
-- **Hardware:** a line, gateway → drive → drive; termination ON only at the two physical ends.
-  Add slave 3 on the MGate from the same GSD with the same modules; fault value 0 and fault
-  timeout about 500 ms on its output module.
-- **Addresses:** read the gateway's Modbus address map (web console *Protocol Settings → Modbus
-  TCP → Modbus address map*). Expected: slave 3 inputs at register 7 (bytes 14-27), outputs at
-  register 6 (bytes 12-23); the wavemaker stays at 0/0. Both starts are even, so the tag offsets
-  stay relative to the block. An odd start would need `in_byte_base` / `out_byte_base` in
-  `IndraDriveConfig`. Confirm with a read-only watch of FC4 at register 7 while jogging, and by
-  writing the override (register 6 + 5) with both drives off, using a small address-check
-  tool (task T6): `watch HOST INPUT_BASE` (FC4, 7 registers every 100 ms, decoded) and
-  `override HOST OUTPUT_BASE PERCENT` (FC6 to `OUTPUT_BASE + 5`, refused unless the control word
-  at `OUTPUT_BASE` reads 0), in the style of `tests/probe_map.py`.
-- **Code:** T1 (block size check) and the `mgate_example` options; details in *Phase 2 code*
-  below.
-- **Config:** the oscillator's `input_base_reg: 7`, `output_base_reg: 6`, `profibus_address: 3`.
+4. The phase 2 code: T1 (block-size check) and the `mgate_example` options, done 2026-11-10.
+   The address-check tool (T6) was not needed: a read-only FC4 read of the live list and both
+   blocks did the job.
+5. The replug procedure was dropped from the docs (2026-11-10).
 
 ### Phase 2 code (2026-11-10)
 
 Little changes: the IndraDrive and MGate code already address each drive by its own block and
-PROFIBUS address. Missing are a guard against overlapping blocks and `mgate_example` options.
+PROFIBUS address. The guard against overlapping blocks (T1) was added 2026-11-10.
 
 **Already works, no change:**
 - **Blocks:** the tag offsets in `IndraDrive::IndraDrive` (`indradrive.cpp`) are bytes 0, 2, 6,
@@ -416,93 +414,181 @@ PROFIBUS address. Missing are a guard against overlapping blocks and `mgate_exam
 - **The drive that is not running:** nobody writes its block, so the MGate's fault timeout on
   that slave forces control word 0. An MGate setting (500 ms, fault value 0), not code.
 
-**T1: refuse an output block other than 6 registers.** With `write_only_dirty: false` each node
-writes its whole output area every cycle; `output_word_count: 12` at register 0 would write the
-oscillator's control word every 20 ms from the wavemaker node. Today the actuator only checks
-`> 0` (`indradrive_actuator.cpp:81-82`). In the driver, so `mgate_example` and future tools get it
-too:
+**T1: refuse an output block other than 6 registers.** Done 2026-11-10: `MGateDriver::config()`
+and a check at the top of `IndraDrive::IndraDrive` (`indradrive.cpp`): `output_word_count` must be
+6, `input_word_count` at least 7, else `invalid_argument`, which `IndraDriveActuator` turns into a
+failed configure. It does not catch a wrong `output_base_reg`: any base is valid on its own.
 
-```cpp
-// mgate_driver.h, public:
-const GatewayConfig & config() const {return cfg_;}
-```
+**`mgate_example`: block and address options.** Done 2026-11-10: `--input-base`,
+`--output-base`, `--profibus-address`; defaults 0 / 0 / 2; `--move` refuses without
+`--profibus-address`.
 
-```cpp
-// indradrive.cpp, top of IndraDrive::IndraDrive, before add_tags():
-// The layout above is 14 bytes in, 12 bytes out. A larger output block would write over the
-// next slave's outputs every cycle (write_only_dirty = false writes the whole area).
-if (drv_.config().output_word_count != 6 || drv_.config().input_word_count < 7) {
-    throw std::invalid_argument(
-        "IndraDrive needs output_word_count 6 and input_word_count >= 7, not " +
-        std::to_string(drv_.config().output_word_count) + " / " +
-        std::to_string(drv_.config().input_word_count));
-}
-```
+**Tests (done 2026-11-10):** `FakeMGate(input_base, output_base, live_list)` plays a second
+slave in front of the drive and counts writes to it; `RejectsBlockSizesOtherThanTheDriveLayout`,
+`DaisyChainedDriveLeavesTheOtherSlaveAlone` (slave 3 at 7 / 6 enables and moves, no write to slave
+2), `DaisyChainedDriveNotLiveRefusesToStart` (`test_indradrive_actuator.cpp`).
 
-`<stdexcept>` and `<string>` in `indradrive.cpp`. `IndraDriveActuator` already turns
-`invalid_argument` into a failed configure. More input registers stay allowed: reading cannot
-disturb the other drive.
-
-**`mgate_example`: block and address options.** `main()` (`example_main.cpp:87-116`) is fixed to
-registers 0 / 0 and address 2 (the `IndraDriveConfig` default); after phase 2 a `--move` would
-move the wavemaker. Sketch:
-
-```cpp
-int main(int argc, char** argv) {
-    bool do_move = false;
-    int input_base = 0, output_base = 0, profibus_address = -1;  // -1: not given
-    for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
-        auto next = [&]() {return i + 1 < argc ? std::stoi(argv[++i]) : -1;};
-        if (a == "--move") do_move = true;
-        else if (a == "--input-base") input_base = next();
-        else if (a == "--output-base") output_base = next();
-        else if (a == "--profibus-address") profibus_address = next();
-        else { std::fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
-    }
-    if (do_move && profibus_address < 0) {
-        std::fprintf(stderr, "--move needs --profibus-address (2 wavemaker, 3 oscillator)\n");
-        return 2;
-    }
-    ...
-    cfg.input_base_reg  = static_cast<std::uint16_t>(input_base);
-    cfg.output_base_reg = static_cast<std::uint16_t>(output_base);
-    ...
-    dcfg.profibus_address = profibus_address < 0 ? 2 : profibus_address;
-```
-
-The monitor without `--move` keeps 0 / 0 / 2, so today's command still works. It is not
-read-only: it writes control word 0 to the block it is given.
-
-**Only if the address map shows an odd start:** a register boundary would fall inside the 32-bit
-tags. Then `IndraDriveConfig` gets `in_byte_base` / `out_byte_base`, added to each offset in
-`add_tags`. Read the map (step 2) before writing any of it.
-
-**Not code:** the oscillator's yaml (`input_base_reg: 7`, `output_base_reg: 6`,
-`profibus_address: 3`), slave 3 on the MGate with fault timeout and fault value, and T6 (the
-`watch` / `override` tool, Python).
-
-**Tests (Claude, once handed over):** `FakeMGate` with base registers and a second slave; a test
-that refuses `output_word_count: 12`; a test where the oscillator at 7 / 6 / address 3 enables
-and moves without touching slave 2's block.
-
-**For both rigs at once (TODO 47), later:** depends on two tests in *Deferred* below. If the
-kill test shows the other node's writes keep a dead rig's outputs alive, both drives move to one
-`MGateDriver`, and `set_cycle_callback` needs more than one subscriber (`IndraDrive` takes the
-only slot today). The same if the two-probe load test stalls the gateway. `example_main.cpp:107`
-says "The MGate's fault timeout only counts Modbus accesses to the output block"; if that holds
-per slave module, separate nodes are enough.
+**For both rigs at once (TODO 47):** the kill test passed (*Test 1* below), so separate nodes
+are enough for the fault timeout. If the load test (*Test 2*) stalls the gateway, both drives
+move to one `MGateDriver`, and `set_cycle_callback` needs more than one subscriber (`IndraDrive`
+takes the only slot today).
 
 ## Deferred: both rigs at once
 
-Not planned yet. It needs phase 2 first.
+TODO 47. Phase 2 is done (2026-11-10), so this can start. The first test decides the design.
 
-- **Fault timeout per node.** It is unknown what restarts the MGate's fault timer: any Modbus
-  write, writes from that connection, or writes to that slave's module. If any write counts,
-  the wavemaker node keeps a crashed oscillator node's last outputs alive. Test: both
-  controllers running, kill one, and only its drive must switch off. The fallback: one process
-  owns the gateway, with both drives on one `MGateDriver`. That needs the byte bases and a
-  multi-subscriber cycle callback (`set_cycle_callback`, `mgate_driver.cpp:81`, call site 400).
+### Test 1: kill test with both rigs running (passed 2026-11-10)
+
+**Result:** the MGate's fault timer runs per slave. One controller process per rig stays.
+- **1a.** Oscillator `kill -9` at 14:49:26.75; at 14:49:27.314 the oscillator went to
+  `SW=88AE` C0401, about 0.55 s later. The wavemaker stayed `AF` (A0108), and a wave from the
+  page ran afterwards.
+- **1b.** Wavemaker `kill -9` at 14:51:08.43; at 14:51:09.005 the wavemaker went to `SW=0888`,
+  about 0.57 s later. The oscillator stayed `AF` (A0108).
+- The setup worked as written: the namespaces are on the command line, and `pgrep` found exactly
+  one controller per pattern. The oscillator's mains were off at the first start (`timeout
+  waiting for power section ready (Ab)`, status word `0x488E`); pressing the cabinet button
+  fixed it. Don't switch to OM from IndraWorks: `enable()` does that.
+
+Next: Test 2 (gateway load with both rigs), then the Pi side of TODO 47.
+
+Procedure, kept for repeats:
+
+**Question:** does the MGate's fault timer run per slave? Or does the other rig's traffic keep a
+dead rig's outputs alive? The single-rig kill tests (2026-11-10) only had one writer on the
+gateway.
+
+**Setup, without code changes.** The wavemaker runs as its service. The vertical oscillator is
+launched by hand, because `refuse_if_busy.sh` only guards the units and port 8080:
+- web page on 8081;
+- soft stop on GPIO27, an unconnected pin. With the internal pull-up it reads high, which means
+  stopped, so the oscillator is enabled (`AF`, holding) but rejects every goal. A kill test only
+  needs `AF`.
+- The wavemaker keeps GPIO17 and the real button.
+
+```bash
+# Pi, terminal 1. Wavemaker drive's mains on; oscillator's mains on (A0012).
+sudo systemctl start wavemaker@ladertanken
+journalctl -u wavemaker@ladertanken -f                  # Drive status ... OM AF
+
+# Pi, terminal 2 (tmux). OSCILLATOR= in /etc/default is not used here.
+cd ~/ros_ws && source install/setup.bash
+ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical port:=8081 soft_stop_pin:=27
+# expect: Drive status ... OM AF; soft stop on GPIO27 starting stopped
+
+# Pi, terminal 3: the two controllers are told apart by their namespace on the command line
+pgrep -af '[c]ontroller_node'                           # one /wavemakers/..., one /oscillators/...
+```
+
+**Logging, from the lab PC.** A read-only FC4 logger of registers 0-13 at 10 Hz (scratchpad
+`killwatch_wm.py` style). It prints both status words and diag numbers on every change. Reads
+did not keep a dead rig alive in the 2026-11-10 single-rig tests.
+
+**1a. Kill the oscillator, the wavemaker alive:**
+
+```bash
+date +%T.%N; sudo pkill -9 -f '[c]ontroller_node.*oscillators'; date +%T.%N
+```
+
+Pass:
+- the oscillator leaves `AF` within about 0.6 s (C0401);
+- the wavemaker stays `AF` (A0108) and still moves: a small wave from
+  `http://ladertanken-rpi.local:8080/`.
+
+Then Ctrl-C terminal 2. It takes up to about 45 s, because the lifecycle manager waits for the
+dead controller.
+
+**1b. The other way round:** start the oscillator again in terminal 2 (`AF`), then:
+
+```bash
+date +%T.%N; sudo pkill -9 -f '[c]ontroller_node.*wavemakers'; date +%T.%N
+```
+
+Pass: the wavemaker leaves `AF` within about 0.5 s (parameter mode `0x0888`), and the oscillator
+stays `AF`. Then `sudo systemctl stop wavemaker@ladertanken` (about 45 s) and Ctrl-C terminal 2.
+
+**Result decides:**
+- **Both pass:** the timer runs per slave, so two controller processes, one per rig, stay as
+  today. TODO 47 is then Pi-side only: the refusal only for sloshing, a second web port, the
+  shared soft stop unit, and a ROS name check. Before that, the gateway load test below.
+- **A dead rig stays `AF`:** any write keeps it alive, so separate processes are unsafe. One
+  process must own the gateway, with both drives on one `MGateDriver` (see the first bullet
+  below). That is a bigger code change; plan it before anything else.
+
+**While running both:** the soft stop button stops only the wavemaker (GPIO17), so keep the
+E-stop within reach. Nothing in this test commands the oscillator to move.
+
+### Test 2: gateway load with both rigs (next)
+
+**Question:** do two controllers on one MGate (300 requests/s) cause the ~50-210 ms gateway
+stalls? Those stalls appeared on 2026-10-07 at the same rate from one client polling every 10 ms.
+A stall freezes both rigs' setpoints. Over 500 ms, it would switch a drive off.
+
+**Why the oscillator only holds.** Each controller writes its whole output block and reads its
+inputs and the status area every 20 ms (`write_only_dirty: false`), moving or not. So a holding
+oscillator loads the gateway exactly like a moving one. The setup from Test 1 is enough: the
+oscillator in `AF` with its soft stop on GPIO27 (stopped), and the wavemaker playing waves. Both
+rigs moving at once needs the shared soft stop (TODO 47 (4)) and comes after.
+
+**Measured:**
+1. `TcpRetransSegs` on the Pi, before and after. This counts lost packets; it rose by 54 with
+   the stalls in 2026-10-12.
+2. Freezes in the wavemaker's position: `wavemaker_position` is published every control cycle
+   (50 Hz) from the drive's feedback. A stall shows as a flat stretch of 100 ms or more in the
+   middle of a moving wave. Recorded in a bag on the lab PC.
+3. Response time of the gateway, from the lab PC: a read-only FC4 reader (Claude's scratchpad
+   script) times one read of registers 0-13 at 10 Hz. That is a third client, but adds only
+   about 3 % to the request rate. A stall shows as reads slower than 50 ms.
+
+**Baseline (5 min, the wavemaker alone).** With only the wavemaker service running, play the
+same waves as below while the reader and the bag run. Without a baseline, a stall in the test
+could also be the wavemaker's own.
+
+**Test (10 min, both rigs):**
+
+```bash
+# Pi, terminal 1: the wavemaker service runs, drive in AF (journal: Drive status ... OM AF)
+nstat -az TcpRetransSegs                 # note the number
+
+# Pi, terminal 2 (tmux): the oscillator, holding, as in Test 1
+cd ~/ros_ws && source install/setup.bash
+ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical port:=8081 soft_stop_pin:=27
+# wait for: Drive status ... OM AF
+
+# lab PC: record the wavemaker
+source /opt/ros/jazzy/setup.bash && export ROS_DOMAIN_ID=1
+ros2 bag record -o ~/bags/load_both --topics /wavemakers/ladertanken/wavemaker_setpoint \
+  /wavemakers/ladertanken/wavemaker_actuator_setpoint /wavemakers/ladertanken/wavemaker_position
+
+# then: the wavemaker plays waves for about 10 minutes (page http://ladertanken-rpi.local:8080/,
+# or play_dat with a wavemaker file); Claude runs the reader on the PC meanwhile
+
+# Pi, at the end
+nstat -az TcpRetransSegs                 # the difference is what counts
+```
+
+Then Ctrl-C the bag, Ctrl-C terminal 2 (the ordered stop, a few seconds), and stop the wavemaker
+service.
+
+**Pass:**
+- no read slower than 50 ms, and no flat stretch of 100 ms or more in `wavemaker_position`
+  during waves;
+- `TcpRetransSegs` up by no more than in the baseline;
+- both drives stay in `AF` the whole time.
+
+**If it fails:** the remedies in *Background* (gateway load), in this order:
+1. one shared connection for both drives (3 requests per cycle for both rigs), which means one
+   process owns the gateway;
+2. the status area only every Nth cycle;
+3. a slower oscillator poll.
+
+Each of these is a code change, so plan it before the Pi side of TODO 47.
+
+### Background
+
+- **Fault timeout per node: settled by Test 1** (the timer runs per slave). The fallback it
+  ruled out, one process owning the gateway with both drives on one `MGateDriver`, would need a
+  multi-subscriber cycle callback (`set_cycle_callback`); it comes back only if Test 2 fails.
 - **Gateway load: count requests per second, not bandwidth.** Each node makes 3 requests per
   cycle (`MGateDriver::exchange()`, `mgate_driver.cpp:365`). Two nodes at 20 ms make 300
   requests/s, about 75 kB/s: under 1 % of the Ethernet. On PROFIBUS both drives take about 1 ms
@@ -511,7 +597,7 @@ Not planned yet. It needs phase 2 first.
   retransmissions (COMMISSIONING.md, *Verified so far*). Solutions in order: one shared
   connection (3 requests per cycle for both rigs); the status area every Nth cycle; FC23
   (probably not usable, since the inputs are FC4); a slower oscillator poll.
-- **Load test (no code change; the probes stand in for two nodes):**
+- **Probe load test (an alternative to Test 2, without the rigs; both probes write control word 0 to slave 2's block 0 / 0 only):**
 
   ```bash
   nstat -az TcpRetransSegs
@@ -524,15 +610,18 @@ Not planned yet. It needs phase 2 first.
 
   Both controllers stopped and both drives off (the probes write control word 0). Pass: both
   report 20 ms as usable, no ~210 ms stalls, TcpRetransSegs about unchanged.
-- **Also needed then:** a test with two `IndraDriveActuator`s on one fake gateway; a check of
-  the MGate's maximum number of Modbus TCP clients; and a launch or service that allows both
-  rigs, which `refuse_if_busy.sh` deliberately prevents (shared web port, soft stop on GPIO17).
+- **Also needed then:** a test with two `IndraDriveActuator`s on one fake gateway (`FakeMGate`
+  plays only one drive and counts writes to the other slave today); a check of the MGate's
+  maximum number of Modbus TCP clients (3 worked: two controllers and the PC reader, 2026-11-10);
+  and the Pi side in TODO 47 (2)-(5): refusal only for sloshing, a second web port, the shared
+  soft stop, ROS names.
 
 ## PROFIBUS diagnosis log (2026-11-06 – 2026-11-09)
 
 **Status: solved 2026-11-09.** The oscillator drive (MPB-05) requires a Fail_Safe master and
 rejected the parameter telegram with code 137 = "FailSafe not supp. by contr.". Slave 2's user
-parameters `80 00 08` → **`C0 00 08`** fixed it: P-0-4073 `Data-Exch WD+`, `slave=live`. See
+parameters `80 00 08` → **`C0 00 08`** fixed it (since phase 2: slave 3 has `C0 00 08`, the
+wavemaker's slave 2 is back at `80 00 08`): P-0-4073 `Data-Exch WD+`, `slave=live`. See
 *Cause and fix* below; the sections after it are the 2026-11-06 search, kept for reference.
 
 ### Cause and fix (2026-11-09)
@@ -547,10 +636,10 @@ parameters `80 00 08` → **`C0 00 08`** fixed it: P-0-4073 `Data-Exch WD+`, `sl
 - Fix applied: on slave 2, still set up from `RX030107.gsd`, user parameters `C0 00 08`.
   **Gap:** the MGate still treats slave 2 as `Fail_Safe=0`; only the drive is told. Whether the
   MGate's Clear state turns the drive off is checked by the kill test (Commissioning step 6).
-  Setting up slave 2 from `RX060107.gsd` is the proper form (at the latest in phase 2, when the
-  oscillator gets its own slave). Re-adding slave 2 from RX03 silently restores `80 00 08`.
-- Not yet checked: the wavemaker (MPB-04) with `C0 00 08`. `Info_eng.txt` assigns MPB-04 to
-  `RX040107.gsd` (Fail_Safe=0).
+  Setting up the oscillator's slave (3 since phase 2) from `RX060107.gsd` is the proper form
+  (*Open questions*). Re-adding it from RX03 silently restores `80 00 08`.
+- The wavemaker (MPB-04) never ran with `C0 00 08`: since phase 2 its slave 2 has `80 00 08`
+  again, as `Info_eng.txt` (`RX040107.gsd`, Fail_Safe=0) expects.
 
 ### After the fix (2026-11-09)
 
@@ -652,8 +741,8 @@ status is `0003` (Operate), with an empty live list.
 - `Default.par` (oscillator), `WMDefault.par` (wavemaker): IndraWorks exports, 2026-11-06.
 - `Profibus/`: the newer Rexroth GSD set (RX04-RX17) with `Info_eng.txt`.
 - `TestOscillator.bin`: sensor log of the first move (2026-11-09).
-- To do: export the MGate configuration as it is now (`C0 00 08`, fault timeout 500 ms) as the
-  oscillator's backup, if not done after the 2026-11-09 change.
+- To do: export the phase 2 MGate configuration (slave 2 `80 00 08`, slave 3 `C0 00 08`, both
+  500 ms) to the stick.
 
 ## Open questions
 
@@ -669,13 +758,9 @@ status is `0003` (Operate), with an empty live list.
   requested stroke exactly, or is it enough to know exactly what it did?
   **Tuning (option 1) waits for Robert, back about 2026-11-23.** Until then: code.
 
-- Does the wavemaker (MPB-04) run with slave 2's user parameters `C0 00 08`? If not, Import
-  the matching MGate configuration when switching drives (Commissioning step 0).
-- Set up slave 2 from `RX060107.gsd` instead of RX03 with edited user parameters? Add the newer
-  GSD set to `resources/profibus_gsd/`?
+- Set up slave 3 (oscillator) from `RX060107.gsd` instead of RX03 with edited user parameters,
+  so the MGate also treats it as Fail_Safe? Add the newer GSD set to `resources/profibus_gsd/`?
 - P-0-4088 bits 2/1: set the oscillator to 0x0028 (bus failure as error)?
-- Phase 2: which drive leaves address 2, the oscillator (wavemaker yaml unchanged) or the
-  wavemaker (oscillator setup unchanged)?
 - Raise the jerk S-0-0193 (3 m/s³) for faster strokes? Part of the drive tuning with Robert.
 - Travel, stroke, max speed and rest position wanted for the vertical oscillator.
 - Is the axis counterbalanced, or does the motor hold the load? The brake is 5 Nm.

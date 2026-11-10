@@ -39,8 +39,8 @@ both files; gaps in the numbering are the items kept there.
   The MGate keeps sending the last outputs (Drive On, Drive Start, last target) if Modbus writes stop. Our driver only sets control word 0 while its process is alive.
   - On the MGate's output module, set a fault value timeout of about 500 ms (it must ride out the ~210 ms gateway stalls; see *Verified so far*) with fault value 0 (MGate manual p. 28). Test by killing the controller while the drive is enabled; the drive must switch off.
   - Done 2026-11-09 (MGate Manager, slave 2, slot 4 `0xE5 Output 6 Words`): the timeout was 0 (off) and is now 500 ms, fault value all `00`. Kill test passed with the vertical oscillator's drive on slave 2: `kill -9` on the controller, the drive left A0108 at once, the brake held (see [Vertical oscillator](#vertical-oscillator-ladertanken)).
-  - Left: the kill test with the wavemaker's drive plugged in. The setting is on slave 2, so it covers both drives.
-  - Any Modbus access to slave 2's output block restarts the MGate's timer: only one client (the controller) may use it while a rig runs; never run `mgate_example` alongside.
+  - Done 2026-11-10 on the daisy chain: the same setting on slave 3 (oscillator); kill test passed on both drives, the wavemaker's drive went to parameter mode about 0.5 s after `kill -9`.
+  - Any Modbus access to a slave's output block restarts the MGate's timer for it: only one client (the controller) may use it while a rig runs; never run `mgate_example` alongside.
   - The fault timeout relies on writes every cycle; the matching code change is done: `write_only_dirty` defaults to `false` in `IndraDriveActuator` (2026-10-27).
 
 - [ ] **34. Spring balance matches the water depth.** (rig; mechanical, for whoever owns the mechanics)
@@ -89,27 +89,34 @@ both files; gaps in the numbering are the items kept there.
 
 ## Vertical oscillator (ladertanken)
 
-Checks for the vertical oscillator's IndraDrive on the ladertanken MGate (slave 2, in place of
-the wavemaker's drive). Plan and full log: [oscillator_sketch.md](oscillator_sketch.md).
+Checks for the vertical oscillator's IndraDrive on the ladertanken MGate (slave 3, daisy-chained
+behind the wavemaker's drive since 2026-11-10). Plan and full log: [oscillator_sketch.md](oscillator_sketch.md).
 
 ### Switching drives (every time)
 
+Both drives stay on the PROFIBUS line (MGate → wavemaker, termination OFF → oscillator,
+termination ON): wavemaker slave 2, oscillator slave 3. Nothing is replugged.
+
 1. Stop the running service: `sudo systemctl stop wavemaker@ladertanken` (or `oscillator@`).
-2. Replug the PROFIBUS cable to the other drive; its plug is the end of the line: termination ON.
-3. Identify the drive by the plug and its display. The monitor
-   (`~/ros_ws/build/mgate5101_driver/mgate_example`, Ctrl-C after a few lines) shows the position
-   only in operating mode; after a stop the drive is in parameter mode (A0050 or C0401) and the
-   monitor reads exactly 0, and the wavemaker at upright reads about 0 too.
-4. The oscillator's mains must be on at the cabinet (A0012 `Ab`, not A0013 `bb`).
-5. For the oscillator: `OSCILLATOR=vertical` in `/etc/default/oscillator`; for the sloshing rig,
+2. The oscillator's mains must be on at the cabinet (A0012 `Ab`, not A0013 `bb`).
+3. For the oscillator: `OSCILLATOR=vertical` in `/etc/default/oscillator`; for the sloshing rig,
    `sloshing` (or no line). One unit runs either oscillator, so the two can never run together.
-6. Start the matching service. The controller's `Drive status` line in the journal is the
+4. Start the matching service. The controller's `Drive status` line in the journal is the
    position check: `OM AF`, the position near where the slide stands.
 
 ### Done
 
 - Drive layout matches what `IndraDrive` expects (P-0-4084, P-0-4080/4081, S-0-0032; 2026-11-06,
-  `Default.par`). PROFIBUS needs slave 2's user parameters `C0 00 08` (Fail_Safe, MPx-05 firmware).
+  `Default.par`). PROFIBUS needs the user parameters `C0 00 08` (Fail_Safe, MPx-05 firmware); the
+  wavemaker keeps `80 00 08`.
+- Daisy chain (2026-11-10): oscillator P-0-4025 = 3 (written in IndraWorks with the PROFIBUS plug
+  pulled, "phase switch to phase 4", then a 24 V restart), MGate slave 3 at registers 7 / 6,
+  `oscillator.yaml` changed to match. A vertical run played; kill tests passed on both drives
+  (oscillator off about 0.6 s, wavemaker about 0.5 s after `kill -9`), the other drive's block
+  untouched; `oscillator@` refused while `wavemaker@` runs. `mgate_example` reaches the oscillator
+  with `--input-base 7 --output-base 6 --profibus-address 3`; `--move` needs `--profibus-address`.
+  An IndraDrive block other than 7 in / 6 out now fails configure (T1). Details:
+  [oscillator_sketch.md](oscillator_sketch.md#phase-2-daisy-chain-done-2026-11-10).
 - First move with `mgate_example --move` (2026-11-09): +5 units → 4.925 mm on the drive, 4.940 mm
   on the sensor, 1.68 mm/s: the drive's units are mm and 10 mm/min. **+ command = down**, hence
   `drive_direction: -1`.
@@ -137,8 +144,7 @@ the wavemaker's drive). Plan and full log: [oscillator_sketch.md](oscillator_ske
   acceleration feedforward, jerk S-0-0193 (3 m/s³). TODO item 46.
 - [ ] P-0-4088 = 0x002A makes a bus failure only a warning (the last command is kept); 0x0028
   would make it an error. Decide with the drive's owner.
-- [ ] Does the wavemaker run with slave 2's user parameters `C0 00 08`? Check at the next switch.
-- [ ] Export the MGate configuration (with `C0 00 08` and the 500 ms timeout) as a backup.
+- [ ] Export the phase 2 MGate configuration (slaves 2 and 3, 500 ms timeouts) as a backup.
 
 ## Verified so far
 

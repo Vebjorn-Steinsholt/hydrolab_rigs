@@ -332,9 +332,9 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 ## Running the vertical oscillator
 
 A second Rexroth IndraDrive (rotary motor with linear scaling, 20 mm/rev) moves a slide up and
-down. Until the daisy-chain cable arrives it takes the ladertanken wavemaker's place on the
-ladertanken MGate: the same PROFIBUS address (2), the same gateway blocks, the cable replugged
-between the two drives. Only one of the two rigs runs at a time. The plan, decisions and
+down. It is daisy-chained behind the ladertanken wavemaker's drive on the ladertanken MGate:
+PROFIBUS address 3, gateway registers 7 (inputs) and 6 (outputs); the wavemaker keeps address 2
+and registers 0 / 0. Only one of the two rigs runs at a time. The plan, decisions and
 commissioning log are in [oscillator_sketch.md](oscillator_sketch.md).
 
 **Configuration:** the `vertical` blocks in
@@ -356,11 +356,9 @@ sudo systemctl stop oscillator@ladertanken      # stops the motion, drive off, b
 By hand: `ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical` (default
 `sloshing`). The nodes run in `/oscillators/vertical`.
 
-**Switching between the wavemaker and the oscillator** means replugging the PROFIBUS cable:
-stop the running service first, replug, identify the drive, then start the matching service
-([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken), *Switching drives*).
-Nothing in the cyclic data tells the controller which drive is plugged in, so the wavemaker's
-configuration on the oscillator drive would read millimetres as flap degrees.
+**Switching between the wavemaker and the oscillator:** stop the running service, then start
+the other ([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken), *Switching
+drives*). Both drives stay connected; each yaml addresses only its own drive's block.
 
 **Running:** the web page (`http://ladertanken-rpi.local:8080/`): *height* is the stroke, peak to
 peak, in metres, around mid-travel; + is up. **Stop** cancels the wave and the slide holds where it

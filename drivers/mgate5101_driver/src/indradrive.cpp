@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -22,6 +24,15 @@ bool no_error(std::uint16_t sw) { return (sw & indra_sw::kClass1Error) == 0; }
 }  // namespace
 
 IndraDrive::IndraDrive(MGateDriver& drv, IndraDriveConfig cfg) : drv_(drv), cfg_(std::move(cfg)) {
+    // The layout below is 14 bytes in, 12 bytes out. A larger output block would write over the
+    // next slave's outputs every cycle (write_only_dirty = false writes the whole area); on the
+    // ladertanken daisy chain that is the other rig's control word. More inputs only read.
+    const GatewayConfig& gw = drv_.config();
+    if (gw.output_word_count != 6 || gw.input_word_count < 7) {
+        throw std::invalid_argument(
+            "IndraDrive needs output_word_count 6 and input_word_count >= 7, not " +
+            std::to_string(gw.output_word_count) + " / " + std::to_string(gw.input_word_count));
+    }
     drv_.add_tags({
         {tag("StatusWord"), Area::Input, DataType::U16, 0,  0, 0, ByteOrder::BigEndian, 1.0,    0.0, "",    ""},
         {tag("Position"),   Area::Input, DataType::I32, 2,  0, 0, ByteOrder::BigEndian, 0.0001, 0.0, "deg", ""},

@@ -594,3 +594,20 @@ def test_with_namespace():
     explicit = ['play_dat', '--ros-args', '-r', '__ns:=/x']
     assert pd.with_namespace(explicit, limits) == explicit
     assert pd.with_namespace(['play_dat'], None) == ['play_dat']
+
+
+@pytest.mark.parametrize('rig, name, config', [
+    ('wavemaker', 'ladertanken', WAVEMAKERS),   # IndraDrive, angular
+    ('oscillator', 'vertical', OSCILLATOR),     # IndraDrive, linear (drive_m_per_unit etc.)
+    ('oscillator', 'sloshing', OSCILLATOR),     # LinMot
+])
+def test_limit_parameters_cover_what_rig_limits_reads(rig, name, config):
+    # cross_check_limits asks the controller for LIMIT_PARAMETERS only; anything missing falls
+    # back to rig_limits' defaults. On the vertical oscillator that gave "controller 3600 m/s"
+    # (2026-11-10, drive_m_per_unit and drive_velocity_per_unit_per_s were not asked).
+    import rig_limits
+    block = rig_limits.read_block(rig, name, config)
+    asked = {key: value for key, value in block.items() if key in pd.LIMIT_PARAMETERS}
+    expected = rig_limits.limits_from_parameters(rig, name, block, 'yaml')
+    actual = rig_limits.limits_from_parameters(rig, name, asked, 'controller')
+    assert rig_limits.compare(expected, actual) == []

@@ -132,6 +132,9 @@ public:
 
     DriverStats stats() const;
 
+    // The configuration this driver was built with (block sizes for IndraDrive's check).
+    const GatewayConfig& config() const { return cfg_; }
+
 private:
     void   poll_loop();
     Result ensure_connected();

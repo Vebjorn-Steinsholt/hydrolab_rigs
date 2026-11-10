@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Web page for running a wavemaker or the sloshing oscillator, in place of LabVIEW.
+Web page for running a wavemaker or an oscillator (sloshing or vertical), in place of LabVIEW.
 
 It talks to bridge_node; the rig parameter selects the texts and the topic names.
 
@@ -76,7 +76,7 @@ RIG_TEXTS = {
         'machine': 'oscillator',
         'motion': 'oscillation',
         'a_motion': 'an oscillation',
-        'title': 'Sloshing Oscillator',
+        'title': 'Oscillator',  # WebNode makes it '<Name> Oscillator' from the namespace
         'wave_card': 'Regular oscillation',
         # The controller uses the height as the slide's stroke, peak to peak.
         'height_label': 'Stroke H [m], peak to peak',
@@ -114,7 +114,12 @@ class WebNode(Node):
         rig = self.get_parameter('rig').value
         if rig not in RIG_TEXTS:
             raise ValueError(f"rig must be one of {', '.join(RIG_TEXTS)}, not '{rig}'")
-        self.texts = RIG_TEXTS[rig]
+        self.texts = dict(RIG_TEXTS[rig])  # a copy: the title below is per node
+        if rig == 'oscillator':
+            # /oscillators/sloshing or /oscillators/vertical: name the one that runs.
+            name = self.get_namespace().rstrip('/').rsplit('/', 1)[-1]
+            if name:
+                self.texts['title'] = f'{name.capitalize()} Oscillator'
         self.declare_parameter('idle_timeout_s', 7200.0)
         self.declare_parameter('idle_warning_s', 600.0)
         self._idle_timeout = float(self.get_parameter('idle_timeout_s').value)

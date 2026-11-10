@@ -388,3 +388,66 @@ TEST_F(IndraDriveActuatorTest, DriveLimitsFromTravelWithDirectionSwapped)
     actuator.stop();
   }
 }
+
+// T1: IndraDrive's layout is 7 words in, 6 out. A bigger output block would write the next
+// slave's outputs every cycle (on the ladertanken daisy chain, the other rig's control word).
+TEST_F(IndraDriveActuatorTest, RejectsBlockSizesOtherThanTheDriveLayout)
+{
+  const std::vector<rclcpp::Parameter> bad{
+    rclcpp::Parameter("output_word_count", 12),
+    rclcpp::Parameter("output_word_count", 5),
+    rclcpp::Parameter("input_word_count", 6),
+  };
+  int i = 0;
+  for (const auto & parameter : bad) {
+    auto options = vertical_options();
+    options.append_parameter_override(parameter.get_name(), parameter.get_parameter_value());
+    auto node = vertical_node("actuator_bad_block_" + std::to_string(i++), options);
+    EXPECT_THROW(rig_controller::IndraDriveActuator actuator(*node), std::invalid_argument)
+      << parameter.get_name() << " = " << parameter.value_to_string();
+  }
+
+  // More inputs only read: allowed.
+  auto options = vertical_options();
+  options.append_parameter_override("input_word_count", 14);
+  auto node = vertical_node("actuator_more_inputs", options);
+  EXPECT_NO_THROW(rig_controller::IndraDriveActuator actuator(*node));
+}
+
+// Phase 2: the vertical oscillator as slave 3 at registers 7 / 6 behind the wavemaker
+// (slave 2 at 0 / 0). It must enable and move without writing slave 2's outputs.
+TEST_F(IndraDriveActuatorTest, DaisyChainedDriveLeavesTheOtherSlaveAlone)
+{
+  FakeMGate fake(7, 6, 0x0C);  // live list: addresses 2 and 3
+  auto options = vertical_options(fake.port());
+  options.append_parameter_override("input_base_reg", 7);
+  options.append_parameter_override("output_base_reg", 6);
+  options.append_parameter_override("profibus_address", 3);
+  auto node = vertical_node("actuator_daisy_chain_test", options);
+  rig_controller::IndraDriveActuator actuator(*node);
+  const auto logger = node->get_logger();
+
+  ASSERT_TRUE(actuator.start(logger));
+  ASSERT_TRUE(actuator.write_setpoint(actuator.to_actuator_setpoint(0.02, 0.01, 0.0)));
+  EXPECT_TRUE(fake.wait_for([&] {return std::abs(fake.target_deg() + 20.0) < 1e-6;}));
+  EXPECT_EQ(fake.control_word(), kRunning);
+  EXPECT_TRUE(fake.wait_for([&] {return std::abs(actuator.actual_position_m() - 0.02) < 1e-9;}));
+  actuator.stop();
+
+  EXPECT_EQ(fake.other_slave_writes(), 0);
+}
+
+// The live check uses profibus_address: slave 3 missing from the live list refuses to start.
+TEST_F(IndraDriveActuatorTest, DaisyChainedDriveNotLiveRefusesToStart)
+{
+  FakeMGate fake(7, 6, 0x04);  // only address 2 live
+  auto options = vertical_options(fake.port());
+  options.append_parameter_override("input_base_reg", 7);
+  options.append_parameter_override("output_base_reg", 6);
+  options.append_parameter_override("profibus_address", 3);
+  auto node = vertical_node("actuator_daisy_chain_down_test", options);
+  rig_controller::IndraDriveActuator actuator(*node);
+
+  EXPECT_FALSE(actuator.start(node->get_logger()));
+  EXPECT_EQ(fake.other_slave_writes(), 0);
+}

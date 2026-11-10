@@ -21,10 +21,15 @@
 namespace rig_controller_test
 {
 
-// Modbus/TCP server standing in for the MGate 5101 and the IndraDrive behind it, laid out as
-// actuator_options() expects: inputs (FC4) at 0, outputs (FC3/FC6/FC16) at 0, gateway status
-// (FC4) at 768. The status word follows the control word the way IndraDrive::enable() waits
-// for it, and the position follows TargetPosition while the drive is following.
+// Modbus/TCP server standing in for the MGate 5101 and the IndraDrive behind it. By default laid
+// out as actuator_options() expects: inputs (FC4) at 0, outputs (FC3/FC6/FC16) at 0, gateway
+// status (FC4) at 768, PROFIBUS address 2 live. The status word follows the control word the way
+// IndraDrive::enable() waits for it, and the position follows TargetPosition while the drive is
+// following.
+//
+// FakeMGate(7, 6, 0x0C) is the ladertanken daisy chain: the drive under test is slave 3 at
+// inputs 7 / outputs 6, and registers 0-6 / 0-5 belong to another slave (the wavemaker). Its
+// inputs read kOtherSlaveWord; writes to its outputs are counted (other_slave_writes()).
 class FakeMGate
 {
 public:
@@ -32,7 +37,12 @@ public:
   static constexpr std::uint16_t kDriveStart = 1u << 13;
   static constexpr std::uint16_t kDriveOn = 1u << 15;
 
-  FakeMGate()
+  static constexpr std::uint16_t kOtherSlaveWord = 0xBEEF;
+
+  explicit FakeMGate(
+    std::uint16_t input_base = 0, std::uint16_t output_base = 0, std::uint8_t live_list = 0x04)
+  : in_base_(input_base), out_base_(output_base), live_list_(live_list),
+    outputs_(output_base + kOutputWords, 0)
   {
     listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd_ < 0) {
@@ -91,19 +101,26 @@ public:
   std::uint16_t control_word() const
   {
     std::lock_guard<std::mutex> lk(mtx_);
-    return outputs_[0];
+    return out(0);
   }
 
   double target_deg() const
   {
     std::lock_guard<std::mutex> lk(mtx_);
-    return i32(outputs_[1], outputs_[2]) * 0.0001;
+    return target_deg_locked();
   }
 
   double speed_cap_rpm() const
   {
     std::lock_guard<std::mutex> lk(mtx_);
-    return i32(outputs_[3], outputs_[4]) * 0.0001;
+    return i32(out(3), out(4)) * 0.0001;
+  }
+
+  // Register writes that landed outside the drive's output block (another slave's outputs).
+  int other_slave_writes() const
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    return other_slave_writes_;
   }
 
   int input_reads() const
@@ -162,22 +179,25 @@ private:
     out.push_back(static_cast<std::uint8_t>(v & 0xFF));
   }
 
+  // The drive's output register i (0 = control word); called with mtx_ held.
+  std::uint16_t out(std::size_t i) const {return outputs_[out_base_ + i];}
+
   // Called with mtx_ held, after every output write.
   void follow_control_word()
   {
-    const std::uint16_t cw = outputs_[0];
+    const std::uint16_t cw = out(0);
     if (!frozen_ && (cw & kOperatingMode) && (cw & kDriveOn) && (cw & kDriveStart)) {
       position_deg_ = target_deg_locked();
     }
   }
 
-  double target_deg_locked() const {return i32(outputs_[1], outputs_[2]) * 0.0001;}
+  double target_deg_locked() const {return i32(out(1), out(2)) * 0.0001;}
 
   // Called with mtx_ held. Mode and ready bits as IndraDrive::enable() waits for them; always
   // in standstill and target reached, since the position jumps to the target.
   std::array<std::uint16_t, kInputWords> inputs_locked() const
   {
-    const std::uint16_t cw = outputs_[0];
+    const std::uint16_t cw = out(0);
     std::uint16_t sw = (1u << 3) | (1u << 4);  // standstill, target reached
     if (cw & kOperatingMode) {
       sw |= 0x0002;                                    // operating mode
@@ -262,17 +282,21 @@ private:
 
     if (fc == 0x04 || fc == 0x03) {
       std::vector<std::uint16_t> regs;
-      if (fc == 0x04 && addr + value <= kInputWords) {
+      if (fc == 0x04 && addr + value <= in_base_ + kInputWords) {
+        // The other slave's words, then the drive's block at in_base_.
+        std::vector<std::uint16_t> image(in_base_, kOtherSlaveWord);
         const auto in = inputs_locked();
-        regs.assign(in.begin() + addr, in.begin() + addr + value);
+        image.insert(image.end(), in.begin(), in.end());
+        regs.assign(image.begin() + addr, image.begin() + addr + value);
         ++input_reads_;
       } else if (fc == 0x04 && addr >= kStatusBase && addr + value <= kStatusBase + kStatusWords) {
         // Word 0: gateway "Operate" (bits 1:0 = 11). Byte 2 of the area (high byte of word 1)
-        // is the live list for addresses 0-7; profibus_address 2 is bit 2.
-        std::array<std::uint16_t, kStatusWords> status{0x0003, 0x0400};
+        // is the live list for addresses 0-7; profibus_address 2 is bit 2, 3 is bit 3.
+        std::array<std::uint16_t, kStatusWords> status{
+          0x0003, static_cast<std::uint16_t>(live_list_ << 8)};
         regs.assign(status.begin() + (addr - kStatusBase),
             status.begin() + (addr - kStatusBase) + value);
-      } else if (fc == 0x03 && addr + value <= kOutputWords) {
+      } else if (fc == 0x03 && std::size_t{addr} + value <= outputs_.size()) {
         regs.assign(outputs_.begin() + addr, outputs_.begin() + addr + value);
       } else {
         exception(0x02);
@@ -283,18 +307,22 @@ private:
         put16(body, r);
       }
     } else if (fc == 0x06) {
-      if (addr >= kOutputWords) {
+      if (std::size_t{addr} >= outputs_.size()) {
         exception(0x02);
         return;
       }
+      count_other_slave_writes(addr, 1);
       outputs_[addr] = value;
       follow_control_word();
       body.assign(pdu, pdu + 5);
     } else if (fc == 0x10) {
-      if (pdu_len < 6 || addr + value > kOutputWords || pdu_len < 6u + 2u * value) {
+      if (pdu_len < 6 || std::size_t{addr} + value > outputs_.size() ||
+        pdu_len < 6u + 2u * value)
+      {
         exception(0x02);
         return;
       }
+      count_other_slave_writes(addr, value);
       for (std::uint16_t i = 0; i < value; ++i) {
         outputs_[addr + i] = be16(pdu + 6 + 2 * i);
       }
@@ -305,6 +333,20 @@ private:
     }
   }
 
+  // Called with mtx_ held: counts the written registers below out_base_.
+  void count_other_slave_writes(std::uint16_t addr, std::uint16_t count)
+  {
+    for (std::uint16_t r = addr; r < addr + count; ++r) {
+      if (r < out_base_) {
+        ++other_slave_writes_;
+      }
+    }
+  }
+
+  const std::uint16_t in_base_;
+  const std::uint16_t out_base_;
+  const std::uint8_t live_list_;
+
   int listen_fd_{-1};
   int port_{0};
   std::atomic<bool> stopping_{false};
@@ -312,10 +354,11 @@ private:
 
   mutable std::mutex mtx_;
   int conn_fd_{-1};
-  std::array<std::uint16_t, kOutputWords> outputs_{};
+  std::vector<std::uint16_t> outputs_;  // the other slave's registers, then the drive's
   double position_deg_{0.0};
   bool frozen_{false};
   int input_reads_{0};
+  int other_slave_writes_{0};
 };
 
 }  // namespace rig_controller_test

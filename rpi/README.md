@@ -453,8 +453,8 @@ ended, although the soft stop published its release during it (TODO 36, `sketch.
 Two oscillators run on the ladertanken Pi as `oscillator@ladertanken`, user `ladertanken`:
 
 - **sloshing:** the LinMot drive behind an Arduino Uno (`OSCILLATOR.md`).
-- **vertical:** an IndraDrive on the ladertanken MGate, in place of the wavemaker's drive (the
-  PROFIBUS cable is replugged; [README](../README.md#running-the-vertical-oscillator),
+- **vertical:** an IndraDrive on the ladertanken MGate, daisy-chained behind the wavemaker's
+  drive (PROFIBUS address 3; [README](../README.md#running-the-vertical-oscillator),
   [COMMISSIONING.md](../COMMISSIONING.md#vertical-oscillator-ladertanken)).
 
 `OSCILLATOR=` in `/etc/default/oscillator` picks one (`run.sh` passes it to the launch as
