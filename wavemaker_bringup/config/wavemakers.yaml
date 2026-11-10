@@ -61,6 +61,7 @@
     water_depth: 1.0
     # flap_attachment_height omitted — fine, piston never checks it
     drive_motion: "linear"
+    max_velocity_rpm: 100.0        # the controller's default, made visible; set from the drive when deployed (TODO 19)
     min_position_m: 0.0
     max_position_m: 0.5
     wavemaker_transfer_gain: 1.0  # see ladertanken
@@ -77,6 +78,7 @@
     flap_attachment_height: 1.95   # must be > water_depth (1.5)
     hinge_height: 0.5
     drive_motion: "linear"
+    max_velocity_rpm: 100.0        # the controller's default, made visible; set from the drive when deployed (TODO 19)
     min_position_m: 0.0
     max_position_m: 0.5
     wavemaker_transfer_gain: 1.0  # see ladertanken

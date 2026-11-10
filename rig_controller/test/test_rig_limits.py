@@ -18,8 +18,10 @@ import rig_limits  # noqa: E402
 
 WAVEMAKERS = str(REPO / 'wavemaker_bringup' / 'config' / 'wavemakers.yaml')
 OSCILLATOR = str(REPO / 'oscillator_bringup' / 'config' / 'oscillator.yaml')
+# A linear IndraDrive in the vertical oscillator's units: 600 x 10 mm/min = 0.1 m/s (T8).
 LINEAR = {'drive_name': 'indradrive', 'drive_motion': 'linear',
-          'travel_minimum_m': -0.2, 'travel_maximum_m': 0.2}
+          'travel_minimum_m': -0.2, 'travel_maximum_m': 0.2, 'max_velocity_rpm': 600.0,
+          'drive_m_per_unit': 0.001, 'drive_velocity_per_unit_per_s': 6.0}
 
 
 # ---------------------------------------------------------------- from the yaml
@@ -35,9 +37,20 @@ def test_ladertanken():
 
 
 @pytest.mark.parametrize('name', ['lilletanken', 'mclab'])
-def test_linear_indradrive_has_no_speed_limit(name):
+def test_linear_indradrive_placeholder_speed(name):
+    # max_velocity_rpm 100 with the default factors (1 m per unit, 1/6): 100 x 6 x 1 = 600 m/s.
+    # Absurd, but what their controllers enforce until their units are set (TODO item 19).
     limits = rig_limits.load_limits('wavemaker', name, WAVEMAKERS)
-    assert (limits.min_m, limits.max_m, limits.max_velocity_mps) == (0.0, 0.5, None)
+    assert (limits.min_m, limits.max_m) == (0.0, 0.5)
+    assert limits.max_velocity_mps == pytest.approx(600.0)
+
+
+def test_vertical():
+    limits = rig_limits.load_limits('oscillator', 'vertical', OSCILLATOR)
+    assert (limits.min_m, limits.max_m, limits.upright_m) == (-0.2, 0.2, 0.0)
+    assert limits.max_velocity_mps == pytest.approx(0.1)  # 600 / 6 x 0.001
+    assert limits.max_acceleration_mps2 is None
+    assert limits.namespace == '/oscillators/vertical'
 
 
 def test_sloshing():
@@ -99,13 +112,27 @@ def test_linmot_speed_from_the_parameter():
     assert limits.max_velocity_mps == 1.5
 
 
+def test_linear_indradrive_speed_from_the_drive_units():
+    limits = rig_limits.limits_from_parameters('wavemaker', 't', LINEAR, 's')
+    assert limits.max_velocity_mps == pytest.approx(0.1)
+
+
+def test_linear_indradrive_speed_with_the_default_units():
+    # As IndraDriveActuator::max_velocity_mps() with DriveScale's defaults: rpm x 6 x 1.
+    params = {k: v for k, v in LINEAR.items()
+              if k not in ('drive_m_per_unit', 'drive_velocity_per_unit_per_s')}
+    limits = rig_limits.limits_from_parameters('wavemaker', 't', params, 's')
+    assert limits.max_velocity_mps == pytest.approx(3600.0)
+
+
 def test_goal_acceleration_limit_on_an_indradrive():
     params = dict(LINEAR, max_goal_acceleration_mps2=5.0)
     limits = rig_limits.limits_from_parameters('wavemaker', 't', params, 's')
     assert limits.max_acceleration_mps2 == 5.0
 
 
-@pytest.mark.parametrize('key', ['drive_name', 'travel_minimum_m', 'travel_maximum_m'])
+@pytest.mark.parametrize('key', ['drive_name', 'travel_minimum_m', 'travel_maximum_m',
+                                 'max_velocity_rpm'])
 def test_missing_key_is_named(key):
     params = {k: v for k, v in LINEAR.items() if k != key}
     with pytest.raises(ValueError, match=f'{key} not set in s'):
@@ -160,13 +187,6 @@ def test_compare_reports_a_changed_speed():
     lines = rig_limits.compare(rig_limits.load_limits('wavemaker', 'ladertanken', WAVEMAKERS),
                                live)
     assert len(lines) == 1 and lines[0].startswith('max_velocity_mps')
-
-
-def test_compare_ignores_an_unknown_speed():
-    a = rig_limits.limits_from_parameters('wavemaker', 't', LINEAR, 'yaml')
-    b = rig_limits.limits_from_parameters('wavemaker', 't', LINEAR, 'controller')
-    b.max_velocity_mps = 600.0  # what a linear IndraDrive controller reports (TODO item 19)
-    assert rig_limits.compare(a, b) == []
 
 
 def test_compare_reports_an_acceleration_limit_on_one_side():

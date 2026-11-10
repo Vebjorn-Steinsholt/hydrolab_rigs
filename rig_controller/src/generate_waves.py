@@ -14,24 +14,19 @@ signals. Writing, assembling, checking and reading the file back, and the file c
 play_dat and the controller, are in motion_files (shared with generate_oscillations).
 """
 import argparse
-from collections.abc import Callable
 import csv
 from dataclasses import dataclass
-from datetime import datetime
 import math
 import os
-import shlex
-import subprocess
 import sys
-from typing import TypeVar
 
+import motion_files
+from motion_files import (  # noqa: F401  re-exported: test_generate_waves uses gw.<name>
+    apply_ramps, check_run, frequency_grid, G, jonswap, number, random_phases, SIGMA_1,
+    SIGMA_2, source_commit, synthesize, synthesize_direct, verify_with_play_dat,
+    wave_amplitudes, write_motion)
 import numpy as np
-
-import play_dat
 import rig_limits
-
-
-G = 9.81  # m/s^2, the controller's value
 
 # ---------------------------------------------------------------- wavemaker from the yaml
 
@@ -51,7 +46,7 @@ class Wavemaker:
     min_m: float             # absolute position limits, as the controller derives them
     max_m: float
     upright_m: float         # upright_position_m
-    max_velocity_mps: float | None
+    max_velocity_mps: float
     max_acceleration_mps2: float | None  # max_goal_acceleration_mps2; None when 0 (off)
 
 
@@ -211,20 +206,6 @@ def parse_steepness(text: str, row: int) -> float:
     return x
 
 
-T = TypeVar('T')
-
-
-def number(r: dict, key: str, row: int, kind: Callable[[str], T] = float) -> T:
-    """Read a required number from a test-matrix row; errors name the row and column."""
-    text = (r.get(key) or '').strip()
-    if not text:
-        raise ValueError(f'row {row}: {key} is required')
-    try:
-        return kind(text)
-    except ValueError:
-        raise ValueError(f"row {row}: {key} '{text}' is not a number") from None
-
-
 def read_test_matrix(path: str) -> list[RunSpec]:
     """
     Read the test matrix: CSV, one row per run, played in file order.
@@ -278,65 +259,11 @@ def target_height(wm: Wavemaker, spec: RegularSpec) -> float:
     return spec.height_m
 
 
-def apply_ramps(x, n_ramp_samples: int):
-    """Ramp 0 -> 1 at the start and 1 -> 0 at the end; the run ends exactly at upright."""
-    if n_ramp_samples < 2 or 2 * n_ramp_samples > len(x):
-        raise ValueError(f'{n_ramp_samples} ramp samples do not fit a run of {len(x)}')
-    ramp = np.linspace(0.0, 1.0, n_ramp_samples)
-    x = x.copy()  # avoid modifying the caller's array
-    x[:n_ramp_samples] *= ramp
-    x[-n_ramp_samples:] *= ramp[::-1]
-    x[-1] = 0.0
-    return x
-
-
 # ---------------------------------------------------------------- signals
 # ---------------------------------------------------------------- irregular waves
 # JONSWAP spectrum, random phases, ramps.
 F_MIN_FACTOR = 0.5   # band: F_MIN_FACTOR * fp .. F_MAX_FACTOR * fp (README, Irregular waves)
 F_MAX_FACTOR = 3.0
-SIGMA_1 = 0.07       # JONSWAP peak width below fp
-SIGMA_2 = 0.09       # and above
-
-
-def frequency_grid(duration_s: float, dt: float, f_min: float, f_max: float):
-    """
-    Return the synthesis frequencies f_n = n df, df = 1 / duration.
-
-    Only those within f_min..f_max and below Nyquist. Returns (n, f, df, n_samples); n are the
-    FFT bin numbers.
-    """
-    n_samples = round(duration_s / dt)
-    if abs(n_samples * dt - duration_s) > 1e-9:
-        raise ValueError(f'duration {duration_s} s is not a whole number of {dt} s samples')
-    df = 1.0/(n_samples * dt)
-    n_all = np.arange(1, n_samples//2+1)
-    f_all = n_all * df
-    mask = (f_all >= f_min) & (f_all <= f_max) & (f_all < 0.5/dt)
-    if not mask.any():
-        raise ValueError(f'no frequencies between {f_min:.3f} and {f_max:.3f} Hz')
-    return n_all[mask], f_all[mask], df, n_samples
-
-
-def jonswap(f, df: float, hs_m: float, tp_s: float, gamma: float,
-            sigma1: float = SIGMA_1, sigma2: float = SIGMA_2):
-    """
-    Return the JONSWAP spectrum S(f) [m^2/Hz] on the grid.
-
-    alpha is chosen with the same sum the synthesis uses, so the generated Hs is exactly hs_m.
-    """
-    fm = 1.0 / tp_s
-    sigma = np.where(f <= fm, sigma1, sigma2)
-    b = np.exp(-((f / fm - 1.0) ** 2) / (2.0 * sigma ** 2))
-    shape = (G ** 2 / (16.0 * math.pi ** 4) * f ** -5.0
-             * np.exp(-1.25 * (f / fm) ** -4.0) * gamma ** b)
-    m0 = shape.sum() * df
-    return shape * (hs_m ** 2 / 16.0) / m0
-
-
-def wave_amplitudes(spectrum, df: float):
-    """Return a_n = sqrt(2 S(f_n) df); then 4 sqrt(sum(a_n^2) / 2) = Hs."""
-    return np.sqrt(2.0 * spectrum * df)
 
 
 def paddle_amplitudes(wm: Wavemaker, f, a):
@@ -346,32 +273,6 @@ def paddle_amplitudes(wm: Wavemaker, f, a):
     Each as a regular wave of height 2 a_n: same transfer function, gain and scaling.
     """
     return np.array([paddle_amplitude(wm, 1.0 / fn, 2.0 * an) for fn, an in zip(f, a)])
-
-
-def random_phases(seed: int, count: int):
-    """Uniform in [0, 2 pi); the same seed gives the same run."""
-    return np.random.default_rng(seed).uniform(0.0, 2.0 * math.pi, count)
-
-
-def synthesize(n, p, phases, n_samples: int):
-    """
-    Return x_k = sum_n p_n cos(2 pi n k / n_samples + phi_n), by inverse FFT.
-
-    irfft divides by n_samples and doubles the positive frequencies, hence the factor
-    n_samples / 2.
-    """
-    spectrum = np.zeros(n_samples // 2 + 1, dtype=complex)
-    spectrum[n] = p * np.exp(1j * phases) * (n_samples / 2.0)
-    return np.fft.irfft(spectrum, n_samples)
-
-
-def synthesize_direct(f, p, phases, n_samples: int, dt: float):
-    """Compute the same sum term by term: slow, for testing synthesize() on short runs."""
-    t = np.arange(n_samples) * dt
-    x = np.zeros(n_samples)
-    for fn, pn, phi in zip(f, p, phases):
-        x += pn * np.cos(2.0 * math.pi * fn * t + phi)
-    return x
 
 
 def irregular_signal(wm: Wavemaker, spec: IrregularSpec, dt: float):
@@ -409,105 +310,37 @@ def regular_signal(wm: Wavemaker, spec: RegularSpec, dt: float):
     return x, row
 
 
-def check_run(wm: Wavemaker, x, dt: float, max_velocity_mps: float) -> list[str]:
-    """
-    Return the reasons the controller would reject the run or play_dat refuse it; empty if OK.
-
-    Compute each as play_dat and the controller do, so the numbers match:
-      - travel: upright_m + x within min_m..max_m
-      - speed: max|np.diff(x)| / dt <= max_velocity_mps
-      - acceleration: max|x[i+1] - 2 x[i] + x[i-1]| / dt^2 <= wm.max_acceleration_mps2 if set;
-        report it always, so a limit set later is no surprise
-      - start and end within 2 mm of upright
-    Hard limits are the yaml values; a margin on top is optional.
-    """
-    issues = []
-    position = wm.upright_m + x
-    if position.min() < wm.min_m or position.max() > wm.max_m:
-        issues.append(f'travel {position.min():+.4f}..{position.max():+.4f} m outside '
-                      f'{wm.min_m:+.4f}..{wm.max_m:+.4f} m')
-    speed = np.abs(np.diff(x)).max() / dt
-    if speed > max_velocity_mps:
-        issues.append(f'peak speed {speed:.3f} > {max_velocity_mps:.3f} m/s')
-    acceleration = np.abs(np.diff(x, 2)).max() / dt ** 2
-    if wm.max_acceleration_mps2 is not None and acceleration > wm.max_acceleration_mps2:
-        issues.append(f'peak acceleration {acceleration:.2f} > '
-                      f'{wm.max_acceleration_mps2:.2f} m/s^2')
-    for where, value in (('starts', x[0]), ('ends', x[-1])):
-        if abs(value) > play_dat.UPRIGHT_TOLERANCE_M:
-            issues.append(f'{where} {value:+.4f} m from upright')
-    return issues
-
-
 # ---------------------------------------------------------------- assemble and write
+# The shared parts are in motion_files; these keep the wavemaker's signatures.
+
+WAVE_COLUMNS = ['run', 'start_s', 'end_s', 'kind',
+                'period_s', 'height_m', 'steepness', 'amplitude_m',              # regular
+                'peak_period_s', 'hs_m', 'gamma', 'seed', 'f_min_hz', 'f_max_hz',  # irregular
+                'paddle_std_m', 'paddle_peak_m',
+                'gain', 'status']
+
+
+def run_signal(wm: Wavemaker, spec: RunSpec, dt: float):
+    """(x, row, pause_s) for one spec of the test matrix, as motion_files.assemble takes it."""
+    if isinstance(spec, RegularSpec):
+        x, row = regular_signal(wm, spec, dt)
+    elif isinstance(spec, IrregularSpec):
+        x, row = irregular_signal(wm, spec, dt)
+    else:
+        raise TypeError(f'unknown spec {type(spec).__name__}')
+    return x, row, spec.pause_s
+
 
 def assemble(wm: Wavemaker, specs: list[RunSpec], dt: float, max_velocity_mps: float):
     """Frames (n x 2: position, trigger) and run-table rows, in file order."""
-    lead_in = np.zeros((round(max(play_dat.MIN_GAP_S, 2.0) / dt), 2))
-    chunks = [lead_in]
-    sample = len(lead_in)
-    rows = []
-    for index, spec in enumerate(specs):
-        if isinstance(spec, RegularSpec):
-            x, row = regular_signal(wm, spec, dt)
-        elif isinstance(spec, IrregularSpec):
-            x, row = irregular_signal(wm, spec, dt)
-        else:
-            raise TypeError(f'run {index}: unknown spec {type(spec).__name__}')
-
-        row['run'] = index
-        issues = check_run(wm, x, dt, max_velocity_mps)
-        if issues:
-            row.update(start_s='', end_s='', status='skipped')
-            print(f"run {index} skipped: {'; '.join(issues)}")
-        else:
-            row.update(start_s=round(sample * dt, 3), end_s=round((sample + len(x)) * dt, 3),
-                       status='')
-            pause = np.zeros((round(spec.pause_s / dt), 2))
-            chunks += [np.column_stack((x, np.ones_like(x))), pause]
-            sample += len(x) + len(pause)
-        rows.append(row)
-    return np.vstack(chunks), rows
-
-
-def write_motion(path: str, frames, dt: float):
-    """play_dat's layout, little-endian; dt must be whole milliseconds."""
-    interval_ms = round(dt * 1000.0)
-    if abs(interval_ms - dt*1000.0) > 1e-9:
-        raise ValueError(f'dt {dt} s is not a whole number of milliseconds')
-    with open(path, 'wb') as f:
-        np.array([interval_ms, frames.shape[1]], dtype='<i4').tofile(f)
-        frames.astype('<f4').tofile(f)
+    runs = [run_signal(wm, spec, dt) for spec in specs]
+    return motion_files.assemble(
+        runs, dt, lambda x: check_run(wm, x, dt, max_velocity_mps))
 
 
 def write_run_table(path: str, rows: list[dict]):
     """Run table for play_dat: the columns of both kinds; a column a row lacks is left empty."""
-    columns = ['run', 'start_s', 'end_s', 'kind',
-               'period_s', 'height_m', 'steepness', 'amplitude_m',              # regular
-               'peak_period_s', 'hs_m', 'gamma', 'seed', 'f_min_hz', 'f_max_hz',  # irregular
-               'paddle_std_m', 'paddle_peak_m',
-               'gain', 'status']
-    with open(path, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=columns, restval='')
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def source_commit() -> str:
-    """Return the repository's commit, '-dirty' for local changes; 'unknown' without git."""
-    here = os.path.dirname(os.path.realpath(__file__))
-    try:  # an installed copy: CMakeLists.txt writes where the repo is.
-        with open(os.path.join(here, 'source_dir.txt')) as f:
-            here = f.read().strip()
-    except OSError:
-        pass
-    try:
-        result = subprocess.run(['git', '-C', here, 'describe', '--always', '--dirty',
-                                 '--exclude=*'],
-                                capture_output=True, text=True, timeout=5, check=True)
-    except (OSError, subprocess.SubprocessError):
-        return 'unknown'
-    return result.stdout.strip()
+    motion_files.write_run_table(path, rows, WAVE_COLUMNS)
 
 
 def write_record(path: str, argv: list[str], args, wm: Wavemaker, yaml_depth: float,
@@ -520,83 +353,10 @@ def write_record(path: str, argv: list[str], args, wm: Wavemaker, yaml_depth: fl
     speed = f'{max_velocity_mps:.4f} m/s'
     if args.max_velocity_mps:
         speed += ' (--max-velocity-mps)'
-    with open(args.test_matrix) as f:
-        matrix = f.read().rstrip('\n')
-    lines = [
-        f'generated    {datetime.now().astimezone().isoformat(timespec="seconds")}',
-        f'command      generate_waves {shlex.join(argv)}',
-        f'folder       {os.getcwd()}',
-        f'commit       {source_commit()}',
-        f'config       {os.path.realpath(config)}',
-        f'wavemaker    {wm.name} ({wm.type})',
-        f'water depth  {depth}',
-        f'dt           {args.dt} s',
-        f'max speed    {speed}',
-        f'result       {summary}',
-        '',
-        f'test matrix {args.test_matrix}:',
-        matrix,
-    ]
-    with open(path, 'w') as f:
-        f.write('\n'.join(lines) + '\n')
-
-
-def verify_with_play_dat(dat_path: str, wm: Wavemaker, max_velocity_mps: float):
-    """Read the file back with play_dat's own functions; raises if play_dat would refuse it."""
-    motion = play_dat.read_motion(dat_path)
-    values = play_dat.select_channel(motion, 'position')
-    runs = play_dat.split_runs(values, motion.sample_interval_s, wm.upright_m)
-    table = play_dat.read_run_table(dat_path)
-    if table is None:
-        raise ValueError(f'{dat_path}: no run table next to it')
-    play_dat.apply_run_table(runs, table, motion.sample_interval_s)
-    for run in runs:
-        issues = play_dat.check_run(run, motion.sample_interval_s, wm.upright_m,
-                                    wm.min_m, wm.max_m, max_velocity_mps)
-        if issues:
-            raise ValueError(f"run {run.index}: {'; '.join(issues)}")
-    return len(runs)
-
-
-def plot_motion(png_path: str, wm: Wavemaker, frames, rows: list[dict], dt: float,
-                max_velocity_mps: float, show: bool = False):
-    """Paddle position and speed over the whole file, runs shaded, limits dashed."""
-    import matplotlib
-    if not show:
-        matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    x = frames[:, 0]
-    t = np.arange(len(x)) * dt
-    speed = np.abs(np.diff(x, prepend=x[0])) / dt
-    fig, (ax_x, ax_v) = plt.subplots(2, 1, sharex=True, figsize=(12, 6))
-    ax_x.plot(t, x, lw=0.6)
-    for limit in (wm.min_m - wm.upright_m, wm.max_m - wm.upright_m):
-        ax_x.axhline(limit, ls='--', color='tab:red', lw=0.8)
-    ax_v.plot(t, speed, lw=0.6)
-    ax_v.axhline(max_velocity_mps, ls='--', color='tab:red', lw=0.8)
-
-    for row in rows:
-        if row['status'] == 'skipped':
-            continue
-        for ax in (ax_x, ax_v):
-            ax.axvspan(row['start_s'], row['end_s'], color='tab:blue', alpha=0.08)
-        ax_x.text((row['start_s'] + row['end_s']) / 2, wm.max_m - wm.upright_m, str(row['run']),
-                  ha='center', va='bottom', fontsize=8)
-
-    skipped = [str(r['run']) for r in rows if r['status'] == 'skipped']
-    title = f'{wm.name}: {len(rows) - len(skipped)} runs'
-    if skipped:
-        title += f', skipped {", ".join(skipped)}'
-    ax_x.set_title(title)
-    ax_x.set_ylabel('position from upright [m]')
-    ax_v.set_ylabel('speed [m/s]')
-    ax_v.set_xlabel('time [s]')
-    fig.tight_layout()
-    fig.savefig(png_path, dpi=120)
-    if show:
-        plt.show()
-    plt.close(fig)
+    motion_files.write_record(
+        path, 'generate_waves', argv, config,
+        [f'wavemaker    {wm.name} ({wm.type})', f'water depth  {depth}'],
+        args.dt, speed, summary, args.test_matrix)
 
 
 # ---------------------------------------------------------------- command line
@@ -610,7 +370,8 @@ def main(argv=None):
     parser.add_argument('--config', help='another wavemakers.yaml; default the installed one')
     parser.add_argument('--dt', type=float, default=0.02, help='sample interval [s], whole ms')
     parser.add_argument('--water-depth', type=float, help='override the yaml for this file')
-    parser.add_argument('--max-velocity-mps', type=float, help='required for linear drives')
+    parser.add_argument('--max-velocity-mps', type=float,
+                        help="override the wavemaker's speed limit from the yaml")
     parser.add_argument('--no-plot', action='store_true', help='do not write <output>.png')
     parser.add_argument('--show', action='store_true', help='also open the plot in a window')
     argv = sys.argv[1:] if argv is None else argv
@@ -629,8 +390,6 @@ def main(argv=None):
             print(f'warning: the gain table is for {wm.water_depth} m, not {args.water_depth} m')
         wm.water_depth = args.water_depth
     max_velocity = args.max_velocity_mps or wm.max_velocity_mps
-    if max_velocity is None:
-        parser.error(f'{wm.name} has a linear drive: give --max-velocity-mps')
 
     frames, rows = assemble(wm, read_test_matrix(args.test_matrix), args.dt, max_velocity)
     dat_path = args.output + '.dat'
@@ -641,10 +400,11 @@ def main(argv=None):
                f'{len(frames) * args.dt / 60:.1f} min')
     write_record(args.output + '.txt', argv, args, wm, yaml_depth, config, max_velocity, summary)
     if not args.no_plot:
-        plot_motion(args.output + '.png', wm, frames, rows, args.dt, max_velocity, args.show)
+        motion_files.plot_motion(args.output + '.png', wm, frames, rows, args.dt, max_velocity,
+                                 args.show)
     print(f'{dat_path}: {summary}')
     command = f'ros2 run rig_controller play_dat {dat_path} {wm.name} --dry-run'
-    if wm.max_velocity_mps is None:  # linear drive: the speed came from the command line
+    if args.max_velocity_mps:  # check against the same speed the file was made for
         command += f' --max-velocity-mps {max_velocity:.4f}'
     if args.config is not None:
         command += f' --config {args.config}'

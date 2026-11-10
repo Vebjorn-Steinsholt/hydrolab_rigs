@@ -1,7 +1,8 @@
 # Hydrolab rigs
 
-ROS 2 (Jazzy) packages for controlling the Hydrolab rigs: the wavemakers and the sloshing
-oscillator (`OSCILLATOR.md`). On a wavemaker, a lifecycle controller node generates
+ROS 2 (Jazzy) packages for controlling the Hydrolab rigs: the wavemakers and two oscillators,
+the sloshing oscillator (`OSCILLATOR.md`) and the vertical oscillator
+([Running the vertical oscillator](#running-the-vertical-oscillator)). On a wavemaker, a lifecycle controller node generates
 the paddle motion and sends it to a Rexroth IndraDrive through a Moxa MGate 5101-PBM-MN
 Modbus TCP / PROFIBUS gateway.
 
@@ -25,8 +26,10 @@ Modbus TCP / PROFIBUS gateway.
 - [Running a wavemaker](#running-a-wavemaker)
   - [Water depth](#water-depth)
   - [Web page](#web-page)
+- [Running the vertical oscillator](#running-the-vertical-oscillator)
 - [Generating motion files](#generating-motion-files)
   - [From test matrix to tank](#from-test-matrix-to-tank)
+- [Generating oscillator motion files](#generating-oscillator-motion-files)
 - [Interfaces](#interfaces)
 - [How a motion runs](#how-a-motion-runs)
 - [Faults and stopping](#faults-and-stopping)
@@ -43,11 +46,12 @@ Modbus TCP / PROFIBUS gateway.
 | `rig_interfaces` | `MoveRig` action, `ReturnToUpright` and `CancelAllGoals` services. |
 | `rig_controller` | `controller_node` (the lifecycle controller), the wave and trajectory maths, the IndraDrive actuator adapter, and `bridge_node` (see the note below). |
 | `wavemaker_bringup` | Launch file and per-wavemaker configuration (`config/wavemakers.yaml`). |
+| `oscillator_bringup` | Launch file and configuration of the oscillators (`config/oscillator.yaml`: `sloshing`, `vertical`); `oscillator:=` picks one. |
 | `rig_web` | Web page for running a wavemaker or the oscillator through the bridge (`rig` parameter; see [Web page](#web-page)). |
 
 > **`bridge_node`** connects topic-based clients, such as the web page, to the controller.
-> Its topics are `height`, `period`, `start`, `stop` and `heartbeat` in, and `wavemaker_state` /
-> `wavemaker_message` out.
+> Its topics are `height`, `period`, `start`, `stop` and `heartbeat` in, and `<rig>_state` /
+> `<rig>_message` out (`wavemaker_state`, `oscillator_state`, ...).
 
 ## Build
 
@@ -91,7 +95,7 @@ before connecting to hardware. Changes take effect at the next `configure`.
 | Parameter | Meaning |
 |---|---|
 | `rig` | `wavemaker` (default) or `oscillator`. Names the action and topics: `move_<rig>`, `<rig>_setpoint`, `<rig>_position`, `<rig>_velocity`, `<rig>_actuator_setpoint`, and the bridge's `<rig>_state` / `<rig>_message`. Set the same value on the controller, bridge and web page. `oscillator` also selects the trajectory: `height` is the stroke (amplitude = height / 2 around `upright_position_m`), with no wave theory, water depth or transfer gain, and the wavemaker-only checks (`wavemaker_type`, `water_depth`, flap, gain table) are skipped. See [OSCILLATOR.md](OSCILLATOR.md). |
-| `drive_name` | Required, no default. `indradrive` (MGate gateway, the wavemakers) or `linmot` (Arduino serial-to-CAN bridge, the oscillator). Configure fails when it is missing or unknown. A new drive is an `Actuator` subclass plus one branch in `make_actuator()` (`rig_controller/src/controller_node.cpp`). |
+| `drive_name` | Required, no default. `indradrive` (Rexroth IndraDrive behind an MGate gateway: the wavemakers and the vertical oscillator) or `linmot` (Arduino serial-to-CAN bridge: the sloshing oscillator). Any rig can use either. Configure fails when it is missing or unknown. A new drive is an `Actuator` subclass plus one branch in `make_actuator()` (`rig_controller/src/controller_node.cpp`). |
 | `wavemaker_type` | `piston` or `flap`. Selects the wave transfer function. |
 | `water_depth` | Water depth in m. Can be overridden for one run with the `water_depth` launch argument (see [Water depth](#water-depth)). |
 | `flap_attachment_height` | Flap only: height of the actuator attachment above the tank floor, m. Must be greater than `water_depth`. |
@@ -104,13 +108,17 @@ before connecting to hardware. Changes take effect at the next `configure`.
 
 | Parameter | Meaning |
 |---|---|
-| `drive_motion` | `angular` (drive position in degrees, converted with the lead) or `linear`. The conversion is `DriveScale` (`rig_controller/src/drive_scale.hpp`), shared by the controller's limits and the actuators. Linear units are not verified yet (TODO 19). |
+| `drive_motion` | `angular` (drive position in degrees, converted with the lead) or `linear` (drive position in its own length unit, converted with `drive_m_per_unit`). The conversion is `DriveScale` (`rig_controller/src/drive_scale.hpp`), shared by the controller's limits, the actuators and `rig_limits`. |
+| `drive_m_per_unit` | Linear only: metres per unit of the drive's position tag (default 1.0). The vertical oscillator: 0.001 (the tag is in mm). lilletanken and mclab keep the placeholder 1.0 until their drives are read (TODO 19). |
+| `drive_velocity_per_unit_per_s` | Velocity tag units per (position tag unit per second): converts the speed cap sent with each setpoint, and `max_velocity_rpm` back to m/s. Default 1/6, the deg/s → rpm rule of the angular drives. The vertical oscillator: 6.0 (1 mm/s = 6 × 10 mm/min). |
+| `drive_direction` | `1` or `-1` (an integer): the sign between the rig (+ = up or forward) and the drive. Applies to setpoints, feedback and the drive limits; the speed cap stays positive. Default 1. The vertical oscillator: -1 (a + command moves its slide down). |
 | `actuator_lead_m_per_degree` | Angular only: paddle travel per drive degree. |
 | `actuator_upright_angle_deg` | Angular only: drive angle at upright. |
 | `min_position_deg` / `max_position_deg` | Angular travel limits in drive degrees. Goals that leave them are rejected; the drive also refuses targets outside them. |
-| `travel_minimum_m` / `travel_maximum_m`, `min_position_m` / `max_position_m` | Linear travel limits in m (node and drive side; keep them equal). |
-| `max_velocity_rpm` | Drive speed limit. Goals whose peak speed exceeds it are rejected. |
-| `hold_velocity_rpm` | Speed cap used when stopping and holding position (default 10, ≤ `max_velocity_rpm`). |
+| `travel_minimum_m` / `travel_maximum_m` | Linear travel limits in m around the rig's zero. Goals that leave them are rejected; an IndraDrive's drive-side limits are derived from them (one set of limits). |
+| `min_position_m` / `max_position_m` | LinMot only: the bridge firmware's limits (5…195 mm). |
+| `max_velocity_rpm` | IndraDrive speed limit, in the drive's velocity tag units: rpm on the angular drives, 10 mm/min on the vertical oscillator (600 = 0.1 m/s). Goals whose peak speed exceeds it are rejected. Required by `play_dat` and the generators (`rig_limits`), which derive the speed in m/s from it. |
+| `hold_velocity_rpm` | Speed cap used when stopping and holding position, in the same units (default 10, ≤ `max_velocity_rpm`). |
 
 ### Ladertanken: position resolution
 
@@ -321,6 +329,49 @@ ros2 launch rig_web demo.launch.py
 ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-stop
 ```
 
+## Running the vertical oscillator
+
+A second Rexroth IndraDrive (rotary motor with linear scaling, 20 mm/rev) moves a slide up and
+down. Until the daisy-chain cable arrives it takes the ladertanken wavemaker's place on the
+ladertanken MGate: the same PROFIBUS address (2), the same gateway blocks, the cable replugged
+between the two drives. Only one of the two rigs runs at a time. The plan, decisions and
+commissioning log are in [oscillator_sketch.md](oscillator_sketch.md).
+
+**Configuration:** the `vertical` blocks in
+[`oscillator_bringup/config/oscillator.yaml`](oscillator_bringup/config/oscillator.yaml)
+(`/oscillators/vertical/controller` and `/oscillators/vertical/bridge`): `rig: oscillator`,
+`drive_name: indradrive`, `drive_motion: linear` with the drive's units
+(`drive_m_per_unit: 0.001`, `drive_velocity_per_unit_per_s: 6.0`, `drive_direction: -1`, see
+[Actuator and limits](#actuator-and-limits)), travel −0.2…0.2 m around upright 0, speed limit
+`max_velocity_rpm: 600` (0.1 m/s).
+
+**Start and stop** on the ladertanken Pi, through the oscillator service with
+`OSCILLATOR=vertical` in `/etc/default/oscillator` ([rpi/README.md](rpi/README.md#oscillator)):
+
+```bash
+sudo systemctl start oscillator@ladertanken     # switches the drive on; it does not home
+sudo systemctl stop oscillator@ladertanken      # stops the motion, drive off, brake holds
+```
+
+By hand: `ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical` (default
+`sloshing`). The nodes run in `/oscillators/vertical`.
+
+**Switching between the wavemaker and the oscillator** means replugging the PROFIBUS cable:
+stop the running service first, replug, identify the drive, then start the matching service
+([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken), *Switching drives*).
+Nothing in the cyclic data tells the controller which drive is plugged in, so the wavemaker's
+configuration on the oscillator drive would read millimetres as flap degrees.
+
+**Running:** the web page (`http://ladertanken-rpi.local:8080/`): *height* is the stroke, peak to
+peak, in metres, around mid-travel; + is up. **Stop** cancels the wave and the slide holds where it
+is, drive enabled; **Return to upright** brings it back to mid-travel. Motion files are made with
+`generate_oscillations` ([Generating oscillator motion files](#generating-oscillator-motion-files))
+and play with `play_dat <file> vertical --rig oscillator`; the speed limit comes from the yaml.
+
+**Tracking (2026-11-09, no load, no water):** the slide follows the setpoint with about 180 ms of
+lag; the stroke reaches 97 % at a 2 s period and 90 % at 1 s, for any stroke. It is not tuned yet
+and depends on the load (TODO item 46). Record `oscillator_position` with every run.
+
 ## Generating motion files
 
 > **Regular and irregular waves played on the rig** (ladertanken, 2026-11-04 and 2026-11-05,
@@ -328,8 +379,8 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 > ([TODO.md](TODO.md), item 43).
 
 `generate_waves` (`rig_controller/src/generate_waves.py`) turns a test matrix into a motion file for one wavemaker,
-ready for `play_dat`. Wavemakers only; the oscillator gets a separate generator later
-([TODO.md](TODO.md), *Oscillator motion generator*).
+ready for `play_dat`. Wavemakers only; the oscillators have `generate_oscillations`
+([Generating oscillator motion files](#generating-oscillator-motion-files)).
 
 ### From test matrix to tank
 
@@ -548,7 +599,7 @@ with the run table.
 | `--show` | Also open the plot in a window |
 | `--no-plot` | Do not write the `.png` |
 | `--config <file>` | Another `wavemakers.yaml`; default the installed one, else the repository's when running from the source tree |
-| `--max-velocity-mps` | Required for linear drives (lilletanken, mclab), whose speed limit is not known from the yaml yet (TODO item 19) |
+| `--max-velocity-mps` | Override the speed limit from the yaml (`max_velocity_rpm` in the drive's units); the printed `play_dat` command then carries the same value |
 
 ### Check and play
 
@@ -644,6 +695,121 @@ skipped with another, and the run table gives the paddle's peak for each.
 ```bash
 cd ~/ros_ws/src/hydrolab_rigs
 python3 -m pytest rig_controller/test/test_generate_waves.py -v
+```
+
+## Generating oscillator motion files
+
+`generate_oscillations` (`rig_controller/src/generate_oscillations.py`) is the oscillators'
+`generate_waves`: a test matrix in, the same four files out, every run checked against the
+oscillator's limits and the file read back with `play_dat`. It works for both oscillators in
+`oscillator.yaml` (`vertical`, `sloshing`). The input is the slide's **stroke**, peak to peak, in
+metres; there is no wave physics, no gain and no water depth.
+
+### Test matrix
+
+One row per run, played in file order; each row fills its kind's columns and leaves the others
+empty. Every line has the same number of commas as the header (10), decimals with a point.
+
+```csv
+kind,period_s,stroke_m,n_periods,sig_stroke_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,2.0,0.020,10,,,,,,2,5
+regular,1.0,0.010,10,,,,,,2,5
+irregular,,,,0.010,1.5,3.3,120,1,3,10
+```
+
+| Column | Kind | Meaning |
+|---|---|---|
+| `kind` | both | `regular` (default when empty) or `irregular` |
+| `period_s` | regular | Period [s] |
+| `stroke_m` | regular | Stroke, peak to peak [m]; the amplitude is half of it |
+| `n_periods` | regular | Length in periods, ramps included; at least `2 × n_ramp` |
+| `sig_stroke_m` | irregular | Significant stroke: 4σ of the position [m], as Hs is 4σ of the water surface |
+| `tp_s` | irregular | Peak period [s] |
+| `gamma` | irregular | JONSWAP peak enhancement; empty = 3.3, 1.0 = Pierson–Moskowitz |
+| `duration_s` | irregular | Length [s], ramps included; at least `2 × n_ramp × tp_s` |
+| `seed` | irregular | Random phases; the same seed gives the same run |
+| `n_ramp` | both | Ramp at each end, in periods (regular) or peak periods (irregular); at least 1 |
+| `pause_s` | both | Rest after the run [s], at least 1 |
+
+Irregular runs have the JONSWAP **shape** for the slide's motion, in the band 0.5 fp to 3 fp,
+with random phases (as the wavemaker's irregular waves, without the wave-to-paddle step). The
+ramps are **cosine** ramps: a linear ramp steps the acceleration where it ends, which shows as a
+jerk spike.
+
+A mistake in a row stops the program with the row number (`row 0` is the first row after the
+header, the same as the run number) and the column; no files are written then.
+
+### Generate
+
+```bash
+source ~/ros_ws/install/setup.bash
+cd ~/oscillator_sessions/2026-11-10    # the session folder, with the test matrix
+ros2 run rig_controller generate_oscillations vertical session.csv -o session_motion
+```
+
+It writes:
+
+- `session_motion.dat`: the motion file for `play_dat`.
+- `session_motion.csv`: the run table: per run its start and end, the parameters, the amplitude
+  (regular) or the standard deviation and peak (irregular), `peak_jerk_mps3`, and `skipped` for a
+  run that does not fit the oscillator.
+- `session_motion.png`: position and speed over the whole file, the limits dashed.
+- `session_motion.txt`: how the file was made (date, command, commit, yaml, oscillator, jerk
+  limit, dt, speed limit) and a copy of the test matrix. Keep it with the `.dat` and the measured
+  motion.
+
+and prints a summary and the command to check the file:
+
+```
+session_motion.dat: 3 runs, 0 skipped, 2.9 min
+ros2 run rig_controller play_dat session_motion.dat vertical --rig oscillator --dry-run
+```
+
+**Give `-o` a different name from the test matrix:** `-o session` would overwrite `session.csv`.
+
+| Option | Use |
+|---|---|
+| `--max-jerk-mps3 3.0` | Warn above this peak jerk [m/s³]; default 3.0, the vertical IndraDrive's jerk limit (S-0-0193) |
+| `--max-velocity-mps` | Override the speed limit from the yaml; the printed `play_dat` command then carries the same value |
+| `--dt 0.01` | Sample interval [s], whole milliseconds; default 0.02 |
+| `--show` / `--no-plot` | Also open the plot in a window / do not write the `.png` |
+| `--config <file>` | Another `oscillator.yaml`; default the installed one |
+
+**Limits** come from `oscillator.yaml` through `rig_limits`, as `play_dat` reads them:
+
+| Oscillator | Travel (around upright) | Speed | Acceleration |
+|---|---|---|---|
+| `vertical` | −0.2…+0.2 m (upright 0) | 0.1 m/s (`max_velocity_rpm` 600 × 10 mm/min) | none set |
+| `sloshing` | 0.015…0.185 m (upright 0.1 m) | 2.0 m/s (the LinMot's default) | 9.81 m/s² |
+
+A run outside them is listed as `skipped` with the reason and left out of the file.
+
+**Jerk is a warning, not a skip.** The drive does not refuse a motion with more jerk than its
+limit; it rounds it off, so the slide moves less than asked. The run is kept, its peak jerk is in
+the run table, and the program prints `run N: peak jerk J m/s^3 above 3.0: the drive rounds the
+motion off`. A sine of stroke s and period T has a peak jerk of (s/2)(2π/T)³: 20 mm at 1 s is
+2.5 m/s³, 20 mm at 0.8 s is 4.8. Irregular runs reach the limit sooner, because jerk grows with
+f³ and the band reaches 3 fp.
+
+### Check and play
+
+Look at the `.png`, then the dry run, then play it with the oscillator service running
+([Running the vertical oscillator](#running-the-vertical-oscillator)):
+
+```bash
+ros2 run rig_controller play_dat session_motion.dat vertical --rig oscillator --dry-run
+ros2 run rig_controller play_dat session_motion.dat vertical --rig oscillator
+```
+
+The vertical slide lags the setpoint and loses some stroke at short periods (97 % at 2 s, 90 % at
+1 s, unloaded; TODO item 46): record `oscillator_position` with every run and compare it with the
+run table.
+
+### Tests
+
+```bash
+cd ~/ros_ws/src/hydrolab_rigs
+python3 -m pytest rig_controller/test/test_generate_oscillations.py -v
 ```
 
 ## Interfaces

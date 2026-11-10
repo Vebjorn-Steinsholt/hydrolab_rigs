@@ -18,7 +18,10 @@ struct DriveScale
   double velocity_per_unit_per_s{1.0 / 6.0}; // velocity tag units per (position unit /s)
   double direction{1.0}; // +1 or -1: rig (+ = up) to drive
 
-  double to_m(double drive) const{return upright_m + direction * (drive - upright_drive) * m_per_unit;}
+  double to_m(double drive) const
+  {
+    return upright_m + direction * (drive - upright_drive) * m_per_unit;
+  }
   double to_drive(double m) const{return upright_drive + direction * (m - upright_m) / m_per_unit;}
   double rate_to_m(double r) const{return r * direction * m_per_unit;}
   double rate_to_drive(double v) const{return direction * v / m_per_unit;}

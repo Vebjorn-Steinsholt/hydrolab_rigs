@@ -64,19 +64,24 @@ install(PROGRAMS src/generate_waves.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME generate_waves
 )
+# The same for an oscillator: stroke instead of wave height (see the script's docstring).
+install(PROGRAMS src/generate_oscillations.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME generate_oscillations
+)
 install(PROGRAMS src/soft_stop.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME soft_stop
 )
-# generate_waves records the repository's commit (source_commit); an installed copy finds the
+# The generators record the repository's commit (source_commit); an installed copy finds the
 # repository through this file.
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/source_dir.txt "${CMAKE_CURRENT_SOURCE_DIR}\n")
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/source_dir.txt
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# Imported by play_dat and generate_waves; the programs are installed without .py.
-install(FILES src/play_dat.py src/rig_limits.py
+# Imported by play_dat and the generators; the programs are installed without .py.
+install(FILES src/play_dat.py src/rig_limits.py src/motion_files.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

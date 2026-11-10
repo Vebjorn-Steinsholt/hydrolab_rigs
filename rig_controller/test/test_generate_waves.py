@@ -47,7 +47,7 @@ def write_yaml(path, name, params):
 
 
 PISTON = {'drive_name': 'indradrive', 'wavemaker_type': 'piston', 'water_depth': 1.0,
-          'drive_motion': 'linear',
+          'drive_motion': 'linear', 'max_velocity_rpm': 100.0,
           'travel_minimum_m': -0.2, 'travel_maximum_m': 0.2}
 
 
@@ -104,7 +104,7 @@ def test_unknown_wavemaker_lists_names():
 
 
 @pytest.mark.parametrize('key', ['drive_name', 'wavemaker_type', 'water_depth',
-                                 'travel_minimum_m', 'travel_maximum_m'])
+                                 'travel_minimum_m', 'travel_maximum_m', 'max_velocity_rpm'])
 def test_missing_required_key_is_named(tmp_path, key):
     params = {k: v for k, v in PISTON.items() if k != key}
     with pytest.raises(ValueError, match=key):
@@ -117,9 +117,10 @@ def test_flap_needs_attachment_height(tmp_path):
         gw.load_wavemaker('test', write_yaml(tmp_path / 'w.yaml', 'test', params))
 
 
-def test_linear_drive_has_no_speed_limit(tmp_path):
+def test_linear_drive_speed_from_the_yaml(tmp_path):
+    # 100 rpm with the default factors: 100 x 6 x 1 m per unit (rig_limits, TODO item 19)
     wm = gw.load_wavemaker('test', write_yaml(tmp_path / 'w.yaml', 'test', PISTON))
-    assert wm.max_velocity_mps is None
+    assert wm.max_velocity_mps == pytest.approx(600.0)
     assert (wm.min_m, wm.max_m) == (-0.2, 0.2)
 
 
@@ -484,7 +485,8 @@ def test_source_commit_of_an_installed_copy(tmp_path, monkeypatch):
     """Installed, the repository is found through source_dir.txt; without it, 'unknown'."""
     installed = tmp_path / 'lib' / 'rig_controller'
     installed.mkdir(parents=True)
-    monkeypatch.setattr(gw, '__file__', str(installed / 'generate_waves.py'))
+    # source_commit lives in motion_files (T7 step 1), installed next to generate_waves.
+    monkeypatch.setattr(gw.motion_files, '__file__', str(installed / 'motion_files.py'))
     assert gw.source_commit() == 'unknown'
     (installed / 'source_dir.txt').write_text(str(SRC.parent) + '\n')
     assert re.fullmatch(r'[0-9a-f]{7,40}(-dirty)?', gw.source_commit())

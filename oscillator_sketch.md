@@ -89,9 +89,9 @@ wavemaker's `WMDefault.par`:
   `/etc/default/oscillator`.
 - **`play_dat` already plays to an oscillator** (`--rig oscillator`, action `move_oscillator`).
   With a rig name it reads limits and namespace from `oscillator.yaml` (`rig_limits.py:20`).
-  For a linear IndraDrive, `rig_limits` gives no speed limit (`rig_limits.py:87-92`), so
-  `--max-velocity-mps` is required until T8. `generate_waves` is wavemakers only; the
-  oscillator's generator is T7 (`generate_oscillations`).
+  For a linear IndraDrive, `rig_limits` derives the speed limit from `max_velocity_rpm` and the
+  drive's units (T8, 2026-11-09), so `--max-velocity-mps` is optional. `generate_waves` is wavemakers only; the
+  oscillators have `generate_oscillations` (T7, done 2026-11-10).
 - **`mgate_example` works on the oscillator as it is**, because blocks 0/0 and address 2 are
   the same (`drivers/mgate5101_driver/examples/example_main.cpp`). `--move` steps +5 and back
   at 10: on this drive **5 mm at 100 mm/min (1.7 mm/s)**, about 3 s each way. Its limits default
@@ -163,20 +163,18 @@ All implemented on 2026-11-09 except where noted.
    oscillator launch gets an `oscillator` argument (`sloshing` or `vertical`), so the LinMot rig
    keeps working.
 7. **Files are played with `play_dat` as they are,** made by `generate_oscillations` (T7, built
-   like `generate_waves`). Pass `--max-velocity-mps` until T8. Single waves also run from the web
+   like `generate_waves`); the speed limit comes from the yaml (T8). Single waves also run from the web
    page (height = stroke, period).
 
 ## Your tasks
 
 | # | File | Where | What | Done when | Left (2026-11-09) |
 |---|---|---|---|---|---|
-| T5 | the ladertanken Pi | — | Decision 6: the last checks | Refused while the wavemaker runs; the sloshing rig still starts | Two checks at the next rig switch. **Decide: switching between sloshing and vertical** |
-| T7 | new `rig_controller/src/generate_oscillations.py` and `motion_files.py` | the *Oscillator motion generator* | A test-matrix generator built like `generate_waves` (spec below) | `play_dat FILE vertical --rig oscillator --dry-run` lists every run as `OK` | All: step 1 `motion_files.py`, step 2 the script |
-| T8 | `rig_controller/src/rig_limits.py`, `wavemaker_bringup/config/wavemakers.yaml` | `limits_from_parameters` linear branch (87-92); lilletanken and mclab blocks | Speed limit for a linear IndraDrive from T2's parameters: `max_velocity_rpm / drive_velocity_per_unit_per_s × drive_m_per_unit` | `play_dat` without `--max-velocity-mps` uses the drive's limit | All, plus `max_velocity_rpm: 100.0` in lilletanken's and mclab's blocks (decided) |
-| T9 | `README.md`, `COMMISSIONING.md`, `TODO.md`, `rpi/README.md` | parameter table; new rig section; replug procedure; items 19 and 30 | Document the rig, close item 19 | — | All |
+| T5 | the ladertanken Pi | — | Decision 6: the last checks | Refused while the wavemaker runs; the sloshing rig still starts | Two checks at the next rig switch |
 | T10 (optional) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed: `--move` did its job on 2026-11-09 | `ros2 run mgate5101_driver mgate_example --move --step 50` moves 50 mm and back | Not needed now |
 
-Order: T5 → T8 → T7; T9 alongside.
+Order: T5's checks at the next rig switch. T7 (`generate_oscillations`, with tests and README
+section) and T9 were done 2026-11-10.
 
 Tests Claude can write once you hand them over (`rig_controller/test/test_indradrive_actuator.cpp`,
 with the `FakeMGate` from item 21):
@@ -188,438 +186,8 @@ with the `FakeMGate` from item 21):
 - T2 with `drive_direction: -1`: a +0.1 m setpoint writes raw −1 000 000 (−100 mm), a raw
   drive position of +50 mm reads back as −0.05 m, the speed cap is still +3 000 000, and
   travel −0.2…+0.2 m becomes drive limits −200…+200 mm with min and max swapped.
-- `test_rig_limits.py` for T8: the same 0.1 m/s from the yaml. The existing
-  `test_linear_indradrive_has_no_speed_limit` (`test_rig_limits.py:37-40`) expects `None` and
-  fails after T8; it then expects 100 / (1/6) × 1 = 600 m/s from the yaml's `max_velocity_rpm: 100.0`
-  (factor 1: their units are not set yet, TODO item 19).
 - T3: configure → activate with the vertical block's parameters (including `drive_direction` as
   the int `-1`) on the fake gateway, in `test_controller_node.cpp`.
-- T7 step 1: `test_source_commit_of_an_installed_copy` patches `motion_files.__file__` instead of
-  `gw.__file__`; nothing else in `test_generate_waves.py` changes.
-- T7 step 2: `test_generate_oscillations.py` beside `test_generate_waves.py`: the matrix reader
-  (each kind, the error messages), stroke → amplitude, the cosine ramp's ends, the jerk column and
-  warning, the vertical block's limits, and a file that `play_dat` reads back.
-
-### T7 spec: `generate_oscillations`, the oscillator's `generate_waves` (decided 2026-11-09)
-
-The oscillator gets a generator built like `generate_waves.py`: a test matrix in, the same four
-files out (`.dat`, run table `.csv`, record `.txt`, plot `.png`), checked by reading the file back
-with `play_dat`. It is the *Oscillator motion generator* in TODO.md (its decisions of 2026-11-03 hold: its own
-script, the same file contract). Regular and irregular, as the wavemaker.
-
-**What differs from `generate_waves`:**
-
-| | `generate_waves` | `generate_oscillations` |
-|---|---|---|
-| Rig | `wavemakers.yaml`, a wavemaker name | `oscillator.yaml`, an oscillator name (`vertical`, `sloshing`), through `rig_limits('oscillator', ...)` |
-| Regular input | wave height H or steepness 1/x, period | **stroke** (peak to peak, m), period. No steepness: there is no wave |
-| Irregular input | Hs, Tp, γ (JONSWAP of the water surface) | **significant stroke** (4σ of the position, the analogue of Hs = 4σ), Tp, γ: JONSWAP **shape** for the slide's motion |
-| Physics | wavenumber, stroke ratio, transfer gain (`paddle_amplitude`, `paddle_amplitudes`) | none: amplitude = stroke / 2; spectrum amplitudes are the slide's |
-| `--water-depth` | yes | no |
-| Ramp | linear (`apply_ramps`) | **cosine** (see below) |
-| Checks | travel, speed, acceleration, start/end at upright | the same, **plus jerk**: printed per run, warning above `--max-jerk-mps3` (default 3.0, the IndraDrive's S-0-0193). A warning, not a skip: the drive rounds the motion off, it does not refuse it |
-| Run table columns | `height_m`, `steepness`, `gain`, `paddle_std_m`, ... | `stroke_m`, `amplitude_m`, `sig_stroke_m`, `std_m`, `peak_m`, `peak_jerk_mps3` |
-| `play_dat` command printed | `play_dat FILE ladertanken --dry-run` | `play_dat FILE vertical --rig oscillator --dry-run` |
-
-**Test matrix** (same rules as the wavemaker's: one row per run, file order, each row fills its
-kind's columns):
-
-```csv
-kind,period_s,stroke_m,n_periods,sig_stroke_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
-regular,2.0,0.020,10,,,,,,2,5
-regular,1.0,0.010,10,,,,,,2,5
-irregular,,,,0.010,1.5,3.3,120,1,3,10
-```
-
-| Column | Kind | Meaning |
-|---|---|---|
-| `kind` | both | `regular` (default) or `irregular` |
-| `period_s` | regular | period [s] |
-| `stroke_m` | regular | stroke, peak to peak [m] (amplitude = stroke / 2) |
-| `n_periods` | regular | length in periods, ramps included |
-| `sig_stroke_m` | irregular | significant stroke, 4σ of the position [m] |
-| `tp_s` | irregular | peak period [s] |
-| `gamma` | irregular | JONSWAP peak enhancement; empty = 3.3, 1.0 = Pierson–Moskowitz |
-| `duration_s` | irregular | length [s], ramps included |
-| `seed` | irregular | random phases |
-| `n_ramp` | both | ramp at each end, in periods (regular) or peak periods (irregular) |
-| `pause_s` | both | rest after the run, at least 1 s |
-
-**Cosine ramp.** A linear ramp steps the acceleration at the ramp's ends; the third difference sees
-a jerk spike of about step / dt (stroke 20 mm, T = 1 s, dt 20 ms, 2 ramp periods: 5.6 m/s³ against
-2.5 for the sine; a cosine ramp gives 2.7). With a jerk check that spike would warn on files the
-drive handles. Cosine: `r = (1 - np.cos(np.pi * np.linspace(0, 1, n_ramp))) / 2`, same ends as
-`apply_ramps` (first 0, last exactly 0). The wavemaker keeps its linear ramp.
-
-**Decided 2026-11-09: (a) the shared module `motion_files.py`, and the name `generate_oscillations`.**
-
-#### T7 step 1: `motion_files.py` (move code, behaviour unchanged)
-
-**Goal.** Everything in `generate_waves.py` that is about the motion file and not about waves
-moves into a new module, `rig_controller/src/motion_files.py`. After this step `generate_waves`
-behaves exactly as before: the same command line, the same four files, byte for byte. That is
-what makes step 1 safe to do on its own, and why it is one commit.
-
-**Why a pure move first.** If the move and the new script come together and a test fails, it is
-unclear which one broke it. With 78 tests on `generate_waves` and a byte-identical `.dat` as the
-yardstick, step 1 is either clearly right or clearly wrong.
-
-**1.1 Make a reference file before touching anything.** On the PC, in the repo:
-
-```bash
-mkdir -p /tmp/t7ref && cd /tmp/t7ref
-cat > m.csv <<'END'
-kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
-regular,1.0,,1/60,30,,,,,,3,5
-regular,1.3,0.171,,30,,,,,,3,5
-irregular,,,,,0.04,1.2,3.3,120,1,5,10
-END
-python3 ~/ros_ws/src/hydrolab_rigs/rig_controller/src/generate_waves.py ladertanken m.csv -o before \
-  --config ~/ros_ws/src/hydrolab_rigs/wavemaker_bringup/config/wavemakers.yaml --no-plot
-```
-
-Keep `before.dat` and `before.csv`. (The `.txt` differs anyway: date and commit.)
-
-**1.2 Create `motion_files.py`.** Module docstring: move the two contract paragraphs from the top
-of `generate_waves.py` (*Contract with play_dat.py*, *Contract with the controller*, lines 8-32)
-here, because they describe the file, not the waves. `generate_waves`'s docstring keeps its first
-paragraph and points to `motion_files` for the contract.
-
-Imports it needs: `from collections.abc import Callable`, `csv`, `from datetime import datetime`,
-`math`, `os`, `shlex`, `subprocess`, `from typing import TypeVar`, `numpy as np`, `play_dat`. Not
-`rig_limits`: the module gets limits passed in, it never reads a yaml.
-
-Then move these, in this order (the order of the file):
-
-| From `generate_waves.py` | In `motion_files.py` | Change |
-|---|---|---|
-| `G = 9.81` (54) | `G = 9.81` | None. `jonswap` uses it, so it lives with `jonswap`; `generate_waves` imports it back for its wave physics. Keeping the formula unchanged is what keeps the `.dat` byte-identical |
-| `T = TypeVar('T')`, `number` (234-245) | same | None |
-| `apply_ramps` (301-312) | `apply_ramps(x, n_ramp_samples, shape='linear')` | New argument, see 1.3 |
-| `SIGMA_1`, `SIGMA_2` (318-319) | same | None (they are `jonswap`'s defaults). `F_MIN_FACTOR` / `F_MAX_FACTOR` stay in `generate_waves`: they are each generator's band choice |
-| `frequency_grid`, `jonswap`, `wave_amplitudes`, `random_phases`, `synthesize`, `synthesize_direct` (322-395, not `paddle_amplitudes`) | same | None. `wave_amplitudes` keeps its name (a test uses it); its docstring can say "amplitudes of a spectrum" |
-| `check_run` (432-461) | `check_run(limits, x, dt, max_velocity_mps)` | Rename `wm` → `limits` in the signature and body; the docstring says what `limits` needs: `upright_m`, `min_m`, `max_m`, `max_acceleration_mps2` |
-| `assemble` (464-490) | `assemble(runs, dt, check)` | Generalised, see 1.4 |
-| `write_motion` (493-500) | same | None |
-| `write_run_table` (503-513) | `write_run_table(path, rows, columns)` | The column list becomes an argument |
-| `source_commit` (516-530) | same | None |
-| `write_record` (533-561) | `write_record(path, program, argv, config, rig_lines, dt, speed, summary, matrix_path)` | Generalised, see 1.5 |
-| `verify_with_play_dat` (564-578) | `verify_with_play_dat(dat_path, limits, max_velocity_mps)` | `wm` → `limits` |
-| `plot_motion` (581-621) | `plot_motion(png_path, limits, frames, rows, dt, max_velocity_mps, show=False)` | `wm` → `limits`. It only uses `name`, `min_m`, `max_m`, `upright_m`, which `RigLimits` has too |
-
-**1.3 `apply_ramps` with a shape.**
-
-```python
-def apply_ramps(x, n_ramp_samples: int, shape: str = 'linear'):
-    """Ramp 0 -> 1 at the start and 1 -> 0 at the end; the run ends exactly at upright.
-
-    'linear' (the wavemaker's) or 'cosine' (the oscillator's: its slope is 0 at both ends, so the
-    acceleration does not step where the ramp meets the steady part).
-    """
-    ...the existing length check...
-    ramp = np.linspace(0.0, 1.0, n_ramp_samples)
-    if shape == 'cosine':
-        ramp = (1.0 - np.cos(np.pi * ramp)) / 2.0
-    elif shape != 'linear':
-        raise ValueError(f"ramp shape '{shape}' must be linear or cosine")
-    ...the rest unchanged...
-```
-
-The default keeps every existing call (`generate_waves`, the two `apply_ramps` tests) unchanged.
-
-**1.4 `assemble` without the wavemaker.** Today it loops over specs, calls `regular_signal` or
-`irregular_signal` by type, checks with `check_run(wm, ...)`, and builds frames and rows. The
-loop's bookkeeping (lead-in, run numbers, start and end times, pauses, skipping) is shared; making
-the signal and checking it are not. So:
-
-```python
-def assemble(runs, dt: float, check):
-    """
-    Frames (n x 2: position, trigger) and run-table rows, in file order.
-
-    runs: (x, row, pause_s) per run, x relative to upright, row the generator's own fields.
-    check(x): the reasons the run would be refused; a run with any is skipped.
-    """
-    ...the existing body, with
-        for index, (x, row, pause_s) in enumerate(runs):
-    instead of building x and row from the spec, check(x) instead of check_run(wm, ...),
-    and pause_s instead of spec.pause_s...
-```
-
-`generate_waves` keeps a wrapper with the old signature, because the tests call
-`gw.assemble(wm, specs, dt, max_velocity_mps)`:
-
-```python
-def run_signal(wm, spec, dt):
-    """(x, row, pause_s) for one spec of the test matrix."""
-    if isinstance(spec, RegularSpec):
-        x, row = regular_signal(wm, spec, dt)
-    elif isinstance(spec, IrregularSpec):
-        x, row = irregular_signal(wm, spec, dt)
-    else:
-        raise TypeError(f'unknown spec {type(spec).__name__}')
-    return x, row, spec.pause_s
-
-
-def assemble(wm, specs, dt, max_velocity_mps):
-    runs = [run_signal(wm, spec, dt) for spec in specs]
-    return motion_files.assemble(
-        runs, dt, lambda x: motion_files.check_run(wm, x, dt, max_velocity_mps))
-```
-
-One visible difference: the old loop raised `TypeError(f'run {index}: ...')` with the run number.
-No test or user hits it (the matrix reader only makes the two types), so the message may lose
-the number.
-
-**1.5 `write_record` without the wavemaker.** The lines must come out in the same order, because
-`test_main_end_to_end` and `test_record_depth_from_the_yaml` read them. The common lines are
-`generated`, `command`, `folder`, `commit`, `config`, then the rig's lines, then `dt`,
-`max speed`, `result`, an empty line, and the test matrix:
-
-```python
-def write_record(path, program, argv, config, rig_lines, dt, speed, summary, matrix_path):
-    """<output>.txt: what the file was made from, to read the measurements and to make it again."""
-    with open(matrix_path) as f:
-        matrix = f.read().rstrip('\n')
-    lines = [
-        f'generated    {datetime.now().astimezone().isoformat(timespec="seconds")}',
-        f'command      {program} {shlex.join(argv)}',
-        f'folder       {os.getcwd()}',
-        f'commit       {source_commit()}',
-        f'config       {os.path.realpath(config)}',
-        *rig_lines,
-        f'dt           {dt} s',
-        f'max speed    {speed}',
-        f'result       {summary}',
-        '',
-        f'test matrix {matrix_path}:',
-        matrix,
-    ]
-    ...write as before...
-```
-
-`generate_waves.write_record` keeps its old signature and builds `rig_lines`
-(`wavemaker    ladertanken (flap)`, `water depth  ...`) and the `speed` text exactly as today,
-then calls this one with `program='generate_waves'`.
-
-**1.6 Change `generate_waves.py`.**
-
-- Remove the moved definitions. Add `import motion_files`, and import the moved names that its
-  own code or the tests use:
-
-  ```python
-  import motion_files
-  from motion_files import (  # noqa: F401  re-exported: test_generate_waves uses gw.<name>
-      G, SIGMA_1, SIGMA_2, apply_ramps, check_run, frequency_grid, jonswap, number,
-      random_phases, source_commit, synthesize, synthesize_direct, verify_with_play_dat,
-      wave_amplitudes, write_motion)
-  ```
-
-  The `noqa` is needed because flake8 (part of `colcon test`) flags names imported but not
-  used in this file (`synthesize_direct`, `source_commit`, ...).
-- Keep wrappers for the three functions whose signature changed: `assemble` (1.4),
-  `write_run_table(path, rows)` calling `motion_files.write_run_table(path, rows, WAVE_COLUMNS)`
-  with today's column list as the module constant `WAVE_COLUMNS`, and `write_record` (1.5).
-- `plot_motion` is called by `main` only: call `motion_files.plot_motion` there, no wrapper.
-- Drop imports `generate_waves` no longer uses (`csv`, `datetime`, `shlex`, `subprocess`, ...):
-  flake8 flags them too.
-
-**1.7 Install the module.** `rig_controller/CMakeLists.txt` line 79:
-`install(FILES src/play_dat.py src/rig_limits.py src/motion_files.py ...)`. Without it the
-installed `generate_waves` fails on `import motion_files`. (Claude can do this line.)
-
-**1.8 The one test change** (Claude): `test_source_commit_of_an_installed_copy` patches
-`gw.__file__`; `source_commit` now reads `motion_files.__file__`, so the test patches that.
-
-**1.9 Check.**
-
-```bash
-cd ~/ros_ws/src/hydrolab_rigs
-python3 -m pytest rig_controller/test/test_generate_waves.py rig_controller/test/test_play_dat.py -q   # all green
-cd /tmp/t7ref && python3 ~/ros_ws/src/hydrolab_rigs/rig_controller/src/generate_waves.py ladertanken m.csv -o after \
-  --config ~/ros_ws/src/hydrolab_rigs/wavemaker_bringup/config/wavemakers.yaml --no-plot
-cmp before.dat after.dat && cmp before.csv after.csv && echo identical
-cd ~/ros_ws && colcon build --packages-select rig_controller && colcon test --packages-select rig_controller
-colcon test-result --verbose | grep -E "flake8|pep257|Summary"
-ros2 run rig_controller generate_waves ladertanken /tmp/t7ref/m.csv -o /tmp/t7ref/installed --no-plot   # installed copy runs
-```
-
-**Done when:** the tests are green (only 1.8 changed), `identical` is printed, flake8 and pep257
-are clean, and the installed `generate_waves` runs.
-
-#### T7 step 2: `generate_oscillations.py`
-
-**Goal.** A new program, built like `generate_waves.py` and using `motion_files` for everything
-that is not oscillator-specific. Reading `generate_waves.py` side by side is the easiest way to
-write it: the sections below follow its order.
-
-**2.1 The module docstring.** What it does (motion files for one oscillator from a test matrix),
-that the contract with `play_dat` and the controller is in `motion_files`, and the difference to
-`generate_waves` in one sentence: the input is the slide's stroke, there is no wave physics.
-
-**2.2 The oscillator.** No dataclass of its own is needed:
-
-```python
-limits = rig_limits.load_limits('oscillator', args.oscillator, config)
-```
-
-`RigLimits` has `name`, `namespace`, `upright_m`, `min_m`, `max_m`, `max_velocity_mps` (from T8 for
-`vertical`; the LinMot default for `sloshing`) and `max_acceleration_mps2` (the lower of the goal
-cap and the LinMot's limit; `None` for `vertical` today). That is everything `check_run`,
-`verify_with_play_dat` and `plot_motion` need. The default `config` is
-`rig_limits.default_config_path('oscillator')`, as `generate_waves.default_config_path` does for
-the wavemakers.
-
-**2.3 The test matrix.** Dataclasses as in `generate_waves` (197-219), with the oscillator's
-fields:
-
-```python
-@dataclass
-class RunSpec:
-    n_ramp: int        # periods (regular) or peak periods (irregular) of ramp
-    pause_s: float     # rest after the run, >= play_dat.MIN_GAP_S (1 s)
-
-@dataclass
-class RegularSpec(RunSpec):
-    period_s: float
-    stroke_m: float    # peak to peak
-    n_periods: int     # including ramps
-
-@dataclass
-class IrregularSpec(RunSpec):
-    sig_stroke_m: float  # 4 sigma of the position
-    tp_s: float
-    gamma: float         # 3.3 typical; 1.0 = Pierson-Moskowitz
-    duration_s: float    # whole run, ramps included
-    seed: int
-```
-
-`read_test_matrix(path)` as in `generate_waves` (248-285), with `motion_files.number` for each
-required column. Simpler than the wavemaker's: no `height_m` / `steepness` either-or. Columns per
-kind: all `kind` (default `regular`), `n_ramp`, `pause_s`; regular `period_s`, `stroke_m`,
-`n_periods`; irregular `sig_stroke_m`, `tp_s`, `gamma` (default 3.3), `duration_s`, `seed`. An
-unknown kind is an error with the row number, as in the wavemaker's.
-
-Checks the wavemaker's reader does not make, but cheap here and with clear messages: `stroke_m`
-and `sig_stroke_m` > 0; `period_s`, `tp_s` > 0; `pause_s` >= `play_dat.MIN_GAP_S`; `n_periods`
->= 2 × `n_ramp` (else `apply_ramps` refuses it later with a sample count, which is harder to read).
-
-**2.4 Regular runs.**
-
-```python
-def regular_signal(spec: RegularSpec, dt: float):
-    amplitude = spec.stroke_m / 2.0
-    n = round(spec.n_periods * spec.period_s / dt)
-    t = np.arange(1, n + 1) * dt
-    x = amplitude * np.sin(2.0 * math.pi / spec.period_s * t)
-    x = motion_files.apply_ramps(x, round(spec.n_ramp * spec.period_s / dt), shape='cosine')
-    row = {'kind': 'regular', 'period_s': spec.period_s, 'stroke_m': spec.stroke_m,
-           'amplitude_m': round(amplitude, 5)}
-    return x, row
-```
-
-The same sample grid as the wavemaker's (`t` from `dt` to `n·dt`), so the last sample sits on a
-whole number of periods.
-
-**2.5 Irregular runs.** As `generate_waves.irregular_signal` (397-414) without the wave-to-paddle
-step:
-
-```python
-F_MIN_FACTOR = 0.5   # band fp/2 .. 3 fp, as the wavemaker's
-F_MAX_FACTOR = 3.0
-
-def irregular_signal(spec: IrregularSpec, dt: float):
-    fp = 1.0 / spec.tp_s
-    n, f, df, n_samples = motion_files.frequency_grid(
-        spec.duration_s, dt, F_MIN_FACTOR * fp, F_MAX_FACTOR * fp)
-    a = motion_files.wave_amplitudes(
-        motion_files.jonswap(f, df, spec.sig_stroke_m, spec.tp_s, spec.gamma), df)
-    x = motion_files.synthesize(n, a, motion_files.random_phases(spec.seed, len(f)), n_samples)
-    x = motion_files.apply_ramps(x, round(spec.n_ramp * spec.tp_s / dt), shape='cosine')
-    row = {'kind': 'irregular', 'peak_period_s': spec.tp_s, 'sig_stroke_m': spec.sig_stroke_m,
-           'gamma': spec.gamma, 'seed': spec.seed,
-           'f_min_hz': round(float(f[0]), 4), 'f_max_hz': round(float(f[-1]), 4),
-           'std_m': round(float(x.std()), 5), 'peak_m': round(float(np.abs(x).max()), 5)}
-    return x, row
-```
-
-Why `sig_stroke_m` goes straight into `jonswap`'s `hs_m`: `jonswap` scales the spectrum so that
-4·√m0 equals that argument. For the water that is Hs; for the slide it is 4σ of the position, which
-is what *significant stroke* means here. Nothing else changes.
-
-**2.6 Jerk.** The drive's limit S-0-0193 (3 m/s³) is not a refusal, so it is a column and a
-warning, not a `check_run` issue:
-
-```python
-def peak_jerk(x, dt: float) -> float:
-    """max |third difference| / dt^3, as play_dat computes speed and acceleration."""
-    return float(np.abs(np.diff(x, 3)).max() / dt ** 3)
-```
-
-After each signal, `row['peak_jerk_mps3'] = round(peak_jerk(x, dt), 3)`, and if it is above
-`args.max_jerk_mps3` print `run N: peak jerk J m/s^3 above M: the drive rounds the motion off`.
-Expect irregular runs to show high jerk sooner than regular ones: jerk grows with f³, so the top
-of the band (3·fp) dominates.
-
-**2.7 Run table columns.**
-
-```python
-OSCILLATION_COLUMNS = ['run', 'start_s', 'end_s', 'kind',
-                       'period_s', 'stroke_m', 'amplitude_m',                    # regular
-                       'peak_period_s', 'sig_stroke_m', 'gamma', 'seed',         # irregular
-                       'f_min_hz', 'f_max_hz', 'std_m', 'peak_m',
-                       'peak_jerk_mps3', 'status']
-```
-
-`run`, `start_s`, `end_s` and `status` are what `play_dat` reads (`read_run_table`); the rest is
-for people.
-
-**2.8 `main`.** The same shape as `generate_waves.main` (624-678):
-
-| Step | Content |
-|---|---|
-| Arguments | `oscillator` (name in `oscillator.yaml`), `test_matrix`, `-o/--output` (required), `--config`, `--dt` (0.02), `--max-velocity-mps`, `--max-jerk-mps3` (3.0), `--no-plot`, `--show`. No `--water-depth` |
-| Limits | `rig_limits.load_limits('oscillator', ...)`; `max_velocity = args.max_velocity_mps or limits.max_velocity_mps`; if `None`, `parser.error` naming `--max-velocity-mps` (before T8, for `vertical`) |
-| Signals | `runs = [run_signal(spec, dt) for spec in read_test_matrix(...)]`, with the jerk added to each row |
-| Files | `motion_files.assemble(runs, dt, lambda x: motion_files.check_run(limits, x, dt, max_velocity))`, then `write_motion`, `write_run_table(..., OSCILLATION_COLUMNS)`, `verify_with_play_dat(dat, limits, max_velocity)`, `write_record(..., program='generate_oscillations', rig_lines=[f'oscillator   {limits.name}', f'max jerk     {args.max_jerk_mps3} m/s^3 (warning only)'], ...)`, `plot_motion` unless `--no-plot` |
-| Output | `<output>.dat: N runs, M skipped, X min`, then the command: `ros2 run rig_controller play_dat <output>.dat <name> --rig oscillator --dry-run`, plus `--max-velocity-mps` if it came from the command line and `--config` if one was given |
-
-The same warning as the wavemaker's README applies: `-o session` would overwrite `session.csv`.
-Refusing `-o` equal to the matrix's base name is cheap here.
-
-**2.9 Install.** Next to `generate_waves` in `rig_controller/CMakeLists.txt` (63-66):
-
-```cmake
-# Generates oscillator motion files (.dat + run table) for play_dat (see the script's docstring).
-install(PROGRAMS src/generate_oscillations.py
-  DESTINATION lib/${PROJECT_NAME}
-  RENAME generate_oscillations
-)
-```
-
-**2.10 Check.**
-
-```bash
-mkdir -p /tmp/t7osc && cd /tmp/t7osc
-cat > session.csv <<'END'
-kind,period_s,stroke_m,n_periods,sig_stroke_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
-regular,2.0,0.020,10,,,,,,2,5
-regular,1.0,0.010,10,,,,,,2,5
-irregular,,,,0.010,1.5,3.3,120,1,3,10
-END
-ros2 run rig_controller generate_oscillations vertical session.csv -o session_osc
-ros2 run rig_controller play_dat session_osc.dat vertical --rig oscillator --dry-run
-```
-
-**Done when:** three runs, none skipped; `play_dat` lists every run `OK` with the limits and
-namespace `/oscillators/vertical`; the `.png` shows the runs inside ±0.2 m; the `.txt` names the
-oscillator and the yaml; the run table's `peak_jerk_mps3` is about 0.31 for run 0 and 1.24 for run 1
-((s/2)(2π/T)³; the cosine ramp adds a little);
-and `sloshing` works too (`generate_oscillations sloshing ...`, LinMot limits). Tests:
-`test_generate_oscillations.py` (Claude).
-
-**Needs first:** T8 (the vertical oscillator's speed limit from `rig_limits`) for step 2; without
-it the script needs `--max-velocity-mps`, as linear wavemakers do today. Step 1 does not need it.
 
 ## Task details
 
@@ -627,7 +195,7 @@ What is left of each task, with the reasons. Done parts are left out.
 
 ### T5: the Pi
 
-Left: two checks for when the rigs are switched, and the switching decision.
+Left: two checks for when the rigs are switched.
 
 1. **Refusal, on the wavemaker side.** With the wavemaker drive plugged in and
    `wavemaker@ladertanken` running, `sudo systemctl start oscillator@ladertanken` fails with
@@ -642,82 +210,11 @@ Left: two checks for when the rigs are switched, and the switching decision.
    run after the switch should be a small wave. Back to `master` once the branch is merged:
    `git checkout master && git pull`, `colcon build`.
 
-**Decide: switching between sloshing and vertical.** Both run on the ladertanken Pi as the same
-unit, `oscillator@ladertanken`, and the unit's instance (`%i`) is the Pi user, not the
-oscillator. With `OSCILLATOR=vertical` in the file, `start_oscillator.bat` and `systemctl start
-oscillator@ladertanken` start the vertical rig, and the sloshing rig only after editing it back.
-Options:
-
-- (a) **Edit the file to switch (recommended for phase 1):** one line, no new unit. Only one rig
-  is connected and tested at a time anyway. Add the switch to the replug procedure
-  (*Commissioning* step 0).
-- (b) A second unit, `vertical@.service`, with `Environment=OSCILLATOR=vertical`. Then
-  `refuse_if_busy.sh` takes a list of units (wavemaker and the other oscillator), the wavemaker's
-  unit and `windows/_rig.bat` learn the third rig, and the sudoers line gets two more commands.
-
-### T7: generate_oscillations
-
-Spec and plan: *T7 spec* above. In order: T8 first (the speed limit `generate_oscillations` reads
-through `rig_limits`), then step 1 (`motion_files.py`, a pure move: 78 tests green and a
-byte-identical `.dat`), then step 2 (the script). Claude reviews each step and runs the tests;
-the test changes are Claude's once handed over.
-
-### T8: rig_limits
-
-`rig_controller/src/rig_limits.py`, linear branch (87-92):
-
-```python
-    else:
-        min_m = required(params, 'travel_minimum_m', name, source)
-        max_m = required(params, 'travel_maximum_m', name, source)
-        if drive == 'linmot':
-            max_velocity = params.get('max_velocity_mps', LINMOT_MAX_VELOCITY_MPS)
-        else:  # indradrive: as IndraDriveActuator::max_velocity_mps()
-            max_velocity = (required(params, 'max_velocity_rpm', name, source)
-                            / params.get('drive_velocity_per_unit_per_s', 1 / 6)
-                            * params.get('drive_m_per_unit', 1.0))
-```
-
-- No direction here, so no `abs`: the result is already positive.
-- `required` as in the angular branch: the controller's default (100) would give a wrong limit
-  without anyone seeing it.
-- **lilletanken and mclab: add `max_velocity_rpm` to both blocks (decided 2026-11-09).** They
-  have none in `wavemakers.yaml` (55-81), so after this `play_dat` on them would fail with
-  "max_velocity_rpm not set". Add `max_velocity_rpm: 100.0` to each block: the controller's
-  default, which they already run with unseen, now visible. Replace it with the drive's value
-  when they are deployed (TODO item 19 note, T9). Keep `required` in the code.
-- Add `drive_scale.hpp` to the rules the module docstring lists (5-8).
-- **Check:**
-
-  ```bash
-  cd ~/ros_ws/src/hydrolab_rigs/rig_controller/src
-  python3 -c "import rig_limits; print(rig_limits.load_limits('oscillator', 'vertical').max_velocity_mps)"   # 0.1
-  python3 -c "import rig_limits; print(rig_limits.load_limits('wavemaker', 'mclab').max_velocity_mps)"       # 600.0
-  python3 -c "import rig_limits; print(rig_limits.load_limits('wavemaker', 'ladertanken').max_velocity_mps)" # 0.7632, unchanged
-  ```
-
-  Later, `play_dat <file> vertical --rig oscillator --dry-run` without `--max-velocity-mps`
-  shows `0.1000 m/s`. 600 m/s for mclab is right for its placeholder factor 1 and shows the
-  factor is not set yet (TODO item 19).
-- Tests: `test_rig_limits.py` (Claude, see the list above).
-
-### T9: documentation
-
-What happened on 2026-11-09 and the new parameters, in the files people read. Claude can write
-these once you hand them over.
-
-| File | Where | What |
-|---|---|---|
-| `README.md` | *Actuator and limits* (103-113) | `drive_motion`: drop "Linear units are not verified yet (TODO 19)". The `travel_* / min_position_m` row: IndraDrive linear uses only `travel_*`; `min/max_position_m` are LinMot only. Add `drive_m_per_unit` (default 1), `drive_velocity_per_unit_per_s` (default 1/6, the deg/s → rpm rule) and `drive_direction` (±1, int). `max_velocity_rpm` / `hold_velocity_rpm`: velocity tag units, rpm only on angular drives |
-| `README.md` | new section after *Running a wavemaker* | Vertical oscillator (ladertanken): `oscillator:=vertical` and `OSCILLATOR=`, replugging (link to COMMISSIONING), the page, Stop holds in place and *Return to upright* |
-| `README.md` | after *Generating motion files* (after T7) | *Generating oscillator motion files*: the test matrix with stroke columns, `generate_oscillations`, its four files, the jerk warning, `play_dat ... --rig oscillator` |
-| `COMMISSIONING.md` | item 5 (38-41) | MGate fault timeout set 2026-11-09 (slave 2, slot 4, 500 ms, fault value 0); kill test passed on the oscillator (A0108 → C0401, brake holds). Left: the kill test on the wavemaker drive. Note: only one Modbus client on slave 2's outputs while a rig runs |
-| `COMMISSIONING.md` | new section *Vertical oscillator* | The replug procedure (*Commissioning* step 0 here) and steps 2-7 with the results (direction, scaling, the five no-load waves, kill test) and the open loaded tests |
-| `TODO.md` | item 19 (24-25) | Close it: the three parameters and one set of limits. lilletanken and mclab still need their factors (and a real `max_velocity_rpm`) when deployed: a short note or a new item |
-| `TODO.md` | item 30 (32-33) | Half done: the actuator always declares `travel_*`; the controller still declares them only for linear rigs |
-| `TODO.md` | *Oscillator motion generator* (269-297) | In progress: the decisions of 2026-11-09 (test matrix like the wavemaker's, regular and irregular, `motion_files.py`, `generate_oscillations`); for the vertical rig too, not only sloshing |
-| `TODO.md` | new item | Tracking under changing loads (*Open questions*): drive tuning with Robert (about 2026-11-23); record and report the measured motion per run |
-| `rpi/README.md` | *Oscillator* (450-) | Both oscillators on one unit; `OSCILLATOR=` in `/etc/default/oscillator` and how to switch (after the T5 decision); the LinMot-only homing texts; stopping one unit per command (the sudoers rule); a stop after a crashed controller takes about 45 s and ends `Failed` |
+**Decided 2026-11-10: switching between sloshing and vertical by editing `OSCILLATOR=`** in
+`/etc/default/oscillator` (option (a)). Both stay one unit, `oscillator@ladertanken`, so systemd
+itself keeps the two oscillators from running together; that is wanted, not only a phase-1 limit.
+No second unit. The wavemaker and the vertical oscillator should later run together (TODO 47);
+until then the refusal in both directions stays as it is.
 
 ## Commissioning (on the rig, one rig at a time)
 
@@ -842,7 +339,7 @@ cd ~/ros_ws && source install/setup.bash
    with the brake holding. Note which way + goes. Ctrl-C mid-move must halt and disable. A
    5 mm move confirms the position factor (`drive_m_per_unit: 0.001`). About 3 s per move
    confirms the velocity factor (5 mm at 100 mm/min).
-5. Dry run of a file (needs T7, and T8 to drop `--max-velocity-mps`):
+5. Dry run of a file:
 
    ```bash
    sudo systemctl start oscillator@ladertanken

@@ -21,8 +21,19 @@ the items kept there, and finished items, which are removed (see the git history
   Open: (1) the 1.5 s table value: 2026-10-20 measured 0.78, the table has 0.75, and the 2026-10-21 check (0 % with 0.75) is not on the stick to recheck. (2) Runs 0 and 2 also came out 3-5 % high, which fits the depth correction overcorrecting, or a depth other than 0.98 m. (3) Long runs at 1.5 s and above see the beach reflection after about 21 s; shorten the measuring window or separate incident and reflected waves (COMMISSIONING.md, 3 probes). Next: one session at a measured depth with 1.5 s at 0.074, 0.0835 and 0.112 m and 1.0 s / 1/60 before and after, measured before the reflection arrives. Leave the gain table alone until then.
 ## Medium
 
-- [ ] **19. Linear drives (lilletanken, mclab).** Deferred: neither is deployed yet (they need gateways). (`rig_controller/src/indradrive_actuator.cpp`)
-  The drive's position tag (scaled as degrees) is used as metres unchanged, and velocity is converted with `/ 6` as if it were deg/s → rpm; the limits exist twice (`travel_minimum_m/maximum` and `min_position_m/max_position_m`). Once the drive scaling is confirmed on the rig (item 19 in [COMMISSIONING.md](COMMISSIONING.md)), add a proper linear conversion and derive the drive limits from the node limits. The unit conversion now goes through `DriveScale` (`rig_controller/src/drive_scale.hpp`, 2026-10-23); the duplicate limits remain.
+- [ ] **19. Linear drives (lilletanken, mclab): set their units.** Deferred: neither is deployed yet (they need gateways). (`wavemaker_bringup/config/wavemakers.yaml`)
+  The code is done (2026-11-09, for the vertical oscillator): `drive_m_per_unit`, `drive_velocity_per_unit_per_s` and `drive_direction` in `DriveScale`, one set of limits (`travel_*`, the drive's derived from them), and `rig_limits` derives the speed from `max_velocity_rpm`. lilletanken and mclab still carry placeholders (1.0, 1/6, 1, and `max_velocity_rpm: 100`, which `rig_limits` turns into 600 m/s). Set them from each drive's scaling (item 19 in [COMMISSIONING.md](COMMISSIONING.md)); their `min_position_m` / `max_position_m` are no longer read and can go.
+
+- [ ] **46. Vertical oscillator: tracking under changing loads.** (rig; drive tuning with the drive's owner, from about 2026-11-23)
+  Unloaded (2026-11-09) the slide follows with about 180 ms lag; the stroke reaches 97 % at a 2 s period and 90 % at 1 s, for any stroke: a first-order lag of about 77 ms plus about 100 ms delay ([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken)). The load changes between experiments (models, profiles, water resistance, depth), so one fixed correction cannot hold. Options: (1) a stiffer drive (Kv S-0-0104 = 1.0, acceleration feedforward S-0-0348 / P-0-1126 = 0); (2) record and report the measured motion with every run; (3) a calibration sweep per setup and a gain per period (the controller's gain table is wavemaker-only); (4) amplitude correction during the run. 1 and 2 first. To decide with the experimenters: must the slide reach the requested stroke, or is knowing what it did enough?
+
+- [ ] **47. Run the wavemaker and the vertical oscillator at the same time.** (rig; `rpi/refuse_if_busy.sh`, both units, a new `soft_stop@.service`, `lab.launch.py`, `oscillator.launch.py`, `soft_stop.py`, `windows/`, the MGate)
+  Decided 2026-11-10: the sloshing and the vertical oscillator never run together (one unit, `OSCILLATOR=` in `/etc/default/oscillator`), but the wavemaker and the vertical oscillator should. Today `refuse_if_busy.sh` refuses either rig while the other runs, because they share the web port, the soft stop on GPIO17 (to be shared on purpose, see 4) and, on ladertanken, PROFIBUS slave 2. What has to change:
+  (1) **The drive:** the oscillator drive on its own PROFIBUS address next to the wavemaker's, the MGate configured for both slaves (fault value timeout on both output modules), and `profibus_address` in `oscillator.yaml` (2 today). Check that two Modbus clients on one MGate each write only their own slave, and repeat the kill test per drive with the other one running (any Modbus access resets the MGate timer: make sure the other rig's traffic does not keep a dead rig's outputs alive).
+  (2) **The refusal:** refuse only when the oscillator is `sloshing`. The wavemaker's unit has to know which oscillator runs; reading `/etc/default/oscillator` is wrong if it was edited after the start, so let the running oscillator leave a marker (e.g. `run.sh` writes the oscillator to `$RUNTIME_DIRECTORY`) or check the ROS namespace.
+  (3) **The web page:** a second port for the vertical oscillator (`PORT=` in `/etc/default/oscillator`; the port check in `refuse_if_busy.sh` then checks its own port), or one page for both rigs. `windows/start_oscillator.bat` opens the right address.
+  (4) **The soft stop: one button stops both rigs** (decided 2026-11-10). GPIO17 can be claimed by one process only, and today each launch starts its own `soft_stop` node publishing the relative `soft_stop` (`/wavemakers/ladertanken/soft_stop`, `/oscillators/vertical/soft_stop`). Proposed: the node leaves both launches and gets a unit of its own, `soft_stop@.service`, which both rig units pull in (`Requires=` and `After=`; `StopWhenUnneeded=yes` so it stops with the last rig). It publishes one shared topic, e.g. `/ladertanken/soft_stop`, and both controllers' `soft_stop` is remapped to it in the launches (a launch argument, so a launch by hand on the PC keeps its own node). Stopping one rig then leaves the button working for the other. Check: a press stops both, releasing lets both start again, and killing the soft stop unit stops both through `soft_stop_timeout_s`. `refuse_if_busy.sh` no longer needs GPIO17 as a reason.
+  (5) **ROS:** the namespaces differ (`/wavemakers/...`, `/oscillators/...`); check that the lifecycle managers, the bridges' `<rig>_state` / `<rig>_message` topics and the web nodes have no names in common.
 
 ## Low
 
@@ -30,7 +41,7 @@ the items kept there, and finished items, which are removed (see the git history
   Accept, or use a shorter timeout for `disable()`.
 
 - [ ] **30. `travel_minimum_m` / `travel_maximum_m` are declared only for linear drives at construction.** (`controller_node.cpp`)
-  Always declare both.
+  Always declare both. `IndraDriveActuator` now declares them whenever missing (2026-11-09); the controller still declares them only when `drive_motion` is linear.
 
 - [ ] **31. Bridge interface details.** (`bridge_node.cpp`)
   `height`, `period` and `stop` use depth 10 instead of `command_qos`; the `stop` topic and `stop` service share a name (consider renaming the service, e.g. `stop_wave`).
@@ -268,15 +279,24 @@ Expected: `Summary: N tests, 0 errors, 0 failures`.
 
 ### Oscillator motion generator
 
-A generator of motion files for the sloshing oscillator, separate from the wavemakers'
-`rig_controller/src/generate_waves.py`, which reads only `wavemakers.yaml` and refuses other rigs.
-Files must play with `play_dat --rig oscillator` and be accepted by the controller.
-`play_dat` already takes the oscillator's limits, upright (0.1 m) and namespace from
-`oscillator.yaml` (`play_dat <file> sloshing --rig oscillator`, item 40, unit tests only). The
-first rig run of a generated file checks that on the oscillator, including `limits match the
-controller`.
+`generate_oscillations`: motion files for the oscillators (`sloshing`, `vertical`), built like
+the wavemakers' `rig_controller/src/generate_waves.py`. Files must play with
+`play_dat --rig oscillator` and be accepted by the controller. `play_dat` takes the oscillator's
+limits, upright and namespace from `oscillator.yaml` (`play_dat <file> vertical --rig oscillator`).
 
-**When:** after the wavemaker generator works. Not started.
+**Status (2026-11-10): done.** `rig_controller/src/generate_oscillations.py`, installed as
+`ros2 run rig_controller generate_oscillations`, with the shared code in `motion_files.py`, tests in
+`test_generate_oscillations.py` and the README section *Generating oscillator motion files*.
+Not yet played on the rig: the first file goes with the tracking work (item 46).
+
+#### Decided (2026-11-09)
+
+- A test matrix as the wavemaker's: one row per run, regular (`period_s`, `stroke_m`,
+  `n_periods`) and irregular (`sig_stroke_m`, 4σ of the position, `tp_s`, `gamma`, `duration_s`,
+  `seed`), `n_ramp` and `pause_s`.
+- The same four files (`.dat`, run table, record, plot), from `motion_files`.
+- A cosine ramp (no acceleration step where the ramp ends); the peak jerk in the run table and a
+  warning above the vertical oscillator's 3 m/s³ (S-0-0193).
 
 #### Decided (2026-11-03)
 
@@ -290,10 +310,10 @@ controller`.
 - Config `oscillator_bringup/config/oscillator.yaml`, key `/oscillators/<name>/controller`.
 - No wave physics: amplitude = H / 2 (H is the stroke; `WaveTrajectory::configure`, type
   `oscillator`). No transfer gain.
-- Limits: positions absolute within `travel_minimum_m`..`travel_maximum_m` (0.015..0.185 m,
-  upright 0.1 m); speed the LinMot's `max_velocity_mps` (default 2.0, not in the yaml);
-  acceleration the lower of `max_goal_acceleration_mps2` (9.81) and the drive's
-  `max_acceleration_mps2` (20).
+- Limits from `rig_limits`: sloshing within 0.015..0.185 m around upright 0.1 m, 2.0 m/s (the
+  LinMot's default), acceleration the lower of `max_goal_acceleration_mps2` (9.81) and the drive's
+  20; vertical within ±0.2 m around 0, 0.1 m/s (`max_velocity_rpm` 600 in 10 mm/min), no
+  acceleration limit.
 
 ### Trigger output
 

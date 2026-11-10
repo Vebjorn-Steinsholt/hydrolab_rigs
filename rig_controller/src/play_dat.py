@@ -382,9 +382,6 @@ def resolve_limits(args, parser) -> tuple['rig_limits.RigLimits | None', dict]:
         values['upright_m'] = 0.0  # the old default, for the form without a name
     if limits is None and None in (values['min_m'], values['max_m'], values['max_velocity_mps']):
         parser.error('give the rig name, or --min-m, --max-m and --max-velocity-mps')
-    if values['max_velocity_mps'] is None:
-        parser.error(f'{args.name} has no speed limit in the yaml (TODO item 19): '
-                     'give --max-velocity-mps')
     source = f'{limits.source} ({limits.name})' if limits is not None else 'the command line'
     if overridden:
         source += f", {', '.join(overridden)} overridden"

@@ -1,8 +1,9 @@
 # Running a lab Pi as a service
 
 `wavemaker@.service` runs `lab.launch.py` (controller, bridge, lifecycle manager, soft stop and
-web page) under systemd; on the ladertanken Pi, `oscillator@.service` runs the sloshing
-oscillator's `oscillator.launch.py` the same way (see [Oscillator](#oscillator)). Unlike a launch in an SSH session, it keeps running when the connection
+web page) under systemd; on the ladertanken Pi, `oscillator@.service` runs
+`oscillator.launch.py` the same way, for the sloshing or the vertical oscillator (see
+[Oscillator](#oscillator)). Unlike a launch in an SSH session, it keeps running when the connection
 drops, logs to the journal, and is started and stopped the same way on every Pi.
 
 It is a template unit: the part after `@` is the wavemaker, which is also the Pi's user
@@ -449,13 +450,22 @@ ended, although the soft stop published its release during it (TODO 36, `sketch.
 
 ## Oscillator
 
-The sloshing oscillator (LinMot drive behind an Arduino Uno, see `OSCILLATOR.md`) runs on the
-ladertanken Pi as `oscillator@ladertanken`, user `ladertanken`. It shares the web port, the soft
-stop button on GPIO17 and the ROS domain with the ladertanken wavemaker, so only one of the two
-can run: each unit's `ExecStartPre` (`refuse_if_busy.sh`) refuses to start while the other runs.
+Two oscillators run on the ladertanken Pi as `oscillator@ladertanken`, user `ladertanken`:
 
-> Like the wavemaker's, this unit never starts at boot. Starting it switches the drive on, and the
-> slide homes (moves to its home stop, about 20 s) if the drive was powered off.
+- **sloshing:** the LinMot drive behind an Arduino Uno (`OSCILLATOR.md`).
+- **vertical:** an IndraDrive on the ladertanken MGate, in place of the wavemaker's drive (the
+  PROFIBUS cable is replugged; [README](../README.md#running-the-vertical-oscillator),
+  [COMMISSIONING.md](../COMMISSIONING.md#vertical-oscillator-ladertanken)).
+
+`OSCILLATOR=` in `/etc/default/oscillator` picks one (`run.sh` passes it to the launch as
+`oscillator:=`; empty or missing = `sloshing`), and the nodes run in `/oscillators/<name>`. To
+switch, edit that line, then stop and start the unit. The unit shares the web port, the soft stop
+button on GPIO17 and the ROS domain with the ladertanken wavemaker, so only one rig runs: each
+unit's `ExecStartPre` (`refuse_if_busy.sh`) refuses to start while the other runs.
+
+> Like the wavemaker's, this unit never starts at boot. Starting it switches the drive on. The
+> LinMot also homes (moves to its home stop, about 20 s) if its drive was powered off; the vertical
+> oscillator's IndraDrive does not home, and its mains must be on at the cabinet.
 
 ### Install (once)
 
@@ -482,6 +492,8 @@ Create `/etc/default/oscillator` with `sudoedit /etc/default/oscillator`, with t
 # The lab's ROS domain. Required, and not 0.
 ROS_DOMAIN_ID=1
 PORT=8080
+# Which oscillator: sloshing (default) or vertical. Nothing after the value.
+OSCILLATOR=vertical
 ```
 
 Extend the sudoers rule (`sudo visudo -f /etc/sudoers.d/wavemaker`) to one line:
@@ -490,20 +502,32 @@ Extend the sudoers rule (`sudo visudo -f /etc/sudoers.d/wavemaker`) to one line:
 ladertanken ALL=(root) NOPASSWD: /usr/bin/systemctl start wavemaker@ladertanken, /usr/bin/systemctl stop wavemaker@ladertanken, /usr/bin/systemctl start oscillator@ladertanken, /usr/bin/systemctl stop oscillator@ladertanken
 ```
 
-`sudo -l` should list all four.
+`sudo -l` should list all four. The rule matches each command exactly, so stop one unit per
+command: `sudo systemctl stop wavemaker@ladertanken oscillator@ladertanken` asks for the
+password.
 
 ### Use
 
 ```bash
-sudo systemctl start oscillator@ladertanken     # switches the drive on, homes if needed
+sudo systemctl start oscillator@ladertanken     # switches the drive on (the LinMot homes if needed)
 sudo systemctl stop oscillator@ladertanken      # stops the motion and switches the drive off
 journalctl -u oscillator@ladertanken -f -o cat
 ```
 
 The page is at `http://ladertanken-rpi.local:8080/`. The height field is the stroke, peak to
-peak, in metres: `0.01` moves the slide between 95 and 105 mm.
+peak, in metres: `0.01` moves the sloshing slide between 95 and 105 mm, the vertical slide ±5 mm
+around mid-travel. On the vertical oscillator, Stop holds the slide where it is; *Return to
+upright* brings it to mid-travel.
 
-### Rig test
+After the unit file changes (`git pull`), copy it again and `sudo systemctl daemon-reload`;
+`run.sh` and `stop.sh` run from the repository.
+
+If the controller crashed (a fault, a kill), `systemctl stop` takes about 45 s: the lifecycle manager waits
+for the dead controller and is killed, and the unit ends `Failed with result 'exit-code'`. The next
+start is normal. On the vertical oscillator the MGate's fault timeout has already switched the
+drive off when the controller died (COMMISSIONING item 5).
+
+### Rig test (sloshing)
 
 1. Start; the journal shows `LinMot: homed` (if it homed), `Managed nodes are active` and
    `Soft stop released`. Run a wave from the page.

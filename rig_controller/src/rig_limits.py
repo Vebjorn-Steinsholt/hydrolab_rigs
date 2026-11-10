@@ -2,10 +2,10 @@
 """
 Goal limits of a rig, from its yaml block or its live parameters, derived as the controller does.
 
-Shared by play_dat and generate_waves so they cannot disagree. The rules are the controller's:
-position limits in controller_node.cpp on_configure (~212-244, through DriveScale), speed and
-acceleration from the actuator (indradrive_actuator.cpp, linmot_actuator.cpp) and
-max_goal_acceleration_mps2.
+Shared by play_dat and the generators (generate_waves, generate_oscillations) so they cannot
+disagree. The rules are the controller's: position limits in controller_node.cpp on_configure
+(~212-244, through DriveScale), speed and acceleration from the actuator (indradrive_actuator.cpp,
+linmot_actuator.cpp) with the drive's units from drive_scale.hpp, and max_goal_acceleration_mps2.
 """
 
 from dataclasses import dataclass
@@ -32,7 +32,7 @@ class RigLimits:
     upright_m: float
     min_m: float
     max_m: float
-    max_velocity_mps: float | None
+    max_velocity_mps: float
     max_acceleration_mps2: float | None
     source: str
 
@@ -88,8 +88,12 @@ def limits_from_parameters(rig: str, name: str, params: dict, source: str) -> Ri
     else:
         min_m = required(params, 'travel_minimum_m', name, source)
         max_m = required(params, 'travel_maximum_m', name, source)
-        max_velocity = (params.get('max_velocity_mps', LINMOT_MAX_VELOCITY_MPS)
-                        if drive == 'linmot' else None)
+        if drive == 'linmot':
+            max_velocity = params.get('max_velocity_mps', LINMOT_MAX_VELOCITY_MPS)
+        else:  # indradrive: as IndraDriveActuator::max_velocity_mps(), defaults as DriveScale's
+            max_velocity = (required(params, 'max_velocity_rpm', name, source)
+                            / params.get('drive_velocity_per_unit_per_s', 1 / 6)
+                            * params.get('drive_m_per_unit', 1.0))
     goal_acceleration = params.get('max_goal_acceleration_mps2', 0.0)
     acceleration = (goal_acceleration if goal_acceleration > 0.0 else None)
     if drive == 'linmot':
@@ -120,7 +124,7 @@ def compare(expected: RigLimits, actual: RigLimits) -> list[str]:
         if abs(e - a) > 1e-4:
             lines.append(f'{field}: {expected.source} {e:+.5f} m, {actual.source} {a:+.5f} m')
     e, a = expected.max_velocity_mps, actual.max_velocity_mps
-    if e is not None and a is not None and abs(e - a) > 1e-3:
+    if abs(e - a) > 1e-3:
         lines.append(f'max_velocity_mps: {expected.source} {e:.4f}, {actual.source} {a:.4f}')
     e, a = expected.max_acceleration_mps2, actual.max_acceleration_mps2
     if (e is None) != (a is None) or (e is not None and a is not None and abs(e - a) > 1e-3):

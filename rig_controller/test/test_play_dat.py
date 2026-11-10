@@ -550,10 +550,19 @@ def test_old_form_says_where_its_limits_came_from(tmp_path, capsys):
         capsys.readouterr().out
 
 
-def test_linear_drive_needs_the_speed(tmp_path, capsys):
-    with pytest.raises(SystemExit):
-        dry_run(tmp_path, limits=('lilletanken', '--config', WAVEMAKERS))
-    assert 'TODO item 19' in capsys.readouterr().err
+def test_linear_drive_speed_from_the_yaml(tmp_path, capsys):
+    # max_velocity_rpm 100 with the default factors: 600 m/s (rig_limits, TODO item 19)
+    assert dry_run(tmp_path, limits=('lilletanken', '--config', WAVEMAKERS)) == 0
+    assert '600.0000 m/s' in capsys.readouterr().out
+
+
+def test_linear_drive_without_max_velocity_rpm_is_an_error(tmp_path, capsys):
+    yaml_path = tmp_path / 'w.yaml'
+    yaml_path.write_text('/wavemakers/t/controller:\n  ros__parameters:\n'
+                         '    drive_name: indradrive\n    drive_motion: linear\n'
+                         '    travel_minimum_m: 0.0\n    travel_maximum_m: 0.5\n')
+    assert dry_run(tmp_path, limits=('t', '--config', str(yaml_path))) == 2
+    assert 'max_velocity_rpm not set' in capsys.readouterr().err
 
 
 def test_linear_drive_with_the_speed(tmp_path, capsys):

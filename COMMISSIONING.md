@@ -38,6 +38,9 @@ both files; gaps in the numbering are the items kept there.
 - [ ] **5. Make the gateway switch the drive off if the PC or the node dies.** (rig; MGate configuration)
   The MGate keeps sending the last outputs (Drive On, Drive Start, last target) if Modbus writes stop. Our driver only sets control word 0 while its process is alive.
   - On the MGate's output module, set a fault value timeout of about 500 ms (it must ride out the ~210 ms gateway stalls; see *Verified so far*) with fault value 0 (MGate manual p. 28). Test by killing the controller while the drive is enabled; the drive must switch off.
+  - Done 2026-11-09 (MGate Manager, slave 2, slot 4 `0xE5 Output 6 Words`): the timeout was 0 (off) and is now 500 ms, fault value all `00`. Kill test passed with the vertical oscillator's drive on slave 2: `kill -9` on the controller, the drive left A0108 at once, the brake held (see [Vertical oscillator](#vertical-oscillator-ladertanken)).
+  - Left: the kill test with the wavemaker's drive plugged in. The setting is on slave 2, so it covers both drives.
+  - Any Modbus access to slave 2's output block restarts the MGate's timer: only one client (the controller) may use it while a rig runs; never run `mgate_example` alongside.
   - The fault timeout relies on writes every cycle; the matching code change is done: `write_only_dirty` defaults to `false` in `IndraDriveActuator` (2026-10-27).
 
 - [ ] **34. Spring balance matches the water depth.** (rig; mechanical, for whoever owns the mechanics)
@@ -76,13 +79,61 @@ both files; gaps in the numbering are the items kept there.
 - [ ] **15. Keep a known-good parameter backup** of the drive and gateway, with the tested zero position and limits recorded. (rig)
 
 - [ ] **19. Linear drive scaling (lilletanken, mclab).** (rig)
-  Confirm on the drive how the position tag is scaled (it is read as degrees and used as metres unchanged) and the velocity unit. The code change that depends on it is item 19 in [TODO.md](TODO.md).
+  Read each drive's position and velocity scaling (S-0-0076/77/78, S-0-0044/45/46) and set `drive_m_per_unit`, `drive_velocity_per_unit_per_s`, `drive_direction` and a real `max_velocity_rpm` in `wavemakers.yaml` (today 1.0, 1/6, 1 and 100: placeholders). The vertical oscillator shows how: [Vertical oscillator](#vertical-oscillator-ladertanken), first move.
 
 - [ ] **33. Calibrate the wave-height transfer gain.** (rig; wave probes, flap connected)
   `wavemaker_transfer_gain` (default 1.0 = linear theory, in `wavemakers.yaml`) divides the stroke of regular waves to correct the generated height; `wavemaker_transfer_gain_periods` / `wavemaker_transfer_gain_values` replace it with a gain per period. Follow [Transfer gain calibration](#transfer-gain-calibration).
   - The gain holds for one water depth; recalibrate after changing it, or after the calibration from item 14.
   - Open (2026-10-21): 0.7 s and 1.05–1.15 s came out 11–46 % too low with the table (see *Verified so far*). Jumps that large over 0.05–0.1 s are unlikely to be the flap's transfer function. Before changing the table, check the paddle tracking in the bags (setpoint against position) and repeat 0.063 m / 1.1 s with the probe moved about a quarter wavelength (0.47 m); a large change there points to reflection. Until then, expect lower waves than targeted at those periods.
   - Not applied to pregenerated waves; decide whether it should be.
+
+## Vertical oscillator (ladertanken)
+
+Checks for the vertical oscillator's IndraDrive on the ladertanken MGate (slave 2, in place of
+the wavemaker's drive). Plan and full log: [oscillator_sketch.md](oscillator_sketch.md).
+
+### Switching drives (every time)
+
+1. Stop the running service: `sudo systemctl stop wavemaker@ladertanken` (or `oscillator@`).
+2. Replug the PROFIBUS cable to the other drive; its plug is the end of the line: termination ON.
+3. Identify the drive by the plug and its display. The monitor
+   (`~/ros_ws/build/mgate5101_driver/mgate_example`, Ctrl-C after a few lines) shows the position
+   only in operating mode; after a stop the drive is in parameter mode (A0050 or C0401) and the
+   monitor reads exactly 0, and the wavemaker at upright reads about 0 too.
+4. The oscillator's mains must be on at the cabinet (A0012 `Ab`, not A0013 `bb`).
+5. For the oscillator: `OSCILLATOR=vertical` in `/etc/default/oscillator`; for the sloshing rig,
+   `sloshing` (or no line). One unit runs either oscillator, so the two can never run together.
+6. Start the matching service. The controller's `Drive status` line in the journal is the
+   position check: `OM AF`, the position near where the slide stands.
+
+### Done
+
+- Drive layout matches what `IndraDrive` expects (P-0-4084, P-0-4080/4081, S-0-0032; 2026-11-06,
+  `Default.par`). PROFIBUS needs slave 2's user parameters `C0 00 08` (Fail_Safe, MPx-05 firmware).
+- First move with `mgate_example --move` (2026-11-09): +5 units → 4.925 mm on the drive, 4.940 mm
+  on the sensor, 1.68 mm/s: the drive's units are mm and 10 mm/min. **+ command = down**, hence
+  `drive_direction: -1`.
+- Brake: holds the slide at every switch-off (no load).
+- Under the controller (2026-11-09): configure and activate clean, nothing moves at enable, all
+  nodes in `/oscillators/vertical`, the page connected; `systemctl stop` in 4.5 s with the ordered
+  shutdown.
+- Kill test (item 5): passed after the MGate fault timeout was set. After a fault switch-off the
+  drive shows C0401; the next service start recovers it.
+- Five waves from the page, no load, no water (bags on the lab PC, `~/bags/osc_*`): drive command
+  = −1.000 × setpoint; lag about 180 ms; stroke 97 % at 2 s, 90 % at 1 s, the same at 10 and
+  20 mm (it depends on the period, not on the jerk limit S-0-0193). Stop holds in place; Return
+  to upright works.
+
+### Open
+
+- [ ] With the load and water: repeat the brake test and small waves, then a sweep at a fixed
+  stroke (for example 10 mm at 3, 2, 1.5, 1, 0.8 s), watching current and torque in IndraWorks.
+- [ ] Drive tuning with the drive's owner (Robert, from about 2026-11-23): Kv (S-0-0104 = 1.0),
+  acceleration feedforward, jerk S-0-0193 (3 m/s³). TODO item 46.
+- [ ] P-0-4088 = 0x002A makes a bus failure only a warning (the last command is kept); 0x0028
+  would make it an error. Decide with the drive's owner.
+- [ ] Does the wavemaker run with slave 2's user parameters `C0 00 08`? Check at the next switch.
+- [ ] Export the MGate configuration (with `C0 00 08` and the 500 ms timeout) as a backup.
 
 ## Verified so far
 
