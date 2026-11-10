@@ -391,11 +391,101 @@ Switching from phase 1:
   tool (task T6): `watch HOST INPUT_BASE` (FC4, 7 registers every 100 ms, decoded) and
   `override HOST OUTPUT_BASE PERCENT` (FC6 to `OUTPUT_BASE + 5`, refused unless the control word
   at `OUTPUT_BASE` reads 0), in the style of `tests/probe_map.py`.
-- **Code:** reject a wrong block size at configure (`output_word_count` ≠ 6, `input_word_count`
-  < 7), since a larger output block writes over the other drive every cycle (task T1). Also
-  `mgate_example` needs `--input-base`, `--output-base` and `--profibus-address`, with
-  `--move` refusing to run without an explicit address.
+- **Code:** T1 (block size check) and the `mgate_example` options; details in *Phase 2 code*
+  below.
 - **Config:** the oscillator's `input_base_reg: 7`, `output_base_reg: 6`, `profibus_address: 3`.
+
+### Phase 2 code (2026-11-10)
+
+Little changes: the IndraDrive and MGate code already address each drive by its own block and
+PROFIBUS address. Missing are a guard against overlapping blocks and `mgate_example` options.
+
+**Already works, no change:**
+- **Blocks:** the tag offsets in `IndraDrive::IndraDrive` (`indradrive.cpp`) are bytes 0, 2, 6,
+  10 *inside the block*, and each controller has its own `MGateDriver` with its own
+  `input_base_reg` / `output_base_reg`. The oscillator at 7 / 6 is a yaml change, provided both
+  starts are even (14 input bytes and 12 output bytes give exactly registers 7 and 6).
+- **Live list:** `slave_live()` (`indradrive.cpp:50-63`) takes the bit for `profibus_address`;
+  address 3 is byte 2, bit 3.
+- **The drive that is not running:** nobody writes its block, so the MGate's fault timeout on
+  that slave forces control word 0. An MGate setting (500 ms, fault value 0), not code.
+
+**T1: refuse an output block other than 6 registers.** With `write_only_dirty: false` each node
+writes its whole output area every cycle; `output_word_count: 12` at register 0 would write the
+oscillator's control word every 20 ms from the wavemaker node. Today the actuator only checks
+`> 0` (`indradrive_actuator.cpp:81-82`). In the driver, so `mgate_example` and future tools get it
+too:
+
+```cpp
+// mgate_driver.h, public:
+const GatewayConfig & config() const {return cfg_;}
+```
+
+```cpp
+// indradrive.cpp, top of IndraDrive::IndraDrive, before add_tags():
+// The layout above is 14 bytes in, 12 bytes out. A larger output block would write over the
+// next slave's outputs every cycle (write_only_dirty = false writes the whole area).
+if (drv_.config().output_word_count != 6 || drv_.config().input_word_count < 7) {
+    throw std::invalid_argument(
+        "IndraDrive needs output_word_count 6 and input_word_count >= 7, not " +
+        std::to_string(drv_.config().output_word_count) + " / " +
+        std::to_string(drv_.config().input_word_count));
+}
+```
+
+`<stdexcept>` and `<string>` in `indradrive.cpp`. `IndraDriveActuator` already turns
+`invalid_argument` into a failed configure. More input registers stay allowed: reading cannot
+disturb the other drive.
+
+**`mgate_example`: block and address options.** `main()` (`example_main.cpp:87-116`) is fixed to
+registers 0 / 0 and address 2 (the `IndraDriveConfig` default); after phase 2 a `--move` would
+move the wavemaker. Sketch:
+
+```cpp
+int main(int argc, char** argv) {
+    bool do_move = false;
+    int input_base = 0, output_base = 0, profibus_address = -1;  // -1: not given
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto next = [&]() {return i + 1 < argc ? std::stoi(argv[++i]) : -1;};
+        if (a == "--move") do_move = true;
+        else if (a == "--input-base") input_base = next();
+        else if (a == "--output-base") output_base = next();
+        else if (a == "--profibus-address") profibus_address = next();
+        else { std::fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
+    }
+    if (do_move && profibus_address < 0) {
+        std::fprintf(stderr, "--move needs --profibus-address (2 wavemaker, 3 oscillator)\n");
+        return 2;
+    }
+    ...
+    cfg.input_base_reg  = static_cast<std::uint16_t>(input_base);
+    cfg.output_base_reg = static_cast<std::uint16_t>(output_base);
+    ...
+    dcfg.profibus_address = profibus_address < 0 ? 2 : profibus_address;
+```
+
+The monitor without `--move` keeps 0 / 0 / 2, so today's command still works. It is not
+read-only: it writes control word 0 to the block it is given.
+
+**Only if the address map shows an odd start:** a register boundary would fall inside the 32-bit
+tags. Then `IndraDriveConfig` gets `in_byte_base` / `out_byte_base`, added to each offset in
+`add_tags`. Read the map (step 2) before writing any of it.
+
+**Not code:** the oscillator's yaml (`input_base_reg: 7`, `output_base_reg: 6`,
+`profibus_address: 3`), slave 3 on the MGate with fault timeout and fault value, and T6 (the
+`watch` / `override` tool, Python).
+
+**Tests (Claude, once handed over):** `FakeMGate` with base registers and a second slave; a test
+that refuses `output_word_count: 12`; a test where the oscillator at 7 / 6 / address 3 enables
+and moves without touching slave 2's block.
+
+**For both rigs at once (TODO 47), later:** depends on two tests in *Deferred* below. If the
+kill test shows the other node's writes keep a dead rig's outputs alive, both drives move to one
+`MGateDriver`, and `set_cycle_callback` needs more than one subscriber (`IndraDrive` takes the
+only slot today). The same if the two-probe load test stalls the gateway. `example_main.cpp:107`
+says "The MGate's fault timeout only counts Modbus accesses to the output block"; if that holds
+per slave module, separate nodes are enough.
 
 ## Deferred: both rigs at once
 
