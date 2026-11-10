@@ -1,17 +1,9 @@
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include <array>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -19,10 +11,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
 
+#include "fake_mgate.hpp"
 #include "indradrive_actuator.hpp"
 
 namespace
 {
+
+using rig_controller_test::FakeMGate;
 
 rclcpp::NodeOptions actuator_options(int port = 1502)
 {
@@ -57,303 +52,6 @@ rclcpp::NodeOptions actuator_options(int port = 1502)
   });
 }
 
-// Modbus/TCP server standing in for the MGate 5101 and the IndraDrive behind it, laid out as
-// actuator_options() expects: inputs (FC4) at 0, outputs (FC3/FC6/FC16) at 0, gateway status
-// (FC4) at 768. The status word follows the control word the way IndraDrive::enable() waits
-// for it, and the position follows TargetPosition while the drive is following.
-class FakeMGate
-{
-public:
-  static constexpr std::uint16_t kOperatingMode = 1u << 1;
-  static constexpr std::uint16_t kDriveStart = 1u << 13;
-  static constexpr std::uint16_t kDriveOn = 1u << 15;
-
-  FakeMGate()
-  {
-    listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd_ < 0) {
-      throw std::runtime_error("FakeMGate: socket() failed");
-    }
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    addr.sin_port = 0;
-    socklen_t len = sizeof(addr);
-    if (::bind(listen_fd_, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0 ||
-      ::listen(listen_fd_, 1) != 0 ||
-      ::getsockname(listen_fd_, reinterpret_cast<sockaddr *>(&addr), &len) != 0)
-    {
-      ::close(listen_fd_);
-      throw std::runtime_error("FakeMGate: bind/listen failed");
-    }
-    port_ = ntohs(addr.sin_port);
-    thread_ = std::thread([this] {serve();});
-  }
-
-  ~FakeMGate()
-  {
-    stopping_ = true;
-    ::shutdown(listen_fd_, SHUT_RDWR);  // wakes accept()
-    {
-      std::lock_guard<std::mutex> lk(mtx_);
-      if (conn_fd_ >= 0) {
-        ::shutdown(conn_fd_, SHUT_RDWR);  // wakes recv()
-      }
-    }
-    thread_.join();
-    ::close(listen_fd_);
-  }
-
-  FakeMGate(const FakeMGate &) = delete;
-  FakeMGate & operator=(const FakeMGate &) = delete;
-
-  int port() const {return port_;}
-
-  // The drive's measured position. While following, the next output write moves it to the
-  // target again; freeze_position() keeps it, as a drive one gateway cycle behind would.
-  void set_position_deg(double deg)
-  {
-    std::lock_guard<std::mutex> lk(mtx_);
-    position_deg_ = deg;
-  }
-
-  void freeze_position(double deg)
-  {
-    std::lock_guard<std::mutex> lk(mtx_);
-    position_deg_ = deg;
-    frozen_ = true;
-  }
-
-  std::uint16_t control_word() const
-  {
-    std::lock_guard<std::mutex> lk(mtx_);
-    return outputs_[0];
-  }
-
-  double target_deg() const
-  {
-    std::lock_guard<std::mutex> lk(mtx_);
-    return i32(outputs_[1], outputs_[2]) * 0.0001;
-  }
-
-  double speed_cap_rpm() const
-  {
-    std::lock_guard<std::mutex> lk(mtx_);
-    return i32(outputs_[3], outputs_[4]) * 0.0001;
-  }
-
-  int input_reads() const
-  {
-    std::lock_guard<std::mutex> lk(mtx_);
-    return input_reads_;
-  }
-
-  bool wait_for(
-    const std::function<bool()> & predicate,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(1000)) const
-  {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-      if (predicate()) {
-        return true;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    return predicate();
-  }
-
-private:
-  static constexpr std::uint16_t kStatusBase = 768;
-  static constexpr std::uint16_t kStatusWords = 9;
-  static constexpr std::uint16_t kInputWords = 7;
-  static constexpr std::uint16_t kOutputWords = 6;
-
-  static double i32(std::uint16_t high, std::uint16_t low)
-  {
-    return static_cast<double>(static_cast<std::int32_t>(
-             (static_cast<std::uint32_t>(high) << 16) | low));
-  }
-
-  static bool read_exact(int fd, std::uint8_t * buf, std::size_t n)
-  {
-    while (n > 0) {
-      const ssize_t got = ::recv(fd, buf, n, 0);
-      if (got <= 0) {
-        return false;
-      }
-      buf += got;
-      n -= static_cast<std::size_t>(got);
-    }
-    return true;
-  }
-
-  static std::uint16_t be16(const std::uint8_t * p)
-  {
-    return static_cast<std::uint16_t>((p[0] << 8) | p[1]);
-  }
-
-  static void put16(std::vector<std::uint8_t> & out, std::uint16_t v)
-  {
-    out.push_back(static_cast<std::uint8_t>(v >> 8));
-    out.push_back(static_cast<std::uint8_t>(v & 0xFF));
-  }
-
-  // Called with mtx_ held, after every output write.
-  void follow_control_word()
-  {
-    const std::uint16_t cw = outputs_[0];
-    if (!frozen_ && (cw & kOperatingMode) && (cw & kDriveOn) && (cw & kDriveStart)) {
-      position_deg_ = target_deg_locked();
-    }
-  }
-
-  double target_deg_locked() const {return i32(outputs_[1], outputs_[2]) * 0.0001;}
-
-  // Called with mtx_ held. Mode and ready bits as IndraDrive::enable() waits for them; always
-  // in standstill and target reached, since the position jumps to the target.
-  std::array<std::uint16_t, kInputWords> inputs_locked() const
-  {
-    const std::uint16_t cw = outputs_[0];
-    std::uint16_t sw = (1u << 3) | (1u << 4);  // standstill, target reached
-    if (cw & kOperatingMode) {
-      sw |= 0x0002;                                    // operating mode
-      sw |= (cw & kDriveOn) ? 0xC000 : 0x8000;         // AF : Ab
-    } else {
-      sw |= 0x4000;                                    // bb
-    }
-    if (!((cw & kOperatingMode) && (cw & kDriveOn) && (cw & kDriveStart))) {
-      sw |= 1u << 7;  // not following command values
-    }
-    const auto raw = static_cast<std::uint32_t>(
-      static_cast<std::int32_t>(std::lround(position_deg_ / 0.0001)));
-    return {sw, static_cast<std::uint16_t>(raw >> 16), static_cast<std::uint16_t>(raw & 0xFFFF),
-      0, 0, 0, 0};
-  }
-
-  void serve()
-  {
-    while (!stopping_) {
-      const int fd = ::accept(listen_fd_, nullptr, nullptr);
-      if (fd < 0) {
-        return;
-      }
-      {
-        std::lock_guard<std::mutex> lk(mtx_);
-        conn_fd_ = fd;
-      }
-      serve_connection(fd);
-      {
-        std::lock_guard<std::mutex> lk(mtx_);
-        conn_fd_ = -1;
-      }
-      ::close(fd);
-    }
-  }
-
-  void serve_connection(int fd)
-  {
-    std::array<std::uint8_t, 260> frame{};
-    while (!stopping_) {
-      if (!read_exact(fd, frame.data(), 7)) {  // MBAP header
-        return;
-      }
-      const std::uint16_t length = be16(&frame[4]);
-      if (length < 2 || length > frame.size() - 6 || !read_exact(fd, &frame[7], length - 1)) {
-        return;
-      }
-      const std::uint8_t * pdu = &frame[7];
-      const std::uint8_t fc = pdu[0];
-
-      std::vector<std::uint8_t> body;
-      {
-        std::lock_guard<std::mutex> lk(mtx_);
-        reply_locked(fc, pdu, length - 1, body);
-      }
-
-      std::vector<std::uint8_t> reply(frame.begin(), frame.begin() + 4);  // transaction, protocol
-      put16(reply, static_cast<std::uint16_t>(body.size() + 1));
-      reply.push_back(frame[6]);  // unit id
-      reply.insert(reply.end(), body.begin(), body.end());
-      if (::send(fd, reply.data(), reply.size(), MSG_NOSIGNAL) !=
-        static_cast<ssize_t>(reply.size()))
-      {
-        return;
-      }
-    }
-  }
-
-  void reply_locked(
-    std::uint8_t fc, const std::uint8_t * pdu, std::size_t pdu_len,
-    std::vector<std::uint8_t> & body)
-  {
-    auto exception = [&](std::uint8_t code) {
-        body = {static_cast<std::uint8_t>(fc | 0x80), code};
-      };
-    if (pdu_len < 5) {
-      exception(0x03);
-      return;
-    }
-    const std::uint16_t addr = be16(pdu + 1);
-    const std::uint16_t value = be16(pdu + 3);  // count, or the value for FC6
-
-    if (fc == 0x04 || fc == 0x03) {
-      std::vector<std::uint16_t> regs;
-      if (fc == 0x04 && addr + value <= kInputWords) {
-        const auto in = inputs_locked();
-        regs.assign(in.begin() + addr, in.begin() + addr + value);
-        ++input_reads_;
-      } else if (fc == 0x04 && addr >= kStatusBase && addr + value <= kStatusBase + kStatusWords) {
-        // Word 0: gateway "Operate" (bits 1:0 = 11). Byte 2 of the area (high byte of word 1)
-        // is the live list for addresses 0-7; profibus_address 2 is bit 2.
-        std::array<std::uint16_t, kStatusWords> status{0x0003, 0x0400};
-        regs.assign(status.begin() + (addr - kStatusBase),
-            status.begin() + (addr - kStatusBase) + value);
-      } else if (fc == 0x03 && addr + value <= kOutputWords) {
-        regs.assign(outputs_.begin() + addr, outputs_.begin() + addr + value);
-      } else {
-        exception(0x02);
-        return;
-      }
-      body = {fc, static_cast<std::uint8_t>(regs.size() * 2)};
-      for (const auto r : regs) {
-        put16(body, r);
-      }
-    } else if (fc == 0x06) {
-      if (addr >= kOutputWords) {
-        exception(0x02);
-        return;
-      }
-      outputs_[addr] = value;
-      follow_control_word();
-      body.assign(pdu, pdu + 5);
-    } else if (fc == 0x10) {
-      if (pdu_len < 6 || addr + value > kOutputWords || pdu_len < 6u + 2u * value) {
-        exception(0x02);
-        return;
-      }
-      for (std::uint16_t i = 0; i < value; ++i) {
-        outputs_[addr + i] = be16(pdu + 6 + 2 * i);
-      }
-      follow_control_word();
-      body.assign(pdu, pdu + 5);
-    } else {
-      exception(0x01);
-    }
-  }
-
-  int listen_fd_{-1};
-  int port_{0};
-  std::atomic<bool> stopping_{false};
-  std::thread thread_;
-
-  mutable std::mutex mtx_;
-  int conn_fd_{-1};
-  std::array<std::uint16_t, kOutputWords> outputs_{};
-  double position_deg_{0.0};
-  bool frozen_{false};
-  int input_reads_{0};
-};
-
 std::shared_ptr<rclcpp_lifecycle::LifecycleNode> actuator_node(
   const std::string & name, const rclcpp::NodeOptions & options)
 {
@@ -361,6 +59,45 @@ std::shared_ptr<rclcpp_lifecycle::LifecycleNode> actuator_node(
   node->declare_parameter<std::string>("driver_address", "127.0.0.1");
   node->declare_parameter<double>("actuator_upright_angle_deg", 12.0);
   node->declare_parameter<double>("upright_position_m", 0.25);
+  return node;
+}
+
+
+// The vertical oscillator's block in oscillator.yaml (T2): a linear drive whose position tag is
+// in mm and velocity tag in 10 mm/min, + command = down. FakeMGate's *_deg and *_rpm accessors
+// read the same raw tags (0.0001 per unit), so here they are mm and 10 mm/min.
+rclcpp::NodeOptions vertical_options(int port = 1502, int direction = -1)
+{
+  return rclcpp::NodeOptions().parameter_overrides({
+      rclcpp::Parameter("driver_address", "127.0.0.1"),
+      rclcpp::Parameter("driver_port", port),
+      rclcpp::Parameter("input_base_reg", 0),
+      rclcpp::Parameter("input_word_count", 7),
+      rclcpp::Parameter("output_base_reg", 0),
+      rclcpp::Parameter("output_word_count", 6),
+      rclcpp::Parameter("input_uses_fc4", true),
+      rclcpp::Parameter("status_base_reg", 768),
+      rclcpp::Parameter("status_word_count", 9),
+      rclcpp::Parameter("poll_interval_ms", 20),
+      rclcpp::Parameter("profibus_address", 2),
+      rclcpp::Parameter("drive_motion", "linear"),
+      rclcpp::Parameter("drive_m_per_unit", 0.001),
+      rclcpp::Parameter("drive_velocity_per_unit_per_s", 6.0),
+      rclcpp::Parameter("drive_direction", direction),
+      rclcpp::Parameter("upright_position_m", 0.0),
+      rclcpp::Parameter("travel_minimum_m", -0.2),
+      rclcpp::Parameter("travel_maximum_m", 0.2),
+      rclcpp::Parameter("max_velocity_rpm", 600.0),
+      rclcpp::Parameter("hold_velocity_rpm", 60.0),
+  });
+}
+
+std::shared_ptr<rclcpp_lifecycle::LifecycleNode> vertical_node(
+  const std::string & name, const rclcpp::NodeOptions & options)
+{
+  auto node = std::make_shared<rclcpp_lifecycle::LifecycleNode>(name, options);
+  node->declare_parameter<std::string>("driver_address", "127.0.0.1");
+  node->declare_parameter<double>("upright_position_m", 0.0);
   return node;
 }
 
@@ -519,4 +256,135 @@ TEST_F(IndraDriveActuatorTest, CanBeRecreatedAfterParametersAreDeclared)
     rig_controller::IndraDriveActuator first(*node);
     rig_controller::IndraDriveActuator second(*node);
   });
+}
+
+
+// ---------------------------------------------------------------- linear drives (T2)
+
+TEST_F(IndraDriveActuatorTest, LinearScaleConvertsMetresToDriveUnits)
+{
+  auto node = vertical_node("actuator_linear_test", vertical_options(1502, 1));
+  rig_controller::IndraDriveActuator actuator(*node);
+
+  const auto setpoint = actuator.to_actuator_setpoint(0.1, 0.05, 1.0);
+
+  EXPECT_DOUBLE_EQ(setpoint.position, 100.0);      // mm
+  EXPECT_DOUBLE_EQ(setpoint.velocity, 50.0);       // mm/s
+  EXPECT_DOUBLE_EQ(setpoint.acceleration, 1000.0);  // mm/s^2
+  // 600 tag units = 6000 mm/min = 100 mm/s.
+  EXPECT_DOUBLE_EQ(actuator.max_velocity_mps(), 0.1);
+}
+
+TEST_F(IndraDriveActuatorTest, NegativeDirectionFlipsPositionAndVelocity)
+{
+  auto node = vertical_node("actuator_direction_test", vertical_options());
+  rig_controller::IndraDriveActuator actuator(*node);
+
+  const auto setpoint = actuator.to_actuator_setpoint(0.1, 0.05, 1.0);
+
+  EXPECT_DOUBLE_EQ(setpoint.position, -100.0);
+  EXPECT_DOUBLE_EQ(setpoint.velocity, -50.0);
+  EXPECT_DOUBLE_EQ(setpoint.acceleration, -1000.0);
+  EXPECT_DOUBLE_EQ(actuator.max_velocity_mps(), 0.1);  // a speed: no sign
+}
+
+TEST_F(IndraDriveActuatorTest, AngularSpeedLimitUnchanged)
+{
+  // Ladertanken's numbers before T2: 50 rpm = 300 deg/s at 0.53 mm/deg.
+  auto node = actuator_node("actuator_angular_speed_test", actuator_options());
+  rig_controller::IndraDriveActuator actuator(*node);
+
+  EXPECT_DOUBLE_EQ(actuator.max_velocity_mps(), 300.0 * 0.00053);
+}
+
+TEST_F(IndraDriveActuatorTest, RejectsInvalidDriveScale)
+{
+  const std::vector<rclcpp::Parameter> bad{
+    rclcpp::Parameter("drive_direction", 0),
+    rclcpp::Parameter("drive_direction", 2),
+    rclcpp::Parameter("drive_m_per_unit", 0.0),
+    rclcpp::Parameter("drive_m_per_unit", -0.001),
+    rclcpp::Parameter("drive_velocity_per_unit_per_s", 0.0),
+    rclcpp::Parameter("drive_motion", "rotary"),
+  };
+  int i = 0;
+  for (const auto & parameter : bad) {
+    auto options = vertical_options();
+    options.append_parameter_override(parameter.get_name(), parameter.get_parameter_value());
+    auto node = vertical_node("actuator_bad_scale_" + std::to_string(i++), options);
+    EXPECT_THROW(rig_controller::IndraDriveActuator actuator(*node), std::invalid_argument)
+      << parameter.get_name() << " = " << parameter.value_to_string();
+  }
+}
+
+TEST_F(IndraDriveActuatorTest, WritesDriveUnitsToTheGateway)
+{
+  FakeMGate fake;
+  auto node = vertical_node("actuator_linear_write_test", vertical_options(fake.port()));
+  rig_controller::IndraDriveActuator actuator(*node);
+  const auto logger = node->get_logger();
+
+  ASSERT_TRUE(actuator.start(logger));
+  // +0.1 m (up) at 0.05 m/s: -100 mm on the drive (+ = down), raw -1 000 000; the speed cap
+  // is positive, 50 mm/s = 300 x 10 mm/min, raw 3 000 000.
+  ASSERT_TRUE(actuator.write_setpoint(actuator.to_actuator_setpoint(0.1, 0.05, 0.0)));
+  EXPECT_TRUE(fake.wait_for([&] {
+      return std::abs(fake.target_deg() + 100.0) < 1e-6 &&
+             std::abs(fake.speed_cap_rpm() - 300.0) < 1e-6;
+    }));
+  EXPECT_EQ(fake.control_word(), kRunning);
+
+  actuator.stop();
+}
+
+TEST_F(IndraDriveActuatorTest, ReadsDrivePositionBackInMetres)
+{
+  FakeMGate fake;
+  auto node = vertical_node("actuator_linear_read_test", vertical_options(fake.port()));
+  rig_controller::IndraDriveActuator actuator(*node);
+  const auto logger = node->get_logger();
+
+  ASSERT_TRUE(actuator.start(logger));
+  fake.freeze_position(50.0);  // +50 mm on the drive is 50 mm down
+  EXPECT_TRUE(fake.wait_for([&] {return std::abs(actuator.actual_position_m() + 0.05) < 1e-9;}));
+
+  actuator.stop();
+}
+
+TEST_F(IndraDriveActuatorTest, SpeedCapClampedToDriveMaximum)
+{
+  FakeMGate fake;
+  auto node = vertical_node("actuator_linear_cap_test", vertical_options(fake.port()));
+  rig_controller::IndraDriveActuator actuator(*node);
+  const auto logger = node->get_logger();
+
+  ASSERT_TRUE(actuator.start(logger));
+  // 0.2 m/s would be 1200 tag units; max_velocity_rpm is 600.
+  ASSERT_TRUE(actuator.write_setpoint(actuator.to_actuator_setpoint(0.05, 0.2, 0.0)));
+  EXPECT_TRUE(fake.wait_for([&] {return std::abs(fake.speed_cap_rpm() - 600.0) < 1e-6;}));
+
+  actuator.stop();
+}
+
+TEST_F(IndraDriveActuatorTest, DriveLimitsFromTravelWithDirectionSwapped)
+{
+  // Travel -0.2..+0.2 m with + = down becomes drive limits -200..+200 mm (min and max
+  // swapped). halt() without a target holds the polled position clamped to them.
+  for (const double outside_mm : {250.0, -250.0}) {
+    FakeMGate fake;
+    fake.set_position_deg(outside_mm);
+    auto node = vertical_node(
+      outside_mm > 0 ? "actuator_limit_high_test" : "actuator_limit_low_test",
+      vertical_options(fake.port()));
+    rig_controller::IndraDriveActuator actuator(*node);
+    const auto logger = node->get_logger();
+
+    ASSERT_TRUE(actuator.start(logger));
+    actuator.halt();
+    EXPECT_TRUE(fake.wait_for([&] {
+        return std::abs(fake.target_deg() - std::copysign(200.0, outside_mm)) < 1e-6;
+      })) << "from " << outside_mm << " mm";
+    EXPECT_NEAR(fake.speed_cap_rpm(), 60.0, 1e-6);  // hold_velocity_rpm
+    actuator.stop();
+  }
 }

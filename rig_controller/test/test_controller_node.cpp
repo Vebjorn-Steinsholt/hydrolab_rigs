@@ -23,6 +23,8 @@
 #include "rig_interfaces/action/move_rig.hpp"
 #include "rig_interfaces/srv/cancel_all_goals.hpp"
 
+#include "fake_mgate.hpp"
+
 #define main controller_node_main
 #include "../src/controller_node.cpp"
 #undef main
@@ -1947,4 +1949,111 @@ TEST_F(ControllerNodeTest, GoalBelowMinPeriodIsRejected)
     goal_accepted(
       oscillator_node("/long_period_test", nullptr, limit), "/long_period_test",
       regular_goal(0.002, 0.25), "move_oscillator"));
+}
+
+
+// ---------------------------------------------------------------- vertical oscillator (T3)
+
+namespace
+{
+
+// The /oscillators/vertical/controller block of oscillator.yaml, on a FakeMGate instead of the
+// ladertanken gateway, with drive_direction as the int -1 the yaml gives.
+rclcpp::NodeOptions vertical_oscillator_options(
+  const std::string & ns, int port, int drive_direction = -1)
+{
+  return with_soft_stop_released(ns, rclcpp::NodeOptions()
+           .arguments({"--ros-args", "-r", "__ns:=" + ns})
+           .parameter_overrides({
+      rclcpp::Parameter("rig", "oscillator"),
+      rclcpp::Parameter("drive_name", "indradrive"),
+      rclcpp::Parameter("driver_address", "127.0.0.1"),
+      rclcpp::Parameter("driver_port", port),
+      rclcpp::Parameter("driver_unit_id", 1),
+      rclcpp::Parameter("input_base_reg", 0),
+      rclcpp::Parameter("input_word_count", 7),
+      rclcpp::Parameter("output_base_reg", 0),
+      rclcpp::Parameter("output_word_count", 6),
+      rclcpp::Parameter("input_uses_fc4", true),
+      rclcpp::Parameter("status_base_reg", 768),
+      rclcpp::Parameter("status_word_count", 9),
+      rclcpp::Parameter("poll_interval_ms", 20),
+      rclcpp::Parameter("write_only_dirty", false),
+      rclcpp::Parameter("profibus_address", 2),
+      rclcpp::Parameter("drive_motion", "linear"),
+      rclcpp::Parameter("drive_m_per_unit", 0.001),
+      rclcpp::Parameter("drive_velocity_per_unit_per_s", 6.0),
+      rclcpp::Parameter("drive_direction", drive_direction),
+      rclcpp::Parameter("upright_position_m", 0.0),
+      rclcpp::Parameter("travel_minimum_m", -0.2),
+      rclcpp::Parameter("travel_maximum_m", 0.2),
+      rclcpp::Parameter("max_velocity_rpm", 600.0),
+      rclcpp::Parameter("hold_velocity_rpm", 60.0),
+      rclcpp::Parameter("in_position_tol_deg", 0.1),
+      rclcpp::Parameter("step_timeout_ms", 10000),
+      rclcpp::Parameter("return_to_upright_max_velocity_mps", 0.02),
+    }));
+}
+
+constexpr std::uint16_t kDriveRunning = rig_controller_test::FakeMGate::kOperatingMode |
+  rig_controller_test::FakeMGate::kDriveOn | rig_controller_test::FakeMGate::kDriveStart;
+
+}  // namespace
+
+TEST_F(ControllerNodeTest, VerticalOscillatorConfiguresActivatesAndMovesUp)
+{
+  rig_controller_test::FakeMGate fake;
+  const std::string ns = "/oscillators/vertical_test";
+  auto node = std::make_shared<ControllerNode>(vertical_oscillator_options(ns, fake.port()));
+
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+  ASSERT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_ACTIVATE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE);
+  EXPECT_EQ(fake.control_word(), kDriveRunning);
+
+  // The action is move_oscillator; a pregenerated goal 20 mm up at 0.05 m/s.
+  auto client_node = std::make_shared<rclcpp::Node>("vertical_client", node_options(ns));
+  auto client = rclcpp_action::create_client<MoveRig>(client_node, "move_oscillator");
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node->get_node_base_interface());
+  executor.add_node(client_node);
+  ASSERT_TRUE(client->wait_for_action_server(std::chrono::seconds(1)));
+  ASSERT_TRUE(wait_for_soft_stop_release(executor, *node));
+
+  MoveRig::Goal goal;
+  goal.sample_interval = 0.02;
+  for (int i = 0; i <= 20; ++i) {
+    goal.positions.push_back(0.001 * i);
+  }
+  auto goal_future = client->async_send_goal(goal);
+  ASSERT_TRUE(spin_until(executor, goal_future, std::chrono::seconds(1)));
+  auto goal_handle = goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+  auto result_future = client->async_get_result(goal_handle);
+  ASSERT_TRUE(spin_until(executor, result_future, std::chrono::seconds(3)));
+  EXPECT_EQ(result_future.get().code, rclcpp_action::ResultCode::SUCCEEDED);
+
+  // + = up in the rig is - on the drive: 20 mm up is -20 mm.
+  EXPECT_TRUE(fake.wait_for([&] {return std::abs(fake.target_deg() + 20.0) < 1e-3;}));
+  EXPECT_LE(fake.speed_cap_rpm(), 600.0 + 1e-6);
+
+  EXPECT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_DEACTIVATE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_INACTIVE);
+  EXPECT_EQ(fake.control_word(), rig_controller_test::FakeMGate::kOperatingMode);  // drive off
+  node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CLEANUP);
+}
+
+TEST_F(ControllerNodeTest, VerticalOscillatorConfigureFailsForInvalidDirection)
+{
+  rig_controller_test::FakeMGate fake;
+  auto node = std::make_shared<ControllerNode>(
+    vertical_oscillator_options("/oscillators/vertical_bad_direction", fake.port(), 0));
+
+  EXPECT_EQ(
+    node->trigger_transition(lifecycle_msgs::msg::Transition::TRANSITION_CONFIGURE).id(),
+    lifecycle_msgs::msg::State::PRIMARY_STATE_UNCONFIGURED);
 }

@@ -1004,7 +1004,11 @@ colcon test-result --verbose
   starts, stop by topic and service, stop during start, lost heartbeat, controller rejection and
   abort, deactivation, and a stop the controller never confirms.
 - `test_wave_trajectory`: start blends, peak-speed bounds and pregenerated sampling.
-- `test_indradrive_actuator`: unit conversion, parameter checks, and `halt()` against a fake MGate.
+- `test_indradrive_actuator`: unit conversion (angular, and linear with the drive's units and
+  direction), parameter checks, the drive limits from the travel, and `halt()` against a fake
+  MGate (`test/fake_mgate.hpp`).
+- `test_controller_node` also configures, activates and moves the vertical oscillator's block on
+  the fake MGate.
 - `mapping` (driver): register mapping.
 
 The fake actuator does not model all drive behaviour, so passing tests do not replace the rig

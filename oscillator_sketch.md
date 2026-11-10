@@ -176,19 +176,6 @@ All implemented on 2026-11-09 except where noted.
 Order: T5's checks at the next rig switch. T7 (`generate_oscillations`, with tests and README
 section) and T9 were done 2026-11-10.
 
-Tests Claude can write once you hand them over (`rig_controller/test/test_indradrive_actuator.cpp`,
-with the `FakeMGate` from item 21):
-- T2: with `drive_m_per_unit: 0.001` and `drive_velocity_per_unit_per_s: 6`, a 0.1 m setpoint
-  writes raw 1 000 000 to TargetPosition (100 mm), and a 0.05 m/s cap writes raw 3 000 000 to
-  PosVelocity (300 units = 3000 mm/min = 50 mm/s). `max_velocity_mps()` with
-  `max_velocity_rpm: 600` returns 0.1. The angular defaults leave ladertanken's numbers
-  unchanged.
-- T2 with `drive_direction: -1`: a +0.1 m setpoint writes raw −1 000 000 (−100 mm), a raw
-  drive position of +50 mm reads back as −0.05 m, the speed cap is still +3 000 000, and
-  travel −0.2…+0.2 m becomes drive limits −200…+200 mm with min and max swapped.
-- T3: configure → activate with the vertical block's parameters (including `drive_direction` as
-  the int `-1`) on the fake gateway, in `test_controller_node.cpp`.
-
 ## Task details
 
 What is left of each task, with the reasons. Done parts are left out.
