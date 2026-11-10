@@ -176,9 +176,10 @@ All implemented on 2026-11-09 except where noted.
 | # | File | Where | What | Done when | Left (2026-11-10) |
 |---|---|---|---|---|---|
 | T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
+| T11-T15 | `/etc/default/oscillator`, `rpi/` (units, `run.sh`, `stop.sh`, `refuse_if_busy.sh`, new `soft_stop@.service` + `soft_stop.sh`), `soft_stop.py`, both launches, `windows/_rig.bat` | *Code: wavemaker + vertical together* | Port 8081, oscillator marker, refuse only sloshing, one shared soft stop, Windows start without stopping the other | The rig checks listed there | After Test 2 |
 | T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example`. Not needed: `--move` did its job on 2026-11-09; the block and address options are done (2026-11-10) | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
 
-Order: T5's check when the sloshing rig is connected. T7 (`generate_oscillations`, with tests and README
+Order: Test 2, then T11-T15; T5's check when the sloshing rig is connected. T7 (`generate_oscillations`, with tests and README
 section) and T9 were done 2026-11-10.
 
 ## Task details
@@ -450,7 +451,7 @@ TODO 47. Phase 2 is done (2026-11-10), so this can start. The first test decides
   waiting for power section ready (Ab)`, status word `0x488E`); pressing the cabinet button
   fixed it. Don't switch to OM from IndraWorks: `enable()` does that.
 
-Next: Test 2 (gateway load with both rigs), then the Pi side of TODO 47.
+Next: Test 2 (gateway load with both rigs), then T11-T15 (*Code: wavemaker + vertical together*).
 
 Procedure, kept for repeats:
 
@@ -583,6 +584,207 @@ service.
 3. a slower oscillator poll.
 
 Each of these is a code change, so plan it before the Pi side of TODO 47.
+
+### Code: wavemaker + vertical together (TODO 47 (2)-(5), proposed 2026-11-10)
+
+After Test 2 passes. **Rules (decided 2026-11-10):** sloshing never runs with anything;
+wavemaker + vertical may run together; one soft stop button stops both. Test 1 showed separate
+controller processes are safe. Everything below is your code unless handed over; Claude writes
+the docs (`rpi/README.md`, TODO 47) and the tests.
+
+**T11: own web port for the oscillator.** `/etc/default/oscillator`:
+
+```bash
+ROS_DOMAIN_ID=1
+PORT=8081
+OSCILLATOR=vertical
+```
+
+`refuse_if_busy.sh` already checks only its own `PORT`. Sloshing keeps 8081 too: it never runs
+next to the wavemaker.
+
+**T12: which oscillator runs, as a marker.** `/etc/default/oscillator` can be edited while the
+unit runs, so it cannot tell the wavemaker's unit (or `stop.sh`, which reads `OSCILLATOR` today to
+find the namespace) which oscillator is running. `oscillator@.service` gets a runtime directory,
+created owned by the user and removed when the unit stops:
+
+```ini
+[Service]
+RuntimeDirectory=oscillator-%i
+```
+
+`run.sh`, oscillator branch:
+
+```bash
+    args=(port:="${PORT:-8081}" oscillator:="${OSCILLATOR:-sloshing}" soft_stop:=false)
+    # Which oscillator runs, for refuse_if_busy.sh and stop.sh (the env file can change meanwhile).
+    [[ -n "$RUNTIME_DIRECTORY" ]] && echo "${OSCILLATOR:-sloshing}" > "$RUNTIME_DIRECTORY/oscillator"
+```
+
+`stop.sh`:
+
+```bash
+case "${RIG:-wavemaker}" in
+  oscillator)
+    running="$(cat "$RUNTIME_DIRECTORY/oscillator" 2>/dev/null || echo "${OSCILLATOR:-sloshing}")"
+    namespace="/oscillators/$running" ;;
+  *) namespace="/wavemakers/$WAVEMAKER" ;;
+esac
+```
+
+**T13: refuse only sloshing.** Both units call `refuse_if_busy.sh <rig> %i` (`wavemaker` or
+`oscillator`) instead of the other unit's name:
+
+```bash
+#!/usr/bin/env bash
+# ExecStartPre: refuse combinations that cannot run together on this Pi. The wavemaker and the
+# vertical oscillator may run together (TODO 47); the sloshing oscillator only alone.
+# $1: this unit's rig (wavemaker | oscillator), $2: the Pi user (%i).
+set -eo pipefail
+rig="$1" pi="$2"
+marker="/run/oscillator-$pi/oscillator"   # written by run.sh, removed when oscillator@ stops
+
+if [[ $rig == wavemaker ]]; then
+  if systemctl is-active --quiet "oscillator@$pi"; then
+    running="$(cat "$marker" 2>/dev/null || echo unknown)"
+    if [[ $running != vertical ]]; then
+      echo "oscillator@$pi runs '$running'; only the vertical oscillator can run with the wavemaker" >&2
+      exit 1
+    fi
+  fi
+else
+  if [[ ${OSCILLATOR:-sloshing} != vertical ]] && systemctl is-active --quiet "wavemaker@$pi"; then
+    echo "wavemaker@$pi is running; only the vertical oscillator can run with it" >&2
+    exit 1
+  fi
+fi
+
+# Catches a launch by hand on this unit's own port.
+port="${PORT:-8080}"
+if ss -Hltn "sport = :$port" | grep -q .; then
+  echo "port $port is in use, probably a launch by hand; stop it first" >&2
+  exit 1
+fi
+```
+
+**T14: one soft stop for both (TODO 47 (4)).** GPIO17 can be claimed by one process only. The
+node leaves the launches and gets a unit of its own, which publishes to every controller that can
+run on the Pi; no controller is remapped.
+
+- `rig_controller/src/soft_stop.py`: a `topics` parameter. The default `['soft_stop']` keeps a
+  launch by hand as today.
+
+  ```python
+          self.topics = self.declare_parameter('topics', ['soft_stop']).value
+          ...
+          # Not self.publishers: rclpy's Node already has that name.
+          self.stop_publishers = [self.create_publisher(Bool, t, qos) for t in self.topics]
+          self.get_logger().info(
+              f"Soft stop on GPIO{self.pin} to {', '.join(self.topics)}, starting stopped")
+      ...
+          msg = Bool(data=self.stopped)
+          for publisher in self.stop_publishers:
+              publisher.publish(msg)
+  ```
+
+- `lab.launch.py` and `oscillator.launch.py`: leave their own node out on request.
+
+  ```python
+  from launch.conditions import IfCondition
+  ...
+          DeclareLaunchArgument(
+              'soft_stop', default_value='true',
+              description='Start a soft stop node; false when soft_stop@.service owns the button'),
+          ...
+          Node(
+              package='rig_controller',
+              executable='soft_stop',
+              ...
+              condition=IfCondition(LaunchConfiguration('soft_stop')),
+          ),
+  ```
+
+- New `rpi/soft_stop@.service`:
+
+  ```ini
+  [Unit]
+  Description=Soft stop button on %i's Pi (GPIO17), shared by every rig running there
+  # Started by the rig units (Requires=); stops when the last of them stops.
+  StopWhenUnneeded=yes
+
+  [Service]
+  Type=exec
+  User=%i
+  WorkingDirectory=/home/%i
+  Environment=PI=%i PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
+  EnvironmentFile=/etc/default/wavemaker
+  ExecStart=/home/%i/ros_ws/src/hydrolab_rigs/rpi/soft_stop.sh
+  KillSignal=SIGINT
+  Restart=no
+  ```
+
+- New `rpi/soft_stop.sh`:
+
+  ```bash
+  #!/usr/bin/env bash
+  set -eo pipefail
+  [[ -n "$ROS_DOMAIN_ID" && "$ROS_DOMAIN_ID" != 0 ]] || { echo "set ROS_DOMAIN_ID" >&2; exit 1; }
+  source /opt/ros/jazzy/setup.bash
+  source "$HOME/ros_ws/install/setup.bash"
+  # One button, published to every controller that can run on this Pi.
+  exec ros2 run rig_controller soft_stop --ros-args -r __ns:="/$PI" -p pin:=17 \
+    -p "topics:=['/wavemakers/$PI/soft_stop', '/oscillators/vertical/soft_stop', '/oscillators/sloshing/soft_stop']"
+  ```
+
+- Both rig units:
+
+  ```ini
+  [Unit]
+  Requires=soft_stop@%i.service
+  After=network-online.target soft_stop@%i.service
+  ```
+
+  and `run.sh` passes `soft_stop:=false` to both launches (see T12 for the oscillator line;
+  `args=(wavemaker:="$WAVEMAKER" port:="${PORT:-8080}" soft_stop:=false)` for the wavemaker).
+
+How it behaves:
+- One press stops both rigs; releasing lets both start again.
+- Stopping one rig leaves the button working for the other (`StopWhenUnneeded`).
+- If the soft stop process dies, both controllers treat it as stopped within 0.2 s
+  (`soft_stop_timeout_s`), and systemd stops both rigs (`Requires=`).
+- A rig started while the other runs gets the button state at once: the topic is
+  `TRANSIENT_LOCAL`.
+
+**T15: `windows/_rig.bat` starts without stopping the other rig.** Today `start oscillator`
+stops the wavemaker first. Start only the requested unit, leave the refusal to T13, and open the
+page on the rig's own port:
+
+```bat
+if /i "%~2"=="wavemaker" (set "PORT=8080") else if /i "%~2"=="oscillator" (set "PORT=8081") else goto usage
+set "UNIT=%~2@%PI_USER%"
+echo Starting %UNIT% on %PI_HOST% ...
+%SSH% "sudo -n systemctl start %UNIT% && systemctl is-active %UNIT%"
+```
+
+A refused start prints `refuse_if_busy.sh`'s reason in the window. To switch the Pi to
+sloshing, `stop_rigs.bat` first. The sudoers rule is unchanged: systemd starts the soft stop
+unit through `Requires=`, not sudo.
+
+**Already fine, no change:** ROS names (`/wavemakers/ladertanken`, `/oscillators/vertical`; the
+soft stop node moves to `/ladertanken/soft_stop`; both rigs ran this way in Test 1), the driver
+and gateway (per-slave blocks, T1, the per-slave fault timer).
+
+**Order:** Test 2, then T11-T15, then on the rig:
+- wavemaker and vertical start in either order;
+- sloshing is refused in both directions;
+- one press stops both;
+- stopping one rig leaves the other and the button working;
+- stopping the soft stop unit stops both.
+
+**Claude, after T11-T15:**
+- the docs: `rpi/README.md` (the new unit, `PORT=8081`, start and stop), `windows/README.md`;
+- tests: `soft_stop.py`'s `topics`, and the launch argument;
+- TODO 47 marked done.
 
 ### Background
 
