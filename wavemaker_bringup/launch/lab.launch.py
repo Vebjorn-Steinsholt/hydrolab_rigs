@@ -1,5 +1,6 @@
 """
 Everything a lab Pi runs: controller, bridge, lifecycle manager, soft stop node and web page.
+soft_stop:=false leaves the soft stop node out (the services: soft_stop@.service owns it).
 
 Started by lab staff, normally through the wavemaker service (see rpi/README.md):
 
@@ -13,6 +14,7 @@ drive.
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -47,6 +49,11 @@ def generate_launch_description():
             description='GPIO pin for soft stop button',
         ),
         DeclareLaunchArgument(
+            'soft_stop',
+            default_value='true',
+            description='Start a soft stop node; false when soft_stop@.service owns the button',
+        ),
+        DeclareLaunchArgument(
             'idle_timeout_s',
             default_value='7200',
             description='Stop everything after this long without a wave; 0 turns it off',
@@ -76,5 +83,6 @@ def generate_launch_description():
                 'pin': LaunchConfiguration('soft_stop_pin'),
             }],
             output='screen',
+            condition=IfCondition(LaunchConfiguration('soft_stop')),
         ),
     ])

@@ -1,0 +1,14 @@
+[Unit]
+Description=Soft stop button on %i's Pi (GPIO17), shared by every rig running there
+# Started by the rig units (Requires=); stops when the last of them stops.
+StopWhenUnneeded=yes
+
+[Service]
+Type=exec
+User=%i
+WorkingDirectory=/home/%i
+Environment=PI=%i PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
+EnvironmentFile=/etc/default/wavemaker
+ExecStart=/home/%i/ros_ws/src/hydrolab_rigs/rpi/soft_stop.sh
+KillSignal=SIGINT
+Restart=no

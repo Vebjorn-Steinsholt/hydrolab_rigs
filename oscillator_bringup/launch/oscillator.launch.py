@@ -18,6 +18,7 @@ stop). Ctrl-C (SIGINT) stops everything and the controller switches the drive of
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
@@ -33,13 +34,17 @@ def generate_launch_description():
     bond_timeout = ParameterValue(LaunchConfiguration('bond_timeout'), value_type=float)
 
     return LaunchDescription([
-        DeclareLaunchArgument('port', default_value='8080', description='Web page port'),
+        DeclareLaunchArgument('port', default_value='8081', description='Web page port'),
         DeclareLaunchArgument(
             'oscillator', default_value='sloshing', choices=OSCILLATORS,
             description='Which oscillator: sloshing (LinMot) or vertical (IndraDrive on the '
                         'ladertanken gateway). Picks its yaml blocks and its namespace'),
         DeclareLaunchArgument(
             'soft_stop_pin', default_value='17', description='GPIO pin for soft stop button'),
+        DeclareLaunchArgument(
+            'soft_stop', default_value='true',
+            description='Start a soft stop node; false when soft_stop@.service owns the button',
+        ),
         DeclareLaunchArgument(
             'idle_timeout_s', default_value='7200',
             description='Stop everything after this long without a wave; 0 turns it off'),
@@ -91,6 +96,7 @@ def generate_launch_description():
                 'pin': ParameterValue(LaunchConfiguration('soft_stop_pin'), value_type=int),
             }],
             output='screen',
+            condition=IfCondition(LaunchConfiguration('soft_stop')),
         ),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(web_launch),

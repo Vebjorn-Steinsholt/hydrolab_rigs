@@ -1,15 +1,17 @@
 [Unit]
 Description=Oscillator on %i's Pi (oscillator.launch.py)
 Wants=network-online.target
-After=network-online.target
+Requires=soft_stop@%i.service
+After=network-online.target soft_stop@%i.service
 
 [Service]
+RuntimeDirectory=oscillator-%i
 Type=exec
 User=%i
 WorkingDirectory=/home/%i
 Environment=RIG=oscillator PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
 EnvironmentFile=/etc/default/oscillator
-ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh wavemaker@%i
+ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh oscillator %i
 ExecStart=/home/%i/ros_ws/src/hydrolab_rigs/rpi/run.sh
 ExecStop=/home/%i/ros_ws/src/hydrolab_rigs/rpi/stop.sh
 

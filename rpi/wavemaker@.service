@@ -1,7 +1,8 @@
 [Unit]
 Description=Wavemaker %i (lab.launch.py)
 Wants=network-online.target
-After=network-online.target
+Requires=soft_stop@%i.service
+After=network-online.target soft_stop@%i.service
 
 [Service]
 Type=exec
@@ -9,7 +10,7 @@ User=%i
 WorkingDirectory=/home/%i
 Environment=WAVEMAKER=%i PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
 EnvironmentFile=/etc/default/wavemaker
-ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh oscillator@%i
+ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh wavemaker %i
 ExecStart=/home/%i/ros_ws/src/hydrolab_rigs/rpi/run.sh
 ExecStop=/home/%i/ros_ws/src/hydrolab_rigs/rpi/stop.sh
 

@@ -4,18 +4,24 @@ set -eo pipefail
 # Refuse domain 0: anyone on the network could command the rig
 [[ -n "$ROS_DOMAIN_ID" && "$ROS_DOMAIN_ID" != 0 ]] || { echo "set ROS_DOMAIN_ID" >&2; exit 1; }
 
+#Which oscillator runs, for refuse_if_busy.sh and stop.sh (the env file can change meanwhile).
+# Before sourcing ROS (about 0.5 s), so the wavemaker's unit finds it as soon as this unit is active.
+if [[ ${RIG:-wavemaker} == oscillator && -n "$RUNTIME_DIRECTORY" ]]; then
+  echo "${OSCILLATOR:-sloshing}" > "$RUNTIME_DIRECTORY/oscillator"
+fi
+
 source /opt/ros/jazzy/setup.bash
 source "$HOME/ros_ws/install/setup.bash"
 
 case "${RIG:-wavemaker}" in
   wavemaker)
     launch=(wavemaker_bringup lab.launch.py)
-    args=(wavemaker:="$WAVEMAKER" port:="${PORT:-8080}")
+    args=(wavemaker:="$WAVEMAKER" port:="${PORT:-8080}" soft_stop:=false)
     [[ -n "$WATER_DEPTH" ]] && args+=(water_depth:="$WATER_DEPTH")
     ;;
   oscillator)
     launch=(oscillator_bringup oscillator.launch.py)
-    args=(port:="${PORT:-8080}" oscillator:="${OSCILLATOR:-sloshing}")
+    args=(port:="${PORT:-8081}" oscillator:="${OSCILLATOR:-sloshing}" soft_stop:=false)
     ;;
   *) echo "RIG must be wavemaker or oscillator, not '$RIG'" >&2; exit 1 ;;
 esac

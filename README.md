@@ -334,7 +334,7 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 A second Rexroth IndraDrive (rotary motor with linear scaling, 20 mm/rev) moves a slide up and
 down. It is daisy-chained behind the ladertanken wavemaker's drive on the ladertanken MGate:
 PROFIBUS address 3, gateway registers 7 (inputs) and 6 (outputs); the wavemaker keeps address 2
-and registers 0 / 0. Only one of the two rigs runs at a time. The decisions and
+and registers 0 / 0. The two rigs can run at the same time (one soft stop button stops both). The decisions and
 code plan are in [oscillator_sketch.md](oscillator_sketch.md); the drive, the commissioning
 steps and the log are in [COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken).
 
@@ -357,11 +357,11 @@ sudo systemctl stop oscillator@ladertanken      # stops the motion, drive off, b
 By hand: `ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical` (default
 `sloshing`). The nodes run in `/oscillators/vertical`.
 
-**Switching between the wavemaker and the oscillator:** stop the running service, then start
-the other ([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken), *Switching
-drives*). Both drives stay connected; each yaml addresses only its own drive's block.
+**Running it next to the wavemaker:** start both services, in either order
+([rpi/README.md](rpi/README.md#oscillator)). Both drives stay connected; each yaml addresses
+only its own drive's block. The sloshing oscillator, by contrast, runs only alone.
 
-**Running:** the web page (`http://ladertanken-rpi.local:8080/`): *height* is the stroke, peak to
+**Running:** the web page (`http://ladertanken-rpi.local:8081/`): *height* is the stroke, peak to
 peak, in metres, around mid-travel; + is up. **Stop** cancels the wave and the slide holds where it
 is, drive enabled; **Return to upright** brings it back to mid-travel. Motion files are made with
 `generate_oscillations` ([Generating oscillator motion files](#generating-oscillator-motion-files))

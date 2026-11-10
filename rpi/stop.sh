@@ -11,8 +11,10 @@ source /opt/ros/jazzy/setup.bash
 source "$HOME/ros_ws/install/setup.bash"
 
 case "${RIG:-wavemaker}" in
-    oscillator) namespace="/oscillators/${OSCILLATOR:-sloshing}" ;;
-  *)          namespace="/wavemakers/$WAVEMAKER" ;;
+  oscillator)
+    running="$(cat "$RUNTIME_DIRECTORY/oscillator" 2>/dev/null || echo "${OSCILLATOR:-sloshing}")"
+    namespace="/oscillators/$running" ;;
+  *) namespace="/wavemakers/$WAVEMAKER" ;;
 esac
 
 # ros2 service call has no timeout; without one it waits forever for the service.

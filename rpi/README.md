@@ -1,9 +1,10 @@
 # Running a lab Pi as a service
 
-`wavemaker@.service` runs `lab.launch.py` (controller, bridge, lifecycle manager, soft stop and
-web page) under systemd; on the ladertanken Pi, `oscillator@.service` runs
-`oscillator.launch.py` the same way, for the sloshing or the vertical oscillator (see
-[Oscillator](#oscillator)). Unlike a launch in an SSH session, it keeps running when the connection
+`wavemaker@.service` runs `lab.launch.py` (controller, bridge, lifecycle manager and web page)
+under systemd; on the ladertanken Pi, `oscillator@.service` runs `oscillator.launch.py` the same
+way, for the sloshing or the vertical oscillator (see [Oscillator](#oscillator)). The soft stop
+button has a unit of its own, `soft_stop@.service`, which the rig units start and which serves
+every rig running on the Pi. Unlike a launch in an SSH session, it keeps running when the connection
 drops, logs to the journal, and is started and stopped the same way on every Pi.
 
 It is a template unit: the part after `@` is the wavemaker, which is also the Pi's user
@@ -13,9 +14,11 @@ It is a template unit: the part after `@` is the wavemaker, which is also the Pi
 |---|---|
 | `wavemaker@.service` | The unit. Installed as `/etc/systemd/system/wavemaker@.service`. |
 | `oscillator@.service` | The oscillator's unit (ladertanken Pi only). Installed next to the wavemaker's. |
-| `run.sh` | `ExecStart`: sources ROS and the workspace, then `exec`s `lab.launch.py`, or `oscillator.launch.py` when the unit sets `RIG=oscillator`. |
+| `soft_stop@.service` | The soft stop button (GPIO17), started by the rig units (`Requires=`) and stopped when the last of them stops. Installed next to them. |
+| `run.sh` | `ExecStart`: sources ROS and the workspace, then `exec`s `lab.launch.py`, or `oscillator.launch.py` when the unit sets `RIG=oscillator`, both with `soft_stop:=false`. For the oscillator it first writes which one runs to `/run/oscillator-<user>/oscillator`. |
 | `stop.sh` | `ExecStop`: asks the lifecycle manager to shut the nodes down before the launch is stopped. |
-| `refuse_if_busy.sh` | `ExecStartPre` of both units: refuses to start while the other rig's service runs or the web port is in use (for example a launch by hand). |
+| `refuse_if_busy.sh` | `ExecStartPre` of both rig units: refuses the combinations that cannot run together (the sloshing oscillator next to the wavemaker), and a start while the unit's own web port is in use (for example a launch by hand). |
+| `soft_stop.sh` | `ExecStart` of `soft_stop@`: one soft stop node that publishes to every controller that can run on the Pi. |
 | `99-linmot-bridge.rules` | udev rule for the oscillator's Arduino: `/dev/linmot_bridge`, and ModemManager kept off it. |
 
 > **The service never starts at boot.** The unit has no `[Install]` section, so it cannot be
@@ -26,22 +29,22 @@ It is a template unit: the part after `@` is the wavemaker, which is also the Pi
 
 Before you start, as the wavemaker user:
 
-- The workspace is built (see *Build* in the top-level README), and `rpi/run.sh` and `rpi/stop.sh`
-  are executable (`ls -l rpi/*.sh` shows `-rwxr-xr-x`).
+- The workspace is built (see *Build* in the top-level README), and the scripts in `rpi/` are
+  executable (`ls -l rpi/*.sh` shows `-rwxr-xr-x` for all four).
 - The user is in the `gpio` group (`id` lists `gpio`); the soft stop node needs it.
 - `python3-matplotlib` is installed (`sudo apt install python3-matplotlib`); `generate_waves` needs
   it for its plot.
 - No `lab.launch.py` is running by hand. A second copy would clash on port 8080 and GPIO17.
 
-Install the unit:
+Install the units:
 
 ```bash
-sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/wavemaker@.service /etc/systemd/system/
+sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/{wavemaker,soft_stop}@.service /etc/systemd/system/
 sudo systemctl daemon-reload
-systemd-analyze verify wavemaker@ladertanken.service     # no output = OK
+systemd-analyze verify wavemaker@ladertanken.service soft_stop@ladertanken.service   # no output = OK
 ```
 
-The unit sets `WorkingDirectory=/home/%i` because a service otherwise starts in `/`, which the user
+The units set `WorkingDirectory=/home/%i` because a service otherwise starts in `/`, which the user
 cannot write to. lgpio, which the soft stop node uses for GPIO on the Pi 5, creates small files in
 the working directory; without a writable one, opening GPIO17 fails and the soft stop stays engaged.
 
@@ -69,17 +72,19 @@ To start and stop without a password, add a sudoers rule with
 ladertanken ALL=(root) NOPASSWD: /usr/bin/systemctl start wavemaker@ladertanken, /usr/bin/systemctl stop wavemaker@ladertanken
 ```
 
-`sudo -l` should list it. Then start the service once and check the journal (see *Use*): it should
-show `Managed nodes are active`, `Soft stop connected` and, with the button at rest,
-`Soft stop released`.
+`sudo -l` should list it. The soft stop unit needs no rule: systemd starts it for the rig unit.
+Then start the service once and check the journals (see *Use*): the wavemaker's should show
+`Managed nodes are active` and `Soft stop connected`; the soft stop's
+(`journalctl -u soft_stop@ladertanken`), with the button at rest, `Soft stop released`.
 
 ## Update
 
 After a `git pull`:
 
 - **Code changed** (anything outside `rpi/`): `cd ~/ros_ws && colcon build`.
-- **`wavemaker@.service` changed:** copy it again and run `sudo systemctl daemon-reload`.
-- **`run.sh` or `stop.sh` changed:** nothing to do; the unit runs them from the repository.
+- **A unit file changed** (`rpi/*.service`): copy the installed ones again and run
+  `sudo systemctl daemon-reload`.
+- **A script changed** (`rpi/*.sh`): nothing to do; the units run them from the repository.
 
 Then stop and start the service; a running service keeps the old code.
 
@@ -115,6 +120,9 @@ journalctl -u wavemaker@ladertanken -f         # follow the log; -b for this boo
 
 Type the commands as shown; the sudoers rule matches them exactly.
 
+`soft_stop@ladertanken` starts with the first rig and stops after the last one; it is never
+started or stopped by hand. Its log: `journalctl -u soft_stop@ladertanken -f`.
+
 ## How it stops
 
 `systemctl stop`:
@@ -127,6 +135,11 @@ Type the commands as shown; the sudoers rule matches them exactly.
    it when it receives SIGINT.
 3. `ros2 launch` escalates to SIGTERM after 20 s (`run.sh` sets `sigterm_timeout`), and systemd
    kills whatever is left after `TimeoutStopSec`.
+
+The soft stop unit stops by itself once no rig unit runs (`StopWhenUnneeded=yes`). The other way
+round, if the soft stop unit stops or dies, systemd stops every rig unit with it (`Requires=`);
+before that, each controller already treats the missing messages as stopped after 0.2 s
+(`soft_stop_timeout_s`).
 
 **Idle auto-stop.** After 2 h without motion (a wave, a `play_dat` goal or a return to
 upright), the web server does step 1 itself and exits,
@@ -150,17 +163,19 @@ seconds, found 2026-10-26). Check the journal, fix the cause, then stop and star
 run instead (`-o cat` keeps the lines short):
 
 ```bash
-journalctl -u wavemaker@ladertanken -b --no-pager -o cat | grep -E "ERROR|WARN|died|exception|Soft stop"
+journalctl -u wavemaker@ladertanken -u soft_stop@ladertanken -b --no-pager -o cat | grep -E "ERROR|WARN|died|exception|Soft stop"
 ```
 
 | Symptom | Cause |
 |---|---|
 | Fails at once with `set ROS_DOMAIN_ID` | `/etc/default/wavemaker` missing, or `ROS_DOMAIN_ID` empty or 0. |
-| `Soft stop released` never appears, and the button changes nothing | `soft_stop` could not open GPIO17 (`Cannot open GPIO17` in the journal): check `WorkingDirectory=` in the installed unit and the `gpio` group. If GPIO is fine, the button is pressed in. |
+| `Soft stop released` never appears, and the button changes nothing | `soft_stop` could not open GPIO17 (`Cannot open GPIO17` in `journalctl -u soft_stop@ladertanken`): check `WorkingDirectory=` in the installed `soft_stop@.service` and the `gpio` group. If GPIO is fine, the button is pressed in. |
+| The soft stop is released, but one rig still says `SOFT_STOP` or `No Soft stop message received` | That rig's env file has another `ROS_DOMAIN_ID`: `soft_stop@` uses the one in `/etc/default/wavemaker`. Make both the same. |
+| Start fails with `Unit soft_stop@ladertanken.service not found` | `soft_stop@.service` is not installed: see *Install*. |
 | `ros2` commands on another computer do not see the wavemaker | That computer uses another ROS domain or another DDS (`RMW_IMPLEMENTATION`). The Pi uses the default, Fast DDS. |
 | `status` shows `failed` after a stop | Check the journal around the stop for `ERROR` lines. |
-| Start fails with `… is running; stop it first` | The other rig on this Pi (wavemaker or oscillator) runs. Stop it with the command shown. |
-| Start fails with `port 8080 is in use` | Something else serves the web port, usually a `ros2 launch` started by hand. Stop it first. |
+| Start fails with `… only the vertical oscillator can run with …` | The sloshing oscillator and the wavemaker cannot run together: stop the one that runs first. Also shown for a moment while the oscillator unit is still starting (`runs 'unknown'`); try again a few seconds later. |
+| Start fails with `port 8080 is in use` (or `8081`) | Something else serves the unit's web port, usually a `ros2 launch` started by hand. Stop it first. |
 
 ## Rig test
 
@@ -459,9 +474,15 @@ Two oscillators run on the ladertanken Pi as `oscillator@ladertanken`, user `lad
 
 `OSCILLATOR=` in `/etc/default/oscillator` picks one (`run.sh` passes it to the launch as
 `oscillator:=`; empty or missing = `sloshing`), and the nodes run in `/oscillators/<name>`. To
-switch, edit that line, then stop and start the unit. The unit shares the web port, the soft stop
-button on GPIO17 and the ROS domain with the ladertanken wavemaker, so only one rig runs: each
-unit's `ExecStartPre` (`refuse_if_busy.sh`) refuses to start while the other runs.
+switch, edit that line, then stop and start the unit. Its web page is on port 8081, the
+wavemaker's on 8080.
+
+Which rigs run together:
+- **The vertical oscillator and the wavemaker:** yes, in either order. One soft stop button stops
+  both.
+- **The sloshing oscillator:** only alone. Each unit's `ExecStartPre` (`refuse_if_busy.sh`)
+  refuses the start in both directions.
+- **Sloshing and vertical:** never; they are the same unit.
 
 > Like the wavemaker's, this unit never starts at boot. Starting it switches the drive on. The
 > LinMot also homes (moves to its home stop, about 20 s) if its drive was powered off; the vertical
@@ -478,20 +499,20 @@ sudo udevadm control --reload-rules && sudo udevadm trigger && sudo udevadm sett
 ls -l /dev/linmot_bridge                # → /dev/linmot_bridge -> ttyACM0
 id | grep -o dialout                    # → dialout (else: sudo usermod -aG dialout ladertanken, log in again)
 
-# Both units (the wavemaker's has the ExecStartPre check too)
-sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/oscillator@.service \
-        ~/ros_ws/src/hydrolab_rigs/rpi/wavemaker@.service /etc/systemd/system/
+# All three units (the wavemaker's has the ExecStartPre check too)
+sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/{oscillator,wavemaker,soft_stop}@.service /etc/systemd/system/
 sudo systemctl daemon-reload
-systemd-analyze verify oscillator@ladertanken.service wavemaker@ladertanken.service   # no output = OK
+systemd-analyze verify {oscillator,wavemaker,soft_stop}@ladertanken.service   # no output = OK
 ```
 
-Create `/etc/default/oscillator` with `sudoedit /etc/default/oscillator`, with the same domain as
-`/etc/default/wavemaker`:
+Create `/etc/default/oscillator` with `sudoedit /etc/default/oscillator`, with **the same domain
+as `/etc/default/wavemaker`** (the soft stop unit uses the wavemaker's; on another domain the
+oscillator never hears the button and stays stopped):
 
 ```bash
 # The lab's ROS domain. Required, and not 0.
 ROS_DOMAIN_ID=1
-PORT=8080
+PORT=8081
 # Which oscillator: sloshing (default) or vertical. Nothing after the value.
 OSCILLATOR=vertical
 ```
@@ -502,8 +523,8 @@ Extend the sudoers rule (`sudo visudo -f /etc/sudoers.d/wavemaker`) to one line:
 ladertanken ALL=(root) NOPASSWD: /usr/bin/systemctl start wavemaker@ladertanken, /usr/bin/systemctl stop wavemaker@ladertanken, /usr/bin/systemctl start oscillator@ladertanken, /usr/bin/systemctl stop oscillator@ladertanken
 ```
 
-`sudo -l` should list all four. The rule matches each command exactly, so stop one unit per
-command: `sudo systemctl stop wavemaker@ladertanken oscillator@ladertanken` asks for the
+`sudo -l` should list all four; the soft stop unit needs none. The rule matches each command
+exactly, so stop one unit per command: `sudo systemctl stop wavemaker@ladertanken oscillator@ladertanken` asks for the
 password.
 
 ### Use
@@ -514,7 +535,7 @@ sudo systemctl stop oscillator@ladertanken      # stops the motion and switches 
 journalctl -u oscillator@ladertanken -f -o cat
 ```
 
-The page is at `http://ladertanken-rpi.local:8080/`. The height field is the stroke, peak to
+The page is at `http://ladertanken-rpi.local:8081/`. The height field is the stroke, peak to
 peak, in metres: `0.01` moves the sloshing slide between 95 and 105 mm, the vertical slide ±5 mm
 around mid-travel. On the vertical oscillator, Stop holds the slide where it is; *Return to
 upright* brings it to mid-travel.
@@ -534,9 +555,28 @@ drive off when the controller died (COMMISSIONING item 5).
 2. `sudo systemctl stop oscillator@ladertanken` mid-wave: the slide stops, the journal shows
    `Managed nodes have been shut down` and every process `finished cleanly`.
 3. With the oscillator running, `sudo systemctl start wavemaker@ladertanken` fails, and its
-   journal says `oscillator@ladertanken is running; stop it first`. The same the other way round.
-4. With `ros2 launch oscillator_bringup oscillator.launch.py` running by hand, both starts fail
-   with `port 8080 is in use`.
-5. After a reboot, both units are `inactive (dead)`.
+   journal says `oscillator@ladertanken runs 'sloshing'; only the vertical oscillator can run
+   with the wavemaker`. The other way round: `wavemaker@ladertanken is running; only the vertical
+   oscillator can run with it`.
+4. With `ros2 launch oscillator_bringup oscillator.launch.py` running by hand, the oscillator's
+   start fails with `port 8081 is in use`.
+5. After a reboot, all three units are `inactive (dead)`.
 
-Passed 2026-10-23.
+Passed 2026-10-23, with the messages of the time (one rig at a time, port 8080 for both).
+
+### Rig test (wavemaker and vertical together)
+
+`OSCILLATOR=vertical`, both drives' mains on, E-stop within reach.
+
+1. `sudo systemctl start wavemaker@ladertanken`, then `sudo systemctl start oscillator@ladertanken`:
+   both run, `systemctl is-active soft_stop@ladertanken` says `active`, and the journal of
+   `soft_stop@` lists the three topics. Pages on 8080 and 8081.
+2. Stop both, then start them the other way round: both run.
+3. Press the soft stop during a wave on each page: both rigs stop and both pages show
+   `SOFT_STOP`. Release: both accept a new wave.
+4. Stop the wavemaker: the oscillator keeps running and the button still stops it.
+5. Stop the oscillator: `soft_stop@ladertanken` is `inactive` a moment later.
+6. Both running, `sudo systemctl stop soft_stop@ladertanken` (asks for the password; not in the
+   sudoers rule): both rigs stop.
+7. `OSCILLATOR=sloshing`: refused next to the running wavemaker, and the wavemaker refused next to
+   it (see *Rig test (sloshing)*, step 3).

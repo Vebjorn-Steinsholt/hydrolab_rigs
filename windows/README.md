@@ -5,10 +5,13 @@ same `systemctl` commands as [rpi/README.md](../rpi/README.md), *Use*.
 
 | File | Does |
 |---|---|
-| `start_wavemaker.bat` | Stops the oscillator if it runs, starts `wavemaker@ladertanken`, opens the page. |
-| `start_oscillator.bat` | Stops the wavemaker if it runs, starts `oscillator@ladertanken`, opens the page. |
+| `start_wavemaker.bat` | Starts `wavemaker@ladertanken` and opens its page (port 8080). A running vertical oscillator keeps running. |
+| `start_oscillator.bat` | Starts `oscillator@ladertanken` and opens its page (port 8081). A running wavemaker keeps running. |
 | `stop_rigs.bat` | Stops both; each disables its drive. The Pi stays on. |
 | `_rig.bat` | Shared by the three; the Pi's user and hostname are set at its top. |
+
+The wavemaker and the vertical oscillator can run together; the sloshing oscillator only alone.
+The Pi refuses a start that is not allowed and the window shows why; run `stop_rigs.bat` first.
 
 Stopping a rig waits for its ordered shutdown (up to 45 s); the window stays open until a key is
 pressed so the result can be read.
@@ -43,5 +46,6 @@ Copy the `windows` folder to the lab computer, or put shortcuts to the `.bat` fi
 |---|---|
 | `Could not log in ... over ssh` | Pi off or not on the network, the key is not on the Pi, or the host key changed (reinstalled Pi: `ssh-keygen -R ladertanken-rpi.local`, then the setup again). If `ladertanken-rpi.local` does not resolve, set `PI_HOST` in `_rig.bat` to the Pi's IP address. |
 | `sudo: a password is required` | The sudoers rule is missing or does not list that command. |
-| `... is running; stop it first` | The other rig did not stop, or a launch by hand holds port 8080 (`refuse_if_busy.sh`). |
+| `... only the vertical oscillator can run with ...` | The sloshing oscillator and the wavemaker cannot run together (`refuse_if_busy.sh`): `stop_rigs.bat`, then start again. |
+| `port 8080 is in use` (or `8081`) | A launch by hand on the Pi holds the rig's web port. Stop it there. |
 | Start failed | `journalctl -u wavemaker@ladertanken -n 50` (or `oscillator@`) on the Pi. |

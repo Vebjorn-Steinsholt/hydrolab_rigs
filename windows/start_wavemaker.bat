@@ -1,3 +1,3 @@
 @echo off
-rem Stops the oscillator if it runs, starts the wavemaker and opens its page.
+rem Starts the wavemaker (a running vertical oscillator keeps running) and opens its page.
 call "%~dp0_rig.bat" start wavemaker

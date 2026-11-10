@@ -19,6 +19,8 @@ class SoftStop(Node):
         self.internal_pull_up = self.declare_parameter('internal_pull_up', True).value
         # True: internal pull-up (default, button between pin and GND)
         # False: external pull-up (more noise-resistant on long cables)
+        self.topics = self.declare_parameter(
+            'topics', ['soft_stop']).get_parameter_value().string_array_value
 
         self.stopped = True
         self.high_since = None
@@ -28,7 +30,8 @@ class SoftStop(Node):
             if self.internal_pull_up:
                 self.button = Button(self.pin, pull_up=True)
             else:
-                self.button = Button(self.pin, pull_up=None, active_state=True)
+                self.button = Button(self.pin, active_state=True,
+                                     pull_up=None)  # pyright: ignore[reportArgumentType]
         except Exception as error:
             self.button = None
             self.get_logger().error(
@@ -38,15 +41,17 @@ class SoftStop(Node):
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL
         )
-        self.publisher = self.create_publisher(Bool, 'soft_stop', qos)
+        # Not self.publishers: rclpy's Node already has that name.
+        self.stop_publishers = [self.create_publisher(Bool, t, qos) for t in self.topics]
         self.timer = self.create_timer(TICK_S, self.tick)
-        self.get_logger().info(f'Soft stop on GPIO{self.pin}, starting stopped')
+        self.get_logger().info(
+            f"Soft stop on GPIO{self.pin} to {', '.join(self.topics)}, starting stopped")
 
     def pin_high(self):
         if self.button is None:
             return True
         try:
-            pressed = self.button.is_pressed
+            pressed = self.button.is_pressed  # pyright: ignore[reportAttributeAccessIssue]
 
         except Exception:
             return True
@@ -72,7 +77,9 @@ class SoftStop(Node):
                 self.stopped = False
                 self.get_logger().info('Soft stop released: motion can start again')
 
-        self.publisher.publish(Bool(data=self.stopped))
+        msg = Bool(data=self.stopped)
+        for publisher in self.stop_publishers:
+            publisher.publish(msg)
 
 
 def main(args=None):
