@@ -334,8 +334,9 @@ ros2 launch rig_web demo.launch.py idle_timeout_s:=120   # try the idle auto-sto
 A second Rexroth IndraDrive (rotary motor with linear scaling, 20 mm/rev) moves a slide up and
 down. It is daisy-chained behind the ladertanken wavemaker's drive on the ladertanken MGate:
 PROFIBUS address 3, gateway registers 7 (inputs) and 6 (outputs); the wavemaker keeps address 2
-and registers 0 / 0. Only one of the two rigs runs at a time. The plan, decisions and
-commissioning log are in [oscillator_sketch.md](oscillator_sketch.md).
+and registers 0 / 0. Only one of the two rigs runs at a time. The decisions and
+code plan are in [oscillator_sketch.md](oscillator_sketch.md); the drive, the commissioning
+steps and the log are in [COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken).
 
 **Configuration:** the `vertical` blocks in
 [`oscillator_bringup/config/oscillator.yaml`](oscillator_bringup/config/oscillator.yaml)
