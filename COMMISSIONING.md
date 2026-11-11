@@ -122,8 +122,10 @@ together** (since 2026-11-11, TODO 47); the sloshing oscillator only alone.
    stops every rig that runs.
 4. The controller's `Drive status` line in the journal is the position check: `OM AF`, the
    position near where the slide or flap stands.
-5. **A wavemaker start after a stop fails with F2074** while the flap rests at about +194°
-   (TODO 48): clear it in IndraWorks, disconnect, start again, then *Return to upright*.
+5. **After a stop the wavemaker drive stays in operating mode without torque** (A0012, `Ab`):
+   the MGate's fault value for slave 2 is control word `0x0002` (since 2026-11-11, TODO 48). The
+   flap then falls to its rest (about +194-211°); *Return to upright* after the start. With the
+   old fault value (all `00`) every start after a stop failed with F2074.
 6. **`mgate_example` without options is slave 2 (the wavemaker)**; the oscillator is
    `--input-base 7 --output-base 6 --profibus-address 3`. In parameter mode it shows
    `SW=0x0888 PM --` with everything 0 (the drive sends no actual values). Not while a rig runs.
@@ -162,6 +164,9 @@ A wavemaker drive powered off on the chain shows F4009; clear it before starting
   20 mm (it depends on the period, not on the jerk limit S-0-0193). Stop holds in place; Return
   to upright works.
 - Test 1, kill test with both rigs running (2026-11-10): the MGate's fault timer runs per slave.
+- Wavemaker fault value `0x0002` (2026-11-11, was all `00`): after a stop or a `kill -9` the drive
+  goes straight to A0012 (operating mode, no torque) instead of parameter mode, so a start after
+  the flap fell to its rest no longer trips F2074 (checked from 0° to 211°).
 
 ### Open
 
@@ -181,8 +186,9 @@ A wavemaker drive powered off on the chain shows F4009; clear it before starting
   also treats it as Fail_Safe? Add the newer GSD set to `resources/profibus_gsd/`?
 - [ ] The soft stop on GPIO17: the vertical rig uses it (released at every start, 2026-11-09). Is
   the button within reach of the vertical rig, or only at the wavemaker?
-- [ ] Export the phase 2 MGate configuration (slave 2 `80 00 08`, slave 3 `C0 00 08`, both 500 ms
-  timeouts) to the stick as a backup.
+- [ ] Export the MGate configuration to the stick as a backup: slave 2 `80 00 08` with output
+  fault value `00 02 00 ...` (control word `0x0002`), slave 3 `C0 00 08`, both 500 ms timeouts.
+  A slave added again loses these.
 
 ### The oscillator drive (read 2026-11-06)
 
