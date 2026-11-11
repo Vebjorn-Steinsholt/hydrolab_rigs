@@ -56,7 +56,15 @@ ROS_DOMAIN_ID=1
 PORT=8080
 # Water depth in m. Empty uses wavemakers.yaml.
 WATER_DEPTH=
+# The MGate's address (driver_address in the yaml). Required.
+MGATE_HOST=192.168.1.70
 ```
+
+Before each start, the unit sets the route to `MGATE_HOST` to resend a lost packet after 20 ms
+instead of Linux's 200 ms minimum (`rto_min`, as root for this one command). With two rigs on
+one MGate the gateway drops a frame now and then, and a 200 ms wait stalled the gateway cycle up
+to 415 ms, close to the 500 ms fault timeout (COMMISSIONING.md, *Test 2*). Check after a start:
+`ip route get 192.168.1.70` shows `rto_min 20ms`.
 
 systemd only treats lines starting with `#` as comments; a comment after a value becomes part of
 the value.
@@ -184,6 +192,7 @@ journalctl -u wavemaker@ladertanken -u soft_stop@ladertanken -b --no-pager -o ca
 | Symptom | Cause |
 |---|---|
 | Fails at once with `set ROS_DOMAIN_ID` | `/etc/default/wavemaker` missing, or `ROS_DOMAIN_ID` empty or 0. |
+| Fails at once with `set MGATE_HOST` | The env file has no `MGATE_HOST=` line (see *Install*). |
 | `Soft stop released` never appears, and the button changes nothing | `soft_stop` could not open GPIO17 (`Cannot open GPIO17` in `journalctl -u soft_stop@ladertanken`): check `WorkingDirectory=` in the installed `soft_stop@.service` and the `gpio` group. If GPIO is fine, the button is pressed in. |
 | The soft stop is released, but one rig still says `SOFT_STOP` or `No Soft stop message received` | That rig's env file has another `ROS_DOMAIN_ID`: `soft_stop@` uses the one in `/etc/default/wavemaker`. Make both the same. |
 | Start fails with `Unit soft_stop@ladertanken.service not found` | `soft_stop@.service` is not installed: see *Install*. |
@@ -530,6 +539,8 @@ ROS_DOMAIN_ID=1
 PORT=8081
 # Which oscillator: sloshing (default) or vertical. Nothing after the value.
 OSCILLATOR=vertical
+# The same MGate as in /etc/default/wavemaker. Required.
+MGATE_HOST=192.168.1.70
 ```
 
 Extend the sudoers rule (`sudo visudo -f /etc/sudoers.d/wavemaker`) to one line:

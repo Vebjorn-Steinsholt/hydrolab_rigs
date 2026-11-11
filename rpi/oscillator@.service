@@ -11,6 +11,10 @@ User=%i
 WorkingDirectory=/home/%i
 Environment=RIG=oscillator PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
 EnvironmentFile=/etc/default/oscillator
+# Resend lost Modbus/TCP packets to the gateway after 20 ms instead of Linux's 200 ms minimum
+# (Test 2, 2026-11-11: two rigs on one MGate). Root for this command only.
+ExecStartPre=+/bin/sh -c '[ -n "${MGATE_HOST}" ] || { echo "set MGATE_HOST" >&2; exit 1; }; \
+  ip route replace "${MGATE_HOST}/32" $(ip -o route get "${MGATE_HOST}" | grep -o "dev [^ ]*") rto_min 20ms'
 ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh oscillator %i
 ExecStart=/home/%i/ros_ws/src/hydrolab_rigs/rpi/run.sh
 ExecStop=/home/%i/ros_ws/src/hydrolab_rigs/rpi/stop.sh

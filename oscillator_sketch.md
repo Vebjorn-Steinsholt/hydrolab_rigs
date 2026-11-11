@@ -24,7 +24,7 @@ be a few lines off.
 | # | File | Where | What | Done when | Left (2026-11-10) |
 |---|---|---|---|---|---|
 | T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Done 2026-11-11 |
-| T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Next |
+| T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Done in the repo 2026-11-11; on the Pi with T16 |
 | T16 | the ladertanken Pi: `/etc/default/oscillator`, `/etc/systemd/system/` | *T16: install on the Pi* | Port line, copy the units, build, the rig checks | The rig checks listed there | With T18 |
 | T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
 | T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example` | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
@@ -156,9 +156,10 @@ After T11-T15 are merged into the branch and Test 2 has passed. Everything here 
    ROS_DOMAIN_ID=1
    PORT=8081
    OSCILLATOR=vertical
+   MGATE_HOST=192.168.1.70
    ```
 
-   `/etc/default/wavemaker` is unchanged (8080 by default). `ROS_DOMAIN_ID` must be the same in
+   `/etc/default/wavemaker` gets one line, `MGATE_HOST=192.168.1.70` (T18); the rest is unchanged (8080 by default). `ROS_DOMAIN_ID` must be the same in
    both files: `soft_stop@` reads the wavemaker's, so an oscillator on another domain never hears
    the button and stays stopped.
 3. **Install the units:**
@@ -210,8 +211,8 @@ connection. Both rig units set it as root before they start (`+` runs one comman
 unit itself stays `User=%i`). The gateway's address goes in the env files, next to the other
 per-Pi settings.
 
-1. **`rpi/wavemaker@.service` and `rpi/oscillator@.service`**, before the `ExecStartPre` line
-   for `refuse_if_busy.sh`:
+1. **`rpi/wavemaker@.service` (before line 13) and `rpi/oscillator@.service` (before line 14)**,
+   that is, above the `ExecStartPre` line for `refuse_if_busy.sh`:
 
    ```ini
    # Resend lost Modbus/TCP packets to the gateway after 20 ms instead of Linux's 200 ms minimum
@@ -225,11 +226,13 @@ per-Pi settings.
    does not use the gateway, but the route does no harm.
 3. **Check** (PC): `systemd-analyze verify` on both units. On the Pi after T16: reboot, start a
    rig, then `ip route get 192.168.1.70` shows `rto_min 20ms`.
-4. **Claude, after:** `rpi/README.md` (the env line, the check), and a `test_refuse_if_busy.py`-
-   style test of the command with a stub `ip`.
+4. **Docs and test (Claude, done 2026-11-11):** `rpi/README.md` (the env line in both files, the
+   check, the `set MGATE_HOST` failure); `rig_controller/test/test_units_rto_min.py` runs the
+   line from both units with a stub `ip`.
 
-Already in place on the Pi for today: `sudo ip route add 192.168.1.70/32 dev eth0 rto_min 20ms`
-(gone at the next reboot).
+The setting made by hand on 2026-11-11 was lost at the reboot that day (WiFi off). By hand, until
+T18 is installed: `sudo ip route add 192.168.1.70/32 dev eth0 rto_min 20ms`, before the rigs
+start.
 
 ### Shared connection (not needed now)
 
