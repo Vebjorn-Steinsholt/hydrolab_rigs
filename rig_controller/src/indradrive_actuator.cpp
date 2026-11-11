@@ -155,6 +155,8 @@ bool IndraDriveActuator::start(const rclcpp::Logger & logger)
 {
   has_target_ = false;  // enable() parks the target on the current position
   mgate_driver_->start();
+  logger_ = logger;
+  slow_cycles_seen_ = 0;
   if (!mgate_driver_->wait_for_data(5000)) {
     mgate_driver_->stop();
     RCLCPP_ERROR(logger, "Failed to receive data from the drive within 5 seconds.");
@@ -235,7 +237,7 @@ bool IndraDriveActuator::write_setpoint(const ActuatorSetpoint & setpoint)
   if (!indradrive_) {
     return false;
   }
-
+  report_slow_cycles();
 // setpoint.velocity is the positioning-speed limit in position units per second (to_actuator_setpoint).
 // The drive wants a positive speed in velocity tag units; direction comes from the target position.
 // Clamped to max_velocity_rpm_: the controller's cap (max_velocity_mps) comes back here through
@@ -248,6 +250,24 @@ bool IndraDriveActuator::write_setpoint(const ActuatorSetpoint & setpoint)
   last_target_ = setpoint.position;
   has_target_ = true;
   return true;
+}
+
+// A slow gateway cycle delays the targets and the feedback; over 500 ms the MGate's fault
+// timeout switches the drive off (Test 2, 2026-11-11: up to 401 ms with both drives active).
+void IndraDriveActuator::report_slow_cycles()
+{
+  const auto stats = mgate_driver_->stats();
+  if (stats.slow_cycles == slow_cycles_seen_) {
+    return;  // nothing new since the last call
+  }
+  RCLCPP_WARN(
+    logger_,
+    "MGate cycle %lld ms (write %lld, inputs %lld, status %lld ms); %llu slow so far, "
+    "longest %lld ms",
+    stats.slow_cycle_us / 1000, stats.slow_write_us / 1000, stats.slow_input_us / 1000,
+    stats.slow_status_us / 1000, static_cast<unsigned long long>(stats.slow_cycles),
+    stats.max_cycle_us / 1000);
+  slow_cycles_seen_ = stats.slow_cycles;
 }
 
 int IndraDriveActuator::update_period_ms() const

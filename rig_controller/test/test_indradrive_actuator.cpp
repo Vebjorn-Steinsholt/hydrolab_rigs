@@ -1,7 +1,12 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdarg>
+#include <cstdio>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -10,9 +15,11 @@
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rcutils/logging.h>
 
 #include "fake_mgate.hpp"
 #include "indradrive_actuator.hpp"
+#include "mgate/mgate_driver.h"
 
 namespace
 {
@@ -450,4 +457,146 @@ TEST_F(IndraDriveActuatorTest, DaisyChainedDriveNotLiveRefusesToStart)
 
   EXPECT_FALSE(actuator.start(node->get_logger()));
   EXPECT_EQ(fake.other_slave_writes(), 0);
+}
+
+// ---------------------------------------------------------------- slow gateway cycles (T17)
+
+namespace
+{
+
+// MGateDriver on its own, laid out as FakeMGate expects, polling every 20 ms.
+mgate::GatewayConfig fake_gateway(int port)
+{
+  mgate::GatewayConfig cfg;
+  cfg.host = "127.0.0.1";
+  cfg.port = static_cast<std::uint16_t>(port);
+  cfg.input_base_reg = 0;
+  cfg.input_word_count = 7;
+  cfg.output_base_reg = 0;
+  cfg.output_word_count = 6;
+  cfg.status_base_reg = 768;
+  cfg.status_word_count = 9;
+  cfg.poll_interval_ms = 20;
+  cfg.write_only_dirty = false;
+  return cfg;
+}
+
+bool wait_until(const std::function<bool()> & predicate, std::chrono::milliseconds timeout)
+{
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return predicate();
+}
+
+constexpr auto kStall = std::chrono::milliseconds(150);  // over slow_cycle_ms (100)
+constexpr long long kStallUs = 140000;                   // kStall, less scheduling slack
+constexpr long long kFastUs = 50000;                     // a request that was not delayed
+
+// rcutils output handler that keeps the formatted "MGate cycle" warnings.
+std::mutex g_log_mtx;
+std::vector<std::string> g_slow_logs;
+
+void capture_slow_logs(
+  const rcutils_log_location_t *, int severity, const char *, rcutils_time_point_value_t,
+  const char * format, va_list * args)
+{
+  char buffer[512];
+  va_list copy;
+  va_copy(copy, *args);
+  std::vsnprintf(buffer, sizeof(buffer), format, copy);
+  va_end(copy);
+  const std::string message(buffer);
+  if (severity == RCUTILS_LOG_SEVERITY_WARN && message.rfind("MGate cycle", 0) == 0) {
+    std::lock_guard<std::mutex> lk(g_log_mtx);
+    g_slow_logs.push_back(message);
+  }
+}
+
+}  // namespace
+
+TEST_F(IndraDriveActuatorTest, NoSlowCyclesWithoutAStall)
+{
+  FakeMGate fake;
+  mgate::MGateDriver driver(fake_gateway(fake.port()));
+  driver.start();
+  ASSERT_TRUE(wait_until([&] {return driver.stats().cycles >= 15;}, std::chrono::seconds(3)));
+  const auto stats = driver.stats();
+  driver.stop();
+
+  EXPECT_EQ(stats.slow_cycles, 0u);
+  EXPECT_GT(stats.max_cycle_us, 0);
+  EXPECT_LT(stats.max_cycle_us, 100000);
+}
+
+// Each of the three requests delayed in turn: the slow cycle is counted, and only the delayed
+// request's time is long.
+TEST_F(IndraDriveActuatorTest, SlowCycleShowsWhichRequestStalled)
+{
+  using Request = FakeMGate::Request;
+  for (const auto request : {Request::Write, Request::Inputs, Request::Status}) {
+    SCOPED_TRACE(static_cast<int>(request));
+    FakeMGate fake;
+    mgate::MGateDriver driver(fake_gateway(fake.port()));
+    driver.start();
+    ASSERT_TRUE(wait_until([&] {return driver.stats().cycles >= 5;}, std::chrono::seconds(3)));
+
+    fake.delay_next(request, kStall);
+    ASSERT_TRUE(wait_until([&] {return driver.stats().slow_cycles >= 1;}, std::chrono::seconds(2)));
+    // A few more cycles: a second slow one would show up here.
+    const auto cycles = driver.stats().cycles;
+    ASSERT_TRUE(wait_until([&] {
+        return driver.stats().cycles >= cycles + 5;
+      }, std::chrono::seconds(2)));
+    const auto stats = driver.stats();
+    driver.stop();
+
+    EXPECT_EQ(stats.slow_cycles, 1u);
+    EXPECT_GE(stats.slow_cycle_us, kStallUs);
+    EXPECT_GE(stats.max_cycle_us, stats.slow_cycle_us);
+    EXPECT_EQ(stats.slow_write_us >= kStallUs, request == Request::Write);
+    EXPECT_EQ(stats.slow_input_us >= kStallUs, request == Request::Inputs);
+    EXPECT_EQ(stats.slow_status_us >= kStallUs, request == Request::Status);
+    EXPECT_LT(
+      std::min({stats.slow_write_us, stats.slow_input_us, stats.slow_status_us}), kFastUs);
+  }
+}
+
+// write_setpoint() logs each new slow cycle once, with the stalled request's time.
+TEST_F(IndraDriveActuatorTest, WriteSetpointLogsEachSlowCycleOnce)
+{
+  FakeMGate fake;
+  auto node = actuator_node("actuator_slow_cycle_test", actuator_options(fake.port()));
+  rig_controller::IndraDriveActuator actuator(*node);
+  ASSERT_TRUE(actuator.start(node->get_logger()));
+  {
+    std::lock_guard<std::mutex> lk(g_log_mtx);
+    g_slow_logs.clear();
+  }
+  const auto previous_handler = rcutils_logging_get_output_handler();
+  rcutils_logging_set_output_handler(capture_slow_logs);
+
+  const auto setpoint = actuator.to_actuator_setpoint(0.25, 0.01, 0.0);
+  auto write_for = [&](std::chrono::milliseconds duration) {
+      const auto end = std::chrono::steady_clock::now() + duration;
+      while (std::chrono::steady_clock::now() < end) {
+        ASSERT_TRUE(actuator.write_setpoint(setpoint));
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+    };
+  write_for(std::chrono::milliseconds(300));  // no stall: nothing logged
+  fake.delay_next(FakeMGate::Request::Status, kStall);
+  write_for(std::chrono::milliseconds(800));  // one stall, many write_setpoint() calls after it
+
+  rcutils_logging_set_output_handler(previous_handler);
+  actuator.stop();
+
+  std::lock_guard<std::mutex> lk(g_log_mtx);
+  ASSERT_EQ(g_slow_logs.size(), 1u);
+  EXPECT_NE(g_slow_logs[0].find("; 1 slow so far"), std::string::npos) << g_slow_logs[0];
+  EXPECT_NE(g_slow_logs[0].find("status 1"), std::string::npos) << g_slow_logs[0];  // ~150 ms
 }

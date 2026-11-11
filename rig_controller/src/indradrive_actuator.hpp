@@ -48,6 +48,10 @@ private:
   // Last target accepted by move_to(); halt() holds here instead of using Drive Halt.
   std::atomic<double> last_target_{0.0};
   std::atomic<bool> has_target_{false};
+  // set in start(); report_slow_cycles() logs each new slow gatewat cycle.
+  rclcpp::Logger logger_{rclcpp::get_logger("indradrive_actuator")};
+  std::uint64_t slow_cycles_seen_{0};
+  void report_slow_cycles();
 };
 
 }  // namespace rig_controller

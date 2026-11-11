@@ -1,9 +1,9 @@
 """
-Tests for the soft_stop launch argument in lab.launch.py and oscillator.launch.py (T14), and the
-oscillator's web port default (T11).
+Tests for the soft_stop launch argument and the web port defaults of both launches.
 
-The launch descriptions are built and their conditions evaluated; nothing is started. Needs the
-workspace sourced (the launch files look up package share directories).
+lab.launch.py and oscillator.launch.py (T14, T11). The launch descriptions are built and their
+conditions evaluated; nothing is started. Needs the workspace sourced (the launch files look up
+package share directories).
 
     cd ~/ros_ws/src/hydrolab_rigs
     python3 -m pytest rig_controller/test/test_launch_soft_stop.py -v
@@ -15,7 +15,7 @@ import pathlib
 import pytest
 
 launch = pytest.importorskip('launch')
-from ament_index_python.packages import PackageNotFoundError  # noqa: E402
+from ament_index_python.packages import PackageNotFoundError  # noqa: E402, I100
 from launch.actions import DeclareLaunchArgument  # noqa: E402
 from launch_ros.actions import Node  # noqa: E402
 
@@ -41,7 +41,7 @@ def arguments(ld):
 
 
 def context(ld, **overrides):
-    """A launch context with every argument at its default, then the overrides."""
+    """Return a launch context with every argument at its default, then the overrides."""
     ctx = launch.LaunchContext()
     for name, arg in arguments(ld).items():
         if arg.default_value is not None:
@@ -51,7 +51,7 @@ def context(ld, **overrides):
 
 
 def started(ld, ctx):
-    """Executable name -> whether the node starts."""
+    """Return {executable name: whether the node starts}."""
     return {n.node_executable: (n.condition.evaluate(ctx) if n.condition else True)
             for n in ld.entities if isinstance(n, Node)}
 

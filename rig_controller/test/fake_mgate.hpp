@@ -39,6 +39,9 @@ public:
 
   static constexpr std::uint16_t kOtherSlaveWord = 0xBEEF;
 
+  // The three requests of one MGateDriver cycle, for delay_next().
+  enum class Request {Write, Inputs, Status};
+
   explicit FakeMGate(
     std::uint16_t input_base = 0, std::uint16_t output_base = 0, std::uint8_t live_list = 0x04)
   : in_base_(input_base), out_base_(output_base), live_list_(live_list),
@@ -121,6 +124,16 @@ public:
   {
     std::lock_guard<std::mutex> lk(mtx_);
     return other_slave_writes_;
+  }
+
+  // Holds the reply to the next `count` requests of this kind for `delay`, as a gateway stall
+  // (one TCP retransmission) would. Other requests are answered at once.
+  void delay_next(Request request, std::chrono::milliseconds delay, int count = 1)
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
+    delay_request_ = request;
+    delay_ = delay;
+    delays_left_ = count;
   }
 
   int input_reads() const
@@ -249,9 +262,17 @@ private:
       const std::uint8_t fc = pdu[0];
 
       std::vector<std::uint8_t> body;
+      std::chrono::milliseconds delay{0};
       {
         std::lock_guard<std::mutex> lk(mtx_);
         reply_locked(fc, pdu, length - 1, body);
+        if (delays_left_ > 0 && request_of(fc, be16(pdu + 1)) == delay_request_) {
+          --delays_left_;
+          delay = delay_;
+        }
+      }
+      if (delay.count() > 0) {
+        std::this_thread::sleep_for(delay);  // not under mtx_: the test keeps reading state
       }
 
       std::vector<std::uint8_t> reply(frame.begin(), frame.begin() + 4);  // transaction, protocol
@@ -333,6 +354,14 @@ private:
     }
   }
 
+  static Request request_of(std::uint8_t fc, std::uint16_t addr)
+  {
+    if (fc == 0x06 || fc == 0x10) {
+      return Request::Write;
+    }
+    return addr >= kStatusBase ? Request::Status : Request::Inputs;
+  }
+
   // Called with mtx_ held: counts the written registers below out_base_.
   void count_other_slave_writes(std::uint16_t addr, std::uint16_t count)
   {
@@ -359,6 +388,9 @@ private:
   bool frozen_{false};
   int input_reads_{0};
   int other_slave_writes_{0};
+  Request delay_request_{Request::Write};
+  std::chrono::milliseconds delay_{0};
+  int delays_left_{0};
 };
 
 }  // namespace rig_controller_test

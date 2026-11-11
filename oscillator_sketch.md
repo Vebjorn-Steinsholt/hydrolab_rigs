@@ -10,22 +10,20 @@ be a few lines off.
 
 ## Now
 
-1. **T11-T15, done in the repo 2026-11-10**
-   ([Code: wavemaker + vertical together](#code-wavemaker--vertical-together-todo-47-2-5-proposed-2026-11-10)).
-   They are needed whatever Test 2 shows.
-2. **Test 2 on the rig, 2026-11-11** (gateway load with both rigs,
-   [COMMISSIONING.md](COMMISSIONING.md#test-2-gateway-load-with-both-rigs-next)), with the Pi as
-   it is today (hand launch). If it fails, [If Test 2 fails](#if-test-2-fails) is added to the
-   controller before both rigs run together.
-3. **T16 on the Pi**, after T11-T15 and a passed Test 2: `/etc/default/oscillator`, installing
-   the units, the rig checks ([T16](#t16-install-on-the-pi)).
-4. **T5's last check** when the sloshing rig is connected.
-5. T10 is optional and not needed now.
+1. **T11-T15 done in the repo 2026-11-10** ([Done](#done-code)); on the Pi with T16.
+2. **Test 2 failed 2026-11-11** (both rigs: gateway stalls up to 401 ms; alone: none).
+3. **T17: log slow gateway cycles**, then Test 2 again
+   ([T17](#t17-log-slow-gateway-cycles)). Which request stalls picks the remedy.
+4. **The remedy** ([If Test 2 fails](#if-test-2-fails)), then Test 2 must pass.
+5. **T16 on the Pi**, after that: `/etc/default/oscillator`, installing the units, the rig checks
+   ([T16](#t16-install-on-the-pi)).
+6. **T5's last check** when the sloshing rig is connected.
+7. T10 is optional and not needed now.
 
 | # | File | Where | What | Done when | Left (2026-11-10) |
 |---|---|---|---|---|---|
-| T11-T15 | `rpi/` (units, `run.sh`, `stop.sh`, `refuse_if_busy.sh`, new `soft_stop@.service` + `soft_stop.sh`), `soft_stop.py`, both launches, `windows/_rig.bat` | *Code: wavemaker + vertical together* | Port 8081 by default, oscillator marker, refuse only sloshing, one shared soft stop, Windows start without stopping the other | Tests pass on the PC; `systemd-analyze verify` on the units | Done 2026-11-10 (tests: `test_soft_stop.py`, `test_launch_soft_stop.py`, `test_refuse_if_busy.py`; docs updated) |
-| T16 | the ladertanken Pi: `/etc/default/oscillator`, `/etc/systemd/system/` | *T16: install on the Pi* | Port line, copy the units, build, the rig checks | The rig checks listed there | After T11-T15 and Test 2 |
+| T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Next |
+| T16 | the ladertanken Pi: `/etc/default/oscillator`, `/etc/systemd/system/` | *T16: install on the Pi* | Port line, copy the units, build, the rig checks | The rig checks listed there | After the remedy and a passed Test 2 |
 | T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
 | T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example` | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
 
@@ -137,260 +135,6 @@ All implemented on 2026-11-09 except where noted.
    like `generate_waves`); the speed limit comes from the yaml (T8). Single waves also run from
    the web page (height = stroke, period).
 
-## Code: wavemaker + vertical together (TODO 47 (2)-(5), proposed 2026-11-10)
-
-Coded now in the repo; installed on the Pi by T16 after Test 2 passes. **Rules (decided 2026-11-10):** sloshing never runs with anything;
-wavemaker + vertical may run together; one soft stop button stops both. Test 1 showed separate
-controller processes are safe. Everything below is your code unless handed over; Claude writes
-the docs (`rpi/README.md`, TODO 47) and the tests.
-
-**T11: own web port for the oscillator, by default.** The repo side only; the line in
-`/etc/default/oscillator` is T16. The oscillator's port defaults to 8081 wherever it is read, so
-a Pi whose env file has no `PORT` still gets it right:
-- `run.sh`: `port:="${PORT:-8081}"` in the oscillator branch (T12's snippet);
-- `refuse_if_busy.sh`: the default depends on the rig (in T13's script);
-- `windows/_rig.bat`: opens the page on 8081 (T15).
-
-`refuse_if_busy.sh` already checks only its own `PORT`. Sloshing keeps 8081 too: it never runs
-next to the wavemaker.
-
-**T12: which oscillator runs, as a marker.** `/etc/default/oscillator` can be edited while the
-unit runs, so it cannot tell the wavemaker's unit (or `stop.sh`, which reads `OSCILLATOR` today to
-find the namespace) which oscillator is running. `oscillator@.service` gets a runtime directory,
-created owned by the user and removed when the unit stops:
-
-```ini
-[Service]
-RuntimeDirectory=oscillator-%i
-```
-
-`run.sh`, after the `ROS_DOMAIN_ID` check (line 5) and **before** the two `source` lines (about
-0.5 s): the unit is `active` as soon as `run.sh` starts (`Type=exec`), and a wavemaker start in
-that gap would find no marker and refuse ("unknown").
-
-```bash
-# Which oscillator runs, for refuse_if_busy.sh and stop.sh (the env file can change meanwhile).
-# Before sourcing ROS (about 0.5 s), so the wavemaker's unit finds it as soon as this unit is active.
-if [[ ${RIG:-wavemaker} == oscillator && -n "$RUNTIME_DIRECTORY" ]]; then
-  echo "${OSCILLATOR:-sloshing}" > "$RUNTIME_DIRECTORY/oscillator"
-fi
-```
-
-and the oscillator branch keeps only:
-
-```bash
-    args=(port:="${PORT:-8081}" oscillator:="${OSCILLATOR:-sloshing}" soft_stop:=false)
-```
-
-`stop.sh`:
-
-```bash
-case "${RIG:-wavemaker}" in
-  oscillator)
-    running="$(cat "$RUNTIME_DIRECTORY/oscillator" 2>/dev/null || echo "${OSCILLATOR:-sloshing}")"
-    namespace="/oscillators/$running" ;;
-  *) namespace="/wavemakers/$WAVEMAKER" ;;
-esac
-```
-
-**T13: refuse only sloshing.** Both units call `refuse_if_busy.sh <rig> %i` (`wavemaker` or
-`oscillator`) instead of the other unit's name:
-
-```ini
-ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh wavemaker %i    # wavemaker@
-ExecStartPre=/home/%i/ros_ws/src/hydrolab_rigs/rpi/refuse_if_busy.sh oscillator %i   # oscillator@
-```
-
-`systemctl is-active --quiet` succeeds only for `active`, so a unit in its own `ExecStartPre`
-(`activating`) or still stopping its drive (`deactivating`, up to 45 s) would count as not
-running; two starts within about 100 ms could both pass. `running()` counts those states too:
-
-| Situation | Result |
-|---|---|
-| Oscillator in `ExecStartPre` (no marker yet), wavemaker starts | Refused ("unknown"); start again a second later |
-| Both start at the same moment | Both may refuse; nothing runs; start one after the other |
-| Sloshing stopping (marker still there), wavemaker starts | Refused until the stop is done (`systemctl stop` blocks, so `stop_rigs.bat` waits anyway) |
-| Vertical running, wavemaker starts | Allowed |
-
-```bash
-#!/usr/bin/env bash
-# ExecStartPre: refuse combinations that cannot run together on this Pi. The wavemaker and the
-# vertical oscillator may run together (TODO 47); the sloshing oscillator only alone.
-# $1: this unit's rig (wavemaker | oscillator), $2: the Pi user (%i).
-set -eo pipefail
-rig="$1" pi="$2"
-marker="/run/oscillator-$pi/oscillator"   # written by run.sh, removed when oscillator@ stops
-
-# Starting and stopping count as running: the other unit may be in its own ExecStartPre, or
-# still shutting its drive down. (is-active exits non-zero for these; ignored inside [[ ]].)
-running() { [[ $(systemctl is-active "$1") =~ ^(active|activating|deactivating|reloading)$ ]]; }
-
-if [[ $rig == wavemaker ]]; then
-  if running "oscillator@$pi"; then
-    running_osc="$(cat "$marker" 2>/dev/null || echo unknown)"
-    if [[ $running_osc != vertical ]]; then
-      echo "oscillator@$pi runs '$running_osc'; only the vertical oscillator can run with the wavemaker" >&2
-      exit 1
-    fi
-  fi
-else
-  if [[ ${OSCILLATOR:-sloshing} != vertical ]] && running "wavemaker@$pi"; then
-    echo "wavemaker@$pi is running; only the vertical oscillator can run with it" >&2
-    exit 1
-  fi
-fi
-
-# Catches a launch by hand on this unit's own port (the same defaults as run.sh).
-if [[ $rig == wavemaker ]]; then default_port=8080; else default_port=8081; fi
-port="${PORT:-$default_port}"
-if ss -Hltn "sport = :$port" | grep -q .; then
-  echo "port $port is in use, probably a launch by hand; stop it first" >&2
-  exit 1
-fi
-```
-
-**T14: one soft stop for both (TODO 47 (4)).** GPIO17 can be claimed by one process only. The
-node leaves the launches and gets a unit of its own, which publishes to every controller that can
-run on the Pi; no controller is remapped. Line numbers as of 2026-11-10.
-
-1. **`rig_controller/src/soft_stop.py`: a `topics` parameter.** The default `['soft_stop']`
-   keeps a launch by hand as today.
-   - After line 19 (`internal_pull_up`), add:
-
-     ```python
-             self.topics = self.declare_parameter('topics', ['soft_stop']).value
-     ```
-
-   - Replace line 41 (`self.publisher = ...`) with:
-
-     ```python
-             # Not self.publishers: rclpy's Node already has that name.
-             self.stop_publishers = [self.create_publisher(Bool, t, qos) for t in self.topics]
-     ```
-
-   - Replace line 43 (the `info` log) with:
-
-     ```python
-             self.get_logger().info(
-                 f"Soft stop on GPIO{self.pin} to {', '.join(self.topics)}, starting stopped")
-     ```
-
-   - Replace line 75 (`self.publisher.publish(...)`) with:
-
-     ```python
-             msg = Bool(data=self.stopped)
-             for publisher in self.stop_publishers:
-                 publisher.publish(msg)
-     ```
-
-2. **`wavemaker_bringup/launch/lab.launch.py`: leave the node out on request.**
-   - Line 15: add `from launch.conditions import IfCondition` below it.
-   - After the `soft_stop_pin` argument (lines 44-48), add:
-
-     ```python
-             DeclareLaunchArgument(
-                 'soft_stop',
-                 default_value='true',
-                 description='Start a soft stop node; false when soft_stop@.service owns the button',
-             ),
-     ```
-
-   - In the soft stop `Node(...)` (lines 70-79), after `output='screen',` (line 78), add:
-
-     ```python
-                 condition=IfCondition(LaunchConfiguration('soft_stop')),
-     ```
-
-3. **`oscillator_bringup/launch/oscillator.launch.py`: the same.**
-   - Line 20: add `from launch.conditions import IfCondition` below it.
-   - After the `soft_stop_pin` argument (lines 41-42), add:
-
-     ```python
-             DeclareLaunchArgument(
-                 'soft_stop', default_value='true',
-                 description='Start a soft stop node; false when soft_stop@.service owns the button'),
-     ```
-
-   - In the soft stop `Node(...)` (lines 85-93), after `output='screen',`, add the same
-     `condition=IfCondition(LaunchConfiguration('soft_stop')),`.
-   - Line 36 (T11): `port` default `'8080'` → `'8081'`, so a launch by hand does not take the
-     wavemaker's port.
-
-4. **New `rpi/soft_stop@.service`:**
-
-   ```ini
-   [Unit]
-   Description=Soft stop button on %i's Pi (GPIO17), shared by every rig running there
-   # Started by the rig units (Requires=); stops when the last of them stops.
-   StopWhenUnneeded=yes
-
-   [Service]
-   Type=exec
-   User=%i
-   WorkingDirectory=/home/%i
-   Environment=PI=%i PYTHONUNBUFFERED=1 RCUTILS_COLORIZED_OUTPUT=0
-   EnvironmentFile=/etc/default/wavemaker
-   ExecStart=/home/%i/ros_ws/src/hydrolab_rigs/rpi/soft_stop.sh
-   KillSignal=SIGINT
-   Restart=no
-   ```
-
-5. **New `rpi/soft_stop.sh`** (`chmod +x`):
-
-   ```bash
-   #!/usr/bin/env bash
-   set -eo pipefail
-   [[ -n "$ROS_DOMAIN_ID" && "$ROS_DOMAIN_ID" != 0 ]] || { echo "set ROS_DOMAIN_ID" >&2; exit 1; }
-   source /opt/ros/jazzy/setup.bash
-   source "$HOME/ros_ws/install/setup.bash"
-   # One button, published to every controller that can run on this Pi.
-   exec ros2 run rig_controller soft_stop --ros-args -r __ns:="/$PI" -p pin:=17 \
-     -p "topics:=['/wavemakers/$PI/soft_stop', '/oscillators/vertical/soft_stop', '/oscillators/sloshing/soft_stop']"
-   ```
-
-6. **`rpi/wavemaker@.service` and `rpi/oscillator@.service`:** replace line 4
-   (`After=network-online.target`) with:
-
-   ```ini
-   Requires=soft_stop@%i.service
-   After=network-online.target soft_stop@%i.service
-   ```
-
-7. **`rpi/run.sh`:** `soft_stop:=false` on both launches. Done.
-
-How it behaves:
-- One press stops both rigs; releasing lets both start again.
-- Stopping one rig leaves the button working for the other (`StopWhenUnneeded`).
-- If the soft stop process dies, both controllers treat it as stopped within 0.2 s
-  (`soft_stop_timeout_s`), and systemd stops both rigs (`Requires=`).
-- A rig started while the other runs gets the button state at once: the topic is
-  `TRANSIENT_LOCAL`.
-
-**T15: `windows/_rig.bat` starts without stopping the other rig.** Today `start oscillator`
-stops the wavemaker first. Start only the requested unit, leave the refusal to T13, and open the
-page on the rig's own port:
-
-```bat
-if /i "%~2"=="wavemaker" (set "PORT=8080") else if /i "%~2"=="oscillator" (set "PORT=8081") else goto usage
-set "UNIT=%~2@%PI_USER%"
-echo Starting %UNIT% on %PI_HOST% ...
-%SSH% "sudo -n systemctl start %UNIT% && systemctl is-active %UNIT%"
-```
-
-A refused start prints `refuse_if_busy.sh`'s reason in the window. To switch the Pi to
-sloshing, `stop_rigs.bat` first. The sudoers rule is unchanged: systemd starts the soft stop
-unit through `Requires=`, not sudo.
-
-**Already fine, no change:** ROS names (`/wavemakers/ladertanken`, `/oscillators/vertical`; the
-soft stop node moves to `/ladertanken/soft_stop`; both rigs ran this way in Test 1), the driver
-and gateway (per-slave blocks, T1, the per-slave fault timer).
-
-**Order:** T11-T15 and Test 2 (either order), then T16.
-
-**Claude, after T11-T15:**
-- the docs: `rpi/README.md` (the new unit, `PORT=8081`, start and stop), `windows/README.md`;
-- tests: `soft_stop.py`'s `topics`, and the launch argument.
-
 ## T16: install on the Pi
 
 After T11-T15 are merged into the branch and Test 2 has passed. Everything here needs the Pi
@@ -450,6 +194,159 @@ Left: one check. The refusal passed 2026-11-10: with `wavemaker@ladertanken` run
 
 ## If Test 2 fails
 
+**Test 2 failed 2026-11-11** (COMMISSIONING.md, *Test 2*): with both rigs, the wavemaker's
+gateway cycle stalled about 200 ms (once 401 ms) eleven times in 10 min; alone, never in 16 min.
+T16 waits. T17 first shows which request stalls; that picks the remedy.
+
+### T17: log slow gateway cycles
+
+Today a stalled cycle leaves no trace: the controller keeps publishing setpoints, and only the
+bag shows the position standing still. The driver has no logger (it is not ROS code), so it
+counts slow cycles in `DriverStats` and times each of the three requests; the actuator logs
+them. Line numbers as of 2026-11-11.
+
+1. **`drivers/mgate5101_driver/include/mgate/mgate_driver.h`**
+   - `GatewayConfig`, after line 65 (`reconnect_ms`):
+
+     ```cpp
+         int slow_cycle_ms    = 100;   // a longer cycle counts in DriverStats::slow_cycles
+     ```
+
+   - `DriverStats`, after line 77 (`last_cycle_us`):
+
+     ```cpp
+         long long     max_cycle_us    = 0;
+         std::uint64_t slow_cycles     = 0;  // cycles longer than GatewayConfig::slow_cycle_ms
+         // The last slow cycle, and its three requests, in microseconds.
+         long long     slow_cycle_us   = 0;
+         long long     slow_write_us   = 0;
+         long long     slow_inputs_us  = 0;
+         long long     slow_status_us  = 0;
+     ```
+
+   - Private members, after line 167 (`wake_cv_`):
+
+     ```cpp
+         std::array<long long, 3> phase_us_{};  // write, inputs, status of this cycle (poll thread)
+     ```
+
+     and `#include <array>` with the other includes.
+
+2. **`drivers/mgate5101_driver/src/mgate_driver.cpp`**
+   - Replace `exchange()` (lines 364-369) with:
+
+     ```cpp
+     Result MGateDriver::exchange() {
+         // Times each request, so a slow cycle shows which one stalled (DriverStats::slow_*_us).
+         phase_us_ = {};
+         const auto timed = [](long long& us, auto&& request) {
+             const auto start = std::chrono::steady_clock::now();
+             Result r = request();
+             us = std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - start)
+                      .count();
+             return r;
+         };
+         if (Result r = timed(phase_us_[0], [this] { return flush_outputs(); }); !r) return r;
+         if (Result r = timed(phase_us_[1], [this] { return read_inputs(); }); !r) return r;
+         if (Result r = timed(phase_us_[2], [this] { return read_status(); }); !r) return r;
+         return {};
+     }
+     ```
+
+   - `poll_loop()`, in the stats block after `stats_.last_cycle_us = ...;` (lines 394-396):
+
+     ```cpp
+                 stats_.max_cycle_us = std::max(stats_.max_cycle_us, stats_.last_cycle_us);
+                 if (stats_.last_cycle_us > 1000LL * cfg_.slow_cycle_ms) {
+                     ++stats_.slow_cycles;
+                     stats_.slow_cycle_us  = stats_.last_cycle_us;
+                     stats_.slow_write_us  = phase_us_[0];
+                     stats_.slow_inputs_us = phase_us_[1];
+                     stats_.slow_status_us = phase_us_[2];
+                 }
+     ```
+
+3. **`rig_controller/src/indradrive_actuator.hpp`**, private, after line 50 (`has_target_`):
+
+   ```cpp
+     // Set in start(); report_slow_cycles() logs each new slow gateway cycle.
+     rclcpp::Logger logger_{rclcpp::get_logger("indradrive_actuator")};
+     std::uint64_t slow_cycles_seen_{0};
+     void report_slow_cycles();
+   ```
+
+4. **`rig_controller/src/indradrive_actuator.cpp`**
+   - `start()`, after `mgate_driver_->start();` (line 157):
+
+     ```cpp
+       logger_ = logger;
+       slow_cycles_seen_ = 0;
+     ```
+
+   - `write_setpoint()` (line 235), after its `if (!indradrive_) { return false; }` (lines
+     237-239), add one line:
+
+     ```cpp
+       report_slow_cycles();   // log any slow gateway cycle since the last call
+     ```
+
+     The controller calls `write_setpoint()` every 20 ms while a wave or a return runs, which is
+     when a stall delays the drive's targets. When no goal runs, slow cycles are not logged.
+   - New, after `write_setpoint()`:
+
+     ```cpp
+     // A slow gateway cycle delays the targets and the feedback; over 500 ms the MGate's fault
+     // timeout switches the drive off (Test 2, 2026-11-11: up to 401 ms with both rigs).
+     void IndraDriveActuator::report_slow_cycles()
+     {
+       const auto stats = mgate_driver_->stats();
+       if (stats.slow_cycles == slow_cycles_seen_) {
+         return;
+       }
+       RCLCPP_WARN(
+         logger_,
+         "MGate cycle %lld ms (write %lld, inputs %lld, status %lld ms); %llu slow so far, "
+         "longest %lld ms",
+         stats.slow_cycle_us / 1000, stats.slow_write_us / 1000, stats.slow_inputs_us / 1000,
+         stats.slow_status_us / 1000, static_cast<unsigned long long>(stats.slow_cycles),
+         stats.max_cycle_us / 1000);
+       slow_cycles_seen_ = stats.slow_cycles;
+     }
+     ```
+
+5. **Tests (Claude, done 2026-11-11):** `FakeMGate::delay_next()` holds one request's reply;
+   `NoSlowCyclesWithoutAStall`, `SlowCycleShowsWhichRequestStalled` (write, inputs, status in
+   turn), `WriteSetpointLogsEachSlowCycleOnce` (`test_indradrive_actuator.cpp`).
+
+**On the Pi** (the branch has T11-T15, so no `git pull` before T16; take only these files):
+
+```bash
+sudo systemctl stop wavemaker@ladertanken
+cd ~/ros_ws/src/hydrolab_rigs && git fetch
+git checkout origin/feat-vertical-oscillator -- drivers/mgate5101_driver/include/mgate/mgate_driver.h \
+  drivers/mgate5101_driver/src/mgate_driver.cpp rig_controller/src/indradrive_actuator.hpp \
+  rig_controller/src/indradrive_actuator.cpp
+cd ~/ros_ws && colcon build --packages-select mgate5101_driver rig_controller
+```
+
+Then Test 2 again (COMMISSIONING.md, *Test 2*, 10 min, both rigs) and:
+
+```bash
+journalctl -u wavemaker@ladertanken --since "15 min ago" -o cat --no-pager | grep "MGate cycle"
+```
+
+The oscillator's lines are in terminal 2 (its hand launch).
+
+**What the result decides:**
+
+| The slow part | Remedy |
+|---|---|
+| `status` only | Read the status area every Nth cycle (remedy 2 below). Small. |
+| `inputs` or `write`, or all | One shared connection (remedy 1). Its own sketch. |
+
+### Background and remedies
+
 Test 2 asks whether two controllers on one MGate (300 requests/s) cause the ~50-210 ms gateway
 stalls. The fault timeout is no reason to merge the processes: Test 1 showed the MGate's timer
 runs per slave.
@@ -494,26 +391,20 @@ COMMISSIONING.md, *Vertical oscillator*, *Open*.
 
 ## Done (code)
 
-- **T1** (2026-11-10): `MGateDriver::config()` and a check at the top of
-  `IndraDrive::IndraDrive` (`indradrive.cpp`): `output_word_count` must be 6, `input_word_count`
-  at least 7, else `invalid_argument`, which `IndraDriveActuator` turns into a failed configure.
-  It does not catch a wrong `output_base_reg`: any base is valid on its own.
-- **Daisy chain without code changes:** the tag offsets in `IndraDrive::IndraDrive` are bytes 0,
-  2, 6, 10 *inside the block*, and each controller has its own `MGateDriver` with its own
-  `input_base_reg` / `output_base_reg` (both starts must be even: 14 input bytes and 12 output
-  bytes give exactly registers 7 and 6). `slave_live()` (`indradrive.cpp:50-63`) takes the bit
-  for `profibus_address` (address 3 is byte 2, bit 3). The drive that is not running is switched
-  off by the MGate's fault timeout on its slave, a gateway setting.
-- **`mgate_example`** (2026-11-10): `--input-base`, `--output-base`, `--profibus-address`;
-  defaults 0 / 0 / 2; `--move` refuses without `--profibus-address`.
-- **Tests** (2026-11-10): `FakeMGate(input_base, output_base, live_list)` plays a second slave in
-  front of the drive and counts writes to it; `RejectsBlockSizesOtherThanTheDriveLayout`,
-  `DaisyChainedDriveLeavesTheOtherSlaveAlone` (slave 3 at 7 / 6 enables and moves, no write to
-  slave 2), `DaisyChainedDriveNotLiveRefusesToStart` (`test_indradrive_actuator.cpp`).
-- **`MGateDriver::wait_for_data()` race** (2026-11-09): it returned after the first input read,
-  before the status area and `online_` were set. `have_data_` is now set only after a whole
-  successful cycle (`mgate_driver.cpp`, `poll_loop()`).
-- **T2** linear scaling (2026-11-09), **T5** `oscillator:=` argument and the refusal, **T7**
-  `generate_oscillations` with tests and README section, **T8** speed limit from the yaml, **T9**
-  (2026-11-10). T6 (an address-check tool) was not needed: a read-only FC4 read of the live list
-  and both blocks did the job.
+All in git; the commit history has the details.
+
+- **T11-T15** (2026-11-10): oscillator port 8081; `run.sh` writes `/run/oscillator-<user>/oscillator`
+  and `stop.sh` reads it; `refuse_if_busy.sh <rig> <user>` refuses only sloshing next to the
+  wavemaker (starting and stopping units count as running); one `soft_stop@.service` publishing to
+  every controller on the Pi (`topics` parameter, `soft_stop:=false` in both launches,
+  `Requires=` in both units); `_rig.bat` starts only the requested unit. Tests:
+  `test_soft_stop.py`, `test_launch_soft_stop.py`, `test_refuse_if_busy.py`.
+- **Bridge** (2026-11-11, `c4c1a4a`): logs `Stop requested: <reason>` for every stop.
+- **T1** (2026-11-10): `IndraDrive` refuses blocks other than 7 in / 6 out (failed configure).
+- **Daisy chain:** no code change needed (per-controller blocks and PROFIBUS address).
+- **`mgate_example`** (2026-11-10): `--input-base`, `--output-base`, `--profibus-address`.
+- **Tests** (2026-11-10): `FakeMGate` with a second slave; three daisy-chain tests in
+  `test_indradrive_actuator.cpp`.
+- **`wait_for_data()` race** fixed (2026-11-09).
+- **T2** linear scaling, **T5** `oscillator:=` and the refusal, **T7** `generate_oscillations`,
+  **T8** speed limit from the yaml, **T9** (2026-11-09 – 2026-11-10). T6 not needed.

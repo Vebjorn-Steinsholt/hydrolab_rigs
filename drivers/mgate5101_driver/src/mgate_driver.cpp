@@ -362,9 +362,19 @@ Result MGateDriver::read_status() {
 }
 
 Result MGateDriver::exchange() {
-    if (Result r = flush_outputs(); !r) return r;
-    if (Result r = read_inputs(); !r) return r;
-    if (Result r = read_status(); !r) return r;
+    // Times each request, so a slow cycle shows which one stalled (DriverStats::slow_*_us).
+    phase_us_= {};
+    const auto timed = [](long long& us, auto&& request){
+        const auto start = std::chrono::steady_clock::now();
+        Result r = request();
+        us = std::chrono::duration_cast<std::chrono::microseconds>(
+                 std::chrono::steady_clock::now() - start)
+                 .count();
+        return r;
+    };
+    if (Result r = timed(phase_us_[0], [this] { return flush_outputs(); }); !r) return r;
+    if (Result r = timed(phase_us_[1], [this] { return read_inputs(); }); !r) return r;
+    if (Result r = timed(phase_us_[2], [this] { return read_status(); }); !r) return r;
     return {};
 }
 
@@ -395,6 +405,14 @@ void MGateDriver::poll_loop() {
                                        std::chrono::steady_clock::now() - cycle_start)
                                        .count();
             if (ok) stats_.last_error.clear();
+            stats_.max_cycle_us = std::max(stats_.max_cycle_us,stats_.last_cycle_us);
+            if (stats_.last_cycle_us > 1000LL * cfg_.slow_cycle_ms) {
+                ++stats_.slow_cycles;
+                stats_.slow_cycle_us  = stats_.last_cycle_us;
+                stats_.slow_write_us  = phase_us_[0];
+                stats_.slow_input_us  = phase_us_[1];
+                stats_.slow_status_us = phase_us_[2];
+            }
         }
         {
             std::function<void(bool, const Result&)> cb;

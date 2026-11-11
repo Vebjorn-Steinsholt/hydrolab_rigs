@@ -293,6 +293,27 @@ stalls? Those stalls appeared on 2026-10-07 at the same rate from one client pol
 A stall freezes both rigs' setpoints. Over 500 ms, it would switch a drive off. If it fails, the
 code remedies are in [oscillator_sketch.md](oscillator_sketch.md#if-test-2-fails).
 
+**First run 2026-11-11 (08:17-08:27, 604 s, bag `~/bags/load_both` on the lab PC): not passed,
+no baseline yet.**
+- `wavemaker_setpoint` ran at 50.00 Hz throughout, with no flat stretch: the controller never
+  stalled.
+- `wavemaker_position` froze twice during waves: 08:19:30-08:19:32 (once 401 ms, then six times
+  about 200 ms in a row) and 08:24:46-08:24:47 (four times about 200 ms). Each time the position
+  jumped to where the setpoint had gone, so the drive kept moving; only the gateway cycle (and with
+  it the feedback, and probably the targets) was 200 ms late. About 200 ms is Linux's minimum TCP
+  retransmission timeout: the 2026-10 stall signature. 401 ms is close to the 500 ms fault timeout.
+- `TcpRetransSegs` +143 (4833 → 4976); not comparable without the baseline, and it counts all TCP
+  on the Pi (ssh too).
+- The PC's gateway reader was not run.
+- Receive gaps up to 337 ms in the bag around 08:20:23 are on the way to the PC (no samples lost,
+  no flat values), not the gateway.
+
+**Baseline 2026-11-11, the wavemaker alone, same wave (bags `~/bags/load_wm_only`, 379 s, ended
+by an unexplained page Stop; `~/bags/load_wm_only2`, 608 s):** no position freeze in 16 min
+(0.00-0.01 % duplicate samples), `TcpRetransSegs` +44 and +102 (7 and 10 per min, against 14
+with both rigs). **So the freezes come with the second client: Test 2 failed.** One run each;
+the both-rigs run had its freezes in two bursts.
+
 **Why the oscillator only holds.** Each controller writes its whole output block and reads its
 inputs and the status area every 20 ms (`write_only_dirty: false`), moving or not. So a holding
 oscillator loads the gateway exactly like a moving one. The setup from Test 1 is enough: the

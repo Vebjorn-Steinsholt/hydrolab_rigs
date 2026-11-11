@@ -23,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <array>
 
 #include "mgate/modbus_tcp.h"
 #include "mgate/process_image.h"
@@ -63,6 +64,7 @@ struct GatewayConfig {
     int poll_interval_ms = 50;    // cycle period
     int timeout_ms       = 1000;  // per-transaction socket timeout
     int reconnect_ms     = 2000;  // wait before retrying a dead connection
+    int slow_cycle_ms    = 100; // a longer cycle counts in DriverStats::slow_cycles
 
     // If true only the changed span of the output area is written each cycle.
     // If false the whole output area is written every cycle.
@@ -75,6 +77,13 @@ struct DriverStats {
     std::uint64_t write_errors    = 0;
     std::uint64_t reconnects      = 0;
     long long     last_cycle_us   = 0;
+    long long     max_cycle_us    = 0;
+    std::uint64_t slow_cycles     = 0; // cycles longer than GatewayConfig::slow_cycle_ms
+    // The last slow cycle, and its three requests, in microseconds
+    long long    slow_cycle_us    = 0;
+    long long    slow_write_us    = 0;
+    long long    slow_input_us    = 0;
+    long long    slow_status_us   = 0;
     std::string   last_error;
     bool          online          = false;
 };
@@ -165,6 +174,7 @@ private:
     std::atomic<bool>       have_data_{false};
     std::mutex              wake_mtx_;
     std::condition_variable wake_cv_;
+    std::array<long long, 3> phase_us_{};  // write, inputs, status of this cycle (poll thread)
 
     mutable std::mutex                                 stats_mtx_;
     DriverStats                                        stats_;
