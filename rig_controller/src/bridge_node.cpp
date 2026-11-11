@@ -269,7 +269,8 @@ public:
   }
   void stop(const std::string & reason, StopDone done = nullptr)
   {
-
+    // The reason otherwise only reaches the page's status line, not the journal.
+    RCLCPP_WARN(get_logger(), "Stop requested: %s", reason.c_str());
     if (goal_requested_) {
       cancel_on_accept_ = true;
     }
