@@ -431,6 +431,12 @@ class WebNode(Node):
 def make_handler(node, html_dir):
 
     class Handler(BaseHTTPRequestHandler):
+        # Keep-alive: the page's acknowledgments (10 per second) reuse one connection instead of
+        # opening a new one each, so the browser does not look up the Pi's name again; a slow
+        # lookup on the browser's PC stopped waves for 2.4 s (TODO 49). Every reply therefore
+        # carries Content-Length, and every request body is read.
+        protocol_version = 'HTTP/1.1'
+        timeout = 120  # drops an idle or stuck connection; the page opens a new one
 
         def log_message(self, *args):
             pass  # the page acknowledges every event; logging each request would flood
@@ -448,13 +454,20 @@ def make_handler(node, html_dir):
                 self._send(HTTPStatus.NOT_FOUND, b'Not found', 'text/plain')
 
         def do_POST(self):
+            # Read the whole body first: on a kept-alive connection an unread body would be
+            # taken as the next request. The page sends '{}' with every POST.
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                length = 0
+            raw = self.rfile.read(length) if length > 0 else b''
             if self.path == '/api/ack':
                 node.acknowledge(self.client_address[0])
                 self._send(HTTPStatus.NO_CONTENT, b'', 'text/plain')
                 return
             if self.path == '/api/start':
                 try:
-                    body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                    body = json.loads(raw)
                     height, period = float(body['height']), float(body['period'])
                 except (KeyError, TypeError, ValueError):
                     self._json(False, 'Send height and period as numbers.')
@@ -474,9 +487,12 @@ def make_handler(node, html_dir):
                 self._send(HTTPStatus.NOT_FOUND, b'Not found', 'text/plain')
 
         def _events(self):
+            # A stream with no length: this connection ends with it.
+            self.close_connection = True
             self.send_response(HTTPStatus.OK)
             self.send_header('Content-Type', 'text/event-stream')
             self.send_header('Cache-Control', 'no-cache')
+            self.send_header('Connection', 'close')
             self.end_headers()
             last_sample = 0
             last_log = 0
@@ -487,7 +503,7 @@ def make_handler(node, html_dir):
                     self.wfile.flush()
                     node.event_sent()
                     time.sleep(EVENT_PERIOD_S)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, TimeoutError):
                 pass
 
         def _json(self, ok, message):
