@@ -186,9 +186,6 @@ A wavemaker drive powered off on the chain shows F4009; clear it before starting
   also treats it as Fail_Safe? Add the newer GSD set to `resources/profibus_gsd/`?
 - [ ] The soft stop on GPIO17: the vertical rig uses it (released at every start, 2026-11-09). Is
   the button within reach of the vertical rig, or only at the wavemaker?
-- [ ] Export the MGate configuration to the stick as a backup: slave 2 `80 00 08` with output
-  fault value `00 02 00 ...` (control word `0x0002`), slave 3 `C0 00 08`, both 500 ms timeouts.
-  A slave added again loses these.
 
 ### The oscillator drive (read 2026-11-06)
 
@@ -709,7 +706,8 @@ status is `0003` (Operate), with an empty live list.
 - `Default.par` (oscillator), `WMDefault.par` (wavemaker): IndraWorks exports, 2026-11-06.
 - `Profibus/`: the newer Rexroth GSD set (RX04-RX17) with `Info_eng.txt`.
 - `TestOscillator.bin`: sensor log of the first move (2026-11-09).
-- To do: the phase 2 MGate configuration (*Open*).
+- The MGate configuration of 2026-11-11 (both rigs working, wavemaker fault value `0x0002`) is in
+  the repository: [`MGATE_config_backup/`](MGATE_config_backup/README.md).
 
 ## Verified so far
 
