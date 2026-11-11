@@ -314,6 +314,37 @@ by an unexplained page Stop; `~/bags/load_wm_only2`, 608 s):** no position freez
 with both rigs). **So the freezes come with the second client: Test 2 failed.** One run each;
 the both-rigs run had its freezes in two bursts.
 
+**Repeat 2026-11-11 10:55-11:05 with the slow-cycle log (T17), both rigs, 10 min of waves (bag
+`~/bags/load_both3`):** one burst at 11:00:23-24, three slow cycles of 207-209 ms: `status 206`,
+`inputs 207`, `inputs 205`; the write never. So one read request at a time waits about 200 ms
+(Linux's minimum TCP retransmission time), on either read: not the status read alone, so
+reading the status less often would not remove it. In the bag the position stood still 398 ms
+there (two slow cycles back to back). `TcpRetransSegs` before 5354; after not recorded.
+After the burst, 11-18 % of the position samples repeat the previous value until the wave ends
+(0 % before): the gateway cycle and the controller's 20 ms timer came into step, so some
+controller cycles see no new reading. A 20 ms feedback jitter, not a stall.
+
+**Repeat 2026-11-11 11:15-11:26 with a packet capture on the Pi (`~/bags/load_both4/mgate.pcap`,
+tcpdump on eth0, host 192.168.1.70):** three slow wavemaker cycles (11:19:30 210 ms, 11:19:31
+**415 ms** = write 207 + status 206, 11:22:36 215 ms); 85 ms short of the drive trip.
+11 TCP retransmissions in 388 000 packets, each after 203-211 ms:
+- **9 resent by the Pi**, 2 by the gateway (a lost reply). Linux resends after its 200 ms
+  minimum (`rto_min`); the gateway also waits about 200 ms.
+- **Both connections (wavemaker and oscillator) lost a packet at the same moment** (11:19:30,
+  11:19:31, 11:22:36; 11:16:13 only the oscillator's). So the gateway, or the link to it, drops
+  frames for a moment, whoever sent them: more clients, more chances to be caught.
+- All 11 match the logged slow cycles in time. The rest of `TcpRetransSegs` (+105) is other TCP
+  on the Pi (ssh, the web page).
+
+**Passed 2026-11-11 12:16-12:26 with `rto_min` 20 ms on the Pi's route to the gateway**
+(`sudo ip route add 192.168.1.70/32 dev eth0 rto_min 20ms`, set before the rigs started; bag and
+capture in `~/bags/load_both5/`): 9 retransmissions, all by the Pi, each after 22-23 ms (one
+42 ms, the second try); none by the gateway this time. **No slow cycle over 100 ms, no position
+freeze, 0.07 % repeated samples.** Two heartbeat stops (12:18:46, 12:24:49; TODO 49) cut the
+waves; they are the web page, not the gateway. `TcpRetransSegs` +105 (5620 → 5725), the same as
+before: most of it is not the gateway's. The setting is lost at a reboot: making it permanent is
+T18 in oscillator_sketch.md.
+
 **Why the oscillator only holds.** Each controller writes its whole output block and reads its
 inputs and the status area every 20 ms (`write_only_dirty: false`), moving or not. So a holding
 oscillator loads the gateway exactly like a moving one. The setup from Test 1 is enough: the

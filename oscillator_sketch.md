@@ -11,19 +11,21 @@ be a few lines off.
 ## Now
 
 1. **T11-T15 done in the repo 2026-11-10** ([Done](#done-code)); on the Pi with T16.
-2. **Test 2 failed 2026-11-11** (both rigs: gateway stalls up to 401 ms; alone: none).
-3. **T17: log slow gateway cycles**, then Test 2 again
-   ([T17](#t17-log-slow-gateway-cycles)). Which request stalls picks the remedy.
-4. **The remedy** ([If Test 2 fails](#if-test-2-fails)), then Test 2 must pass.
-5. **T16 on the Pi**, after that: `/etc/default/oscillator`, installing the units, the rig checks
+2. **Test 2 passed 2026-11-11** with `rto_min` 20 ms on the Pi's route to the gateway, set by
+   hand (COMMISSIONING.md, *Test 2*). T17 (the slow-cycle log) found it.
+3. **T18: set `rto_min` at every rig start** ([T18](#t18-rto_min-on-the-route-to-the-gateway)),
+   since a reboot loses it.
+4. **T16 on the Pi**, with T18: `/etc/default/*`, installing the units, the rig checks
    ([T16](#t16-install-on-the-pi)).
+5. **The web page's heartbeat stops** (TODO 49): they cut waves, but are not the gateway.
 6. **T5's last check** when the sloshing rig is connected.
 7. T10 is optional and not needed now.
 
 | # | File | Where | What | Done when | Left (2026-11-10) |
 |---|---|---|---|---|---|
-| T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Next |
-| T16 | the ladertanken Pi: `/etc/default/oscillator`, `/etc/systemd/system/` | *T16: install on the Pi* | Port line, copy the units, build, the rig checks | The rig checks listed there | After the remedy and a passed Test 2 |
+| T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Done 2026-11-11 |
+| T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Next |
+| T16 | the ladertanken Pi: `/etc/default/oscillator`, `/etc/systemd/system/` | *T16: install on the Pi* | Port line, copy the units, build, the rig checks | The rig checks listed there | With T18 |
 | T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
 | T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example` | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
 
@@ -194,156 +196,44 @@ Left: one check. The refusal passed 2026-11-10: with `wavemaker@ladertanken` run
 
 ## If Test 2 fails
 
-**Test 2 failed 2026-11-11** (COMMISSIONING.md, *Test 2*): with both rigs, the wavemaker's
-gateway cycle stalled about 200 ms (once 401 ms) eleven times in 10 min; alone, never in 16 min.
-T16 waits. T17 first shows which request stalls; that picks the remedy.
+**Settled 2026-11-11** (COMMISSIONING.md, *Test 2*): with both rigs, a read or a write now and
+then waited about 200 ms, up to 415 ms per cycle. A capture showed the gateway dropping frames
+for both connections at once, and the Pi resending after Linux's 200 ms minimum (9 of 11; the
+gateway 2). With `rto_min` 20 ms the Pi resends after 22 ms: no slow cycle in 10 min. **Remedy:
+T18. The shared connection is not needed**; it stays below in case the gateway's own resends
+(about 200 ms, not adjustable) become a problem.
 
-### T17: log slow gateway cycles
+### T18: `rto_min` on the route to the gateway
 
-Today a stalled cycle leaves no trace: the controller keeps publishing setpoints, and only the
-bag shows the position standing still. The driver has no logger (it is not ROS code), so it
-counts slow cycles in `DriverStats` and times each of the three requests; the actuator logs
-them. Line numbers as of 2026-11-11.
+`ip route add ... rto_min` is lost at a reboot, and must be in place before a rig opens its
+connection. Both rig units set it as root before they start (`+` runs one command as root; the
+unit itself stays `User=%i`). The gateway's address goes in the env files, next to the other
+per-Pi settings.
 
-1. **`drivers/mgate5101_driver/include/mgate/mgate_driver.h`**
-   - `GatewayConfig`, after line 65 (`reconnect_ms`):
+1. **`rpi/wavemaker@.service` and `rpi/oscillator@.service`**, before the `ExecStartPre` line
+   for `refuse_if_busy.sh`:
 
-     ```cpp
-         int slow_cycle_ms    = 100;   // a longer cycle counts in DriverStats::slow_cycles
-     ```
-
-   - `DriverStats`, after line 77 (`last_cycle_us`):
-
-     ```cpp
-         long long     max_cycle_us    = 0;
-         std::uint64_t slow_cycles     = 0;  // cycles longer than GatewayConfig::slow_cycle_ms
-         // The last slow cycle, and its three requests, in microseconds.
-         long long     slow_cycle_us   = 0;
-         long long     slow_write_us   = 0;
-         long long     slow_inputs_us  = 0;
-         long long     slow_status_us  = 0;
-     ```
-
-   - Private members, after line 167 (`wake_cv_`):
-
-     ```cpp
-         std::array<long long, 3> phase_us_{};  // write, inputs, status of this cycle (poll thread)
-     ```
-
-     and `#include <array>` with the other includes.
-
-2. **`drivers/mgate5101_driver/src/mgate_driver.cpp`**
-   - Replace `exchange()` (lines 364-369) with:
-
-     ```cpp
-     Result MGateDriver::exchange() {
-         // Times each request, so a slow cycle shows which one stalled (DriverStats::slow_*_us).
-         phase_us_ = {};
-         const auto timed = [](long long& us, auto&& request) {
-             const auto start = std::chrono::steady_clock::now();
-             Result r = request();
-             us = std::chrono::duration_cast<std::chrono::microseconds>(
-                      std::chrono::steady_clock::now() - start)
-                      .count();
-             return r;
-         };
-         if (Result r = timed(phase_us_[0], [this] { return flush_outputs(); }); !r) return r;
-         if (Result r = timed(phase_us_[1], [this] { return read_inputs(); }); !r) return r;
-         if (Result r = timed(phase_us_[2], [this] { return read_status(); }); !r) return r;
-         return {};
-     }
-     ```
-
-   - `poll_loop()`, in the stats block after `stats_.last_cycle_us = ...;` (lines 394-396):
-
-     ```cpp
-                 stats_.max_cycle_us = std::max(stats_.max_cycle_us, stats_.last_cycle_us);
-                 if (stats_.last_cycle_us > 1000LL * cfg_.slow_cycle_ms) {
-                     ++stats_.slow_cycles;
-                     stats_.slow_cycle_us  = stats_.last_cycle_us;
-                     stats_.slow_write_us  = phase_us_[0];
-                     stats_.slow_inputs_us = phase_us_[1];
-                     stats_.slow_status_us = phase_us_[2];
-                 }
-     ```
-
-3. **`rig_controller/src/indradrive_actuator.hpp`**, private, after line 50 (`has_target_`):
-
-   ```cpp
-     // Set in start(); report_slow_cycles() logs each new slow gateway cycle.
-     rclcpp::Logger logger_{rclcpp::get_logger("indradrive_actuator")};
-     std::uint64_t slow_cycles_seen_{0};
-     void report_slow_cycles();
+   ```ini
+   # Resend lost Modbus/TCP packets to the gateway after 20 ms instead of Linux's 200 ms minimum
+   # (Test 2, 2026-11-11: two rigs on one MGate). Root for this command only.
+   ExecStartPre=+/bin/sh -c '[ -n "${MGATE_HOST}" ] || { echo "set MGATE_HOST" >&2; exit 1; }; \
+     ip route replace "${MGATE_HOST}/32" $(ip -o route get "${MGATE_HOST}" | grep -o "dev [^ ]*") rto_min 20ms'
    ```
 
-4. **`rig_controller/src/indradrive_actuator.cpp`**
-   - `start()`, after `mgate_driver_->start();` (line 157):
+2. **`/etc/default/wavemaker` and `/etc/default/oscillator`** on the ladertanken Pi (T16 step 2):
+   `MGATE_HOST=192.168.1.70`. Both, since each unit reads only its own. The sloshing oscillator
+   does not use the gateway, but the route does no harm.
+3. **Check** (PC): `systemd-analyze verify` on both units. On the Pi after T16: reboot, start a
+   rig, then `ip route get 192.168.1.70` shows `rto_min 20ms`.
+4. **Claude, after:** `rpi/README.md` (the env line, the check), and a `test_refuse_if_busy.py`-
+   style test of the command with a stub `ip`.
 
-     ```cpp
-       logger_ = logger;
-       slow_cycles_seen_ = 0;
-     ```
+Already in place on the Pi for today: `sudo ip route add 192.168.1.70/32 dev eth0 rto_min 20ms`
+(gone at the next reboot).
 
-   - `write_setpoint()` (line 235), after its `if (!indradrive_) { return false; }` (lines
-     237-239), add one line:
+### Shared connection (not needed now)
 
-     ```cpp
-       report_slow_cycles();   // log any slow gateway cycle since the last call
-     ```
-
-     The controller calls `write_setpoint()` every 20 ms while a wave or a return runs, which is
-     when a stall delays the drive's targets. When no goal runs, slow cycles are not logged.
-   - New, after `write_setpoint()`:
-
-     ```cpp
-     // A slow gateway cycle delays the targets and the feedback; over 500 ms the MGate's fault
-     // timeout switches the drive off (Test 2, 2026-11-11: up to 401 ms with both rigs).
-     void IndraDriveActuator::report_slow_cycles()
-     {
-       const auto stats = mgate_driver_->stats();
-       if (stats.slow_cycles == slow_cycles_seen_) {
-         return;
-       }
-       RCLCPP_WARN(
-         logger_,
-         "MGate cycle %lld ms (write %lld, inputs %lld, status %lld ms); %llu slow so far, "
-         "longest %lld ms",
-         stats.slow_cycle_us / 1000, stats.slow_write_us / 1000, stats.slow_inputs_us / 1000,
-         stats.slow_status_us / 1000, static_cast<unsigned long long>(stats.slow_cycles),
-         stats.max_cycle_us / 1000);
-       slow_cycles_seen_ = stats.slow_cycles;
-     }
-     ```
-
-5. **Tests (Claude, done 2026-11-11):** `FakeMGate::delay_next()` holds one request's reply;
-   `NoSlowCyclesWithoutAStall`, `SlowCycleShowsWhichRequestStalled` (write, inputs, status in
-   turn), `WriteSetpointLogsEachSlowCycleOnce` (`test_indradrive_actuator.cpp`).
-
-**On the Pi** (the branch has T11-T15, so no `git pull` before T16; take only these files):
-
-```bash
-sudo systemctl stop wavemaker@ladertanken
-cd ~/ros_ws/src/hydrolab_rigs && git fetch
-git checkout origin/feat-vertical-oscillator -- drivers/mgate5101_driver/include/mgate/mgate_driver.h \
-  drivers/mgate5101_driver/src/mgate_driver.cpp rig_controller/src/indradrive_actuator.hpp \
-  rig_controller/src/indradrive_actuator.cpp
-cd ~/ros_ws && colcon build --packages-select mgate5101_driver rig_controller
-```
-
-Then Test 2 again (COMMISSIONING.md, *Test 2*, 10 min, both rigs) and:
-
-```bash
-journalctl -u wavemaker@ladertanken --since "15 min ago" -o cat --no-pager | grep "MGate cycle"
-```
-
-The oscillator's lines are in terminal 2 (its hand launch).
-
-**What the result decides:**
-
-| The slow part | Remedy |
-|---|---|
-| `status` only | Read the status area every Nth cycle (remedy 2 below). Small. |
-| `inputs` or `write`, or all | One shared connection (remedy 1). Its own sketch. |
+If the gateway's own resends turn out to matter:
 
 ### Background and remedies
 
@@ -399,6 +289,9 @@ All in git; the commit history has the details.
   every controller on the Pi (`topics` parameter, `soft_stop:=false` in both launches,
   `Requires=` in both units); `_rig.bat` starts only the requested unit. Tests:
   `test_soft_stop.py`, `test_launch_soft_stop.py`, `test_refuse_if_busy.py`.
+- **T17** (2026-11-11): `DriverStats` counts cycles over `slow_cycle_ms` (100) and times the
+  write, input read and status read; `IndraDriveActuator::write_setpoint()` logs each new one
+  (`MGate cycle ... ms (write, inputs, status)`). Tests with `FakeMGate::delay_next()`.
 - **Bridge** (2026-11-11, `c4c1a4a`): logs `Stop requested: <reason>` for every stop.
 - **T1** (2026-11-10): `IndraDrive` refuses blocks other than 7 in / 6 out (failed configure).
 - **Daisy chain:** no code change needed (per-controller blocks and PROFIBUS address).

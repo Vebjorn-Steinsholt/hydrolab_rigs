@@ -49,6 +49,8 @@ from rig_interfaces.srv import ReturnToUpright
 from std_msgs.msg import Bool, Float64, String
 
 ACK_TIMEOUT_S = 0.5      # a page is alive while it acknowledged an event this recently
+HEARTBEAT_PERIOD_S = 0.1
+HEARTBEAT_LATE_S = 0.3   # a heartbeat tick this late means this process stalled; logged
 EVENT_PERIOD_S = 0.1     # how often the page gets an update
 PLOT_WINDOW_S = 30.0     # setpoint and position history kept for the plot
 START_DELAY_S = 0.3      # between sending height/period and start
@@ -139,6 +141,12 @@ class WebNode(Node):
         # wavemakers.ladertanken.controller.
         self._log_prefix = self.get_namespace().strip('/').replace('/', '.')
         self._last_ack = -math.inf
+        # For the heartbeat log (TODO 49): who acknowledged last, when an event last went out,
+        # whether the loss is already logged, and the last heartbeat tick.
+        self._last_ack_from = ''
+        self._last_event_sent = -math.inf
+        self._acks_lost = False
+        self._last_tick = None
         self._t0 = time.monotonic()
         self._last_activity = time.monotonic()  # last motion (wave or setpoint), or Keep running
         self._idle_warned = False
@@ -170,7 +178,7 @@ class WebNode(Node):
         self._return_client = self.create_client(ReturnToUpright, 'return_to_upright')
         self._manager_client = self.create_client(
             ManageLifecycleNodes, 'lifecycle_manager/manage_nodes')
-        self.create_timer(0.1, self._send_heartbeat)
+        self.create_timer(HEARTBEAT_PERIOD_S, self._send_heartbeat)
         if self._idle_timeout > 0.0:
             self.create_timer(1.0, self._check_idle)
 
@@ -217,8 +225,29 @@ class WebNode(Node):
             self._logs.append((self._log_count, entry))
 
     def _send_heartbeat(self):
+        now = time.monotonic()
+        late = None if self._last_tick is None else now - self._last_tick
+        self._last_tick = now
+        if late is not None and late > HEARTBEAT_LATE_S:
+            # The page may be fine: this process did not run its timer (a Pi-side stall).
+            self.get_logger().warn(
+                f'Heartbeat timer ran {late:.2f} s after the previous tick (this process stalled)')
         if self.page_alive():
             self._heartbeat_pub.publish(Bool(data=True))
+            return
+        with self._lock:
+            if self._acks_lost or not math.isfinite(self._last_ack):
+                return  # already logged, or no page yet
+            self._acks_lost = True
+            gap = now - self._last_ack
+            since_event = now - self._last_event_sent
+            client = self._last_ack_from
+            running = self._state in ACTIVE_STATES
+        # The time since the last event tells the two apart: events still going out means the
+        # acknowledgments did not come back (browser or network); no events means this server.
+        log = self.get_logger().warn if running else self.get_logger().info
+        log(f'No page acknowledged for {gap:.2f} s (last from {client or "unknown"}); '
+            f'last event sent {since_event:.2f} s ago; heartbeat paused')
 
     def _check_idle(self):
         now = time.monotonic()
@@ -282,9 +311,20 @@ class WebNode(Node):
     def _now(self):
         return time.monotonic() - self._t0
 
-    def acknowledge(self):
+    def acknowledge(self, client=''):
+        now = time.monotonic()
         with self._lock:
-            self._last_ack = time.monotonic()
+            gap = now - self._last_ack
+            was_lost = self._acks_lost
+            self._last_ack = now
+            self._last_ack_from = client
+            self._acks_lost = False
+        if was_lost:
+            self.get_logger().info(f'Page {client} acknowledged again after {gap:.2f} s')
+
+    def event_sent(self):
+        with self._lock:
+            self._last_event_sent = time.monotonic()
 
     def page_alive(self):
         with self._lock:
@@ -409,7 +449,7 @@ def make_handler(node, html_dir):
 
         def do_POST(self):
             if self.path == '/api/ack':
-                node.acknowledge()
+                node.acknowledge(self.client_address[0])
                 self._send(HTTPStatus.NO_CONTENT, b'', 'text/plain')
                 return
             if self.path == '/api/start':
@@ -445,6 +485,7 @@ def make_handler(node, html_dir):
                     update, last_sample, last_log = node.snapshot(last_sample, last_log)
                     self.wfile.write(f'data: {json.dumps(update)}\n\n'.encode())
                     self.wfile.flush()
+                    node.event_sent()
                     time.sleep(EVENT_PERIOD_S)
             except (BrokenPipeError, ConnectionResetError):
                 pass
