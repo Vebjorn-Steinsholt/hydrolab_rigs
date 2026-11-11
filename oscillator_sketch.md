@@ -15,8 +15,8 @@ be a few lines off.
    hand (COMMISSIONING.md, *Test 2*). T17 (the slow-cycle log) found it.
 3. **T18: set `rto_min` at every rig start** ([T18](#t18-rto_min-on-the-route-to-the-gateway)),
    since a reboot loses it.
-4. **T16 done on the Pi 2026-11-11**: both rigs run together. Left: the Windows check and the
-   sloshing refusal ([T16](#t16-install-on-the-pi-done-2026-11-11-f9ba5fc)).
+4. **T16 done on the Pi 2026-11-11**: both rigs run together, also started from Windows. Left:
+   the sloshing refusal ([T16](#t16-install-on-the-pi-done-2026-11-11-f9ba5fc)).
 5. **The web page's heartbeat stops** (TODO 49): they cut waves, but are not the gateway.
 6. **T5's last check** when the sloshing rig is connected.
 7. T10 is optional and not needed now.
@@ -25,7 +25,7 @@ be a few lines off.
 |---|---|---|---|---|---|
 | T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Done 2026-11-11 |
 | T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Done 2026-11-11, on the Pi too |
-| T16 | the ladertanken Pi | *T16* | Install T11-T15 and T18 | The rig checks | Done 2026-11-11; Windows check and sloshing refusal left |
+| T16 | the ladertanken Pi | *T16* | Install T11-T15 and T18 | The rig checks | Done 2026-11-11; sloshing refusal left (T5) |
 | T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
 | T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example` | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
 
@@ -141,10 +141,9 @@ Installed and checked on the ladertanken Pi: env files (`PORT=8081`, `MGATE_HOST
 three units, `rto_min lock 20ms` on the route, and the rig checks 1-6 of `rpi/README.md`, *Rig
 test (wavemaker and vertical together)* (both rigs together, one press stops both, either one
 stopped leaves the other and the button working, the button unit stops after the last rig and
-takes both with it). Left:
-- **Windows:** `start_oscillator.bat` with the wavemaker running leaves it running and opens
-  port 8081 (`_rig.bat`, T15).
-- **Sloshing refused in both directions:** with T5, when the sloshing rig is connected.
+takes both with it). `start_oscillator.bat` with the wavemaker running left it running (T15,
+2026-11-11). Left: **sloshing refused in both directions**, with T5 when the sloshing rig is
+connected.
 
 ## T5: the Pi
 
