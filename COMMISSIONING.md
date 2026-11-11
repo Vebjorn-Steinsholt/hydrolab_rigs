@@ -93,7 +93,7 @@ Checks for the vertical oscillator's IndraDrive on the ladertanken MGate (slave 
 behind the wavemaker's drive since 2026-11-10). What to code, and why:
 [oscillator_sketch.md](oscillator_sketch.md).
 
-- [Switching drives](#switching-drives-every-time), [Done](#done), [Open](#open)
+- [Starting the rigs](#starting-the-rigs-every-time), [Done](#done), [Open](#open)
 - [The oscillator drive](#the-oscillator-drive-read-2026-11-06): the parameters
 - [Procedures](#procedures): monitor, brake, test move, dry run, fault timeout, recorded runs
 - [Test 2](#test-2-gateway-load-with-both-rigs-next) (next), [Test 1](#test-1-kill-test-with-both-rigs-running-passed-2026-11-10)
@@ -106,25 +106,29 @@ On the Pi (`ssh ladertanken@ladertanken-rpi.local`), in tmux:
 cd ~/ros_ws && source install/setup.bash
 ```
 
-### Switching drives (every time)
+### Starting the rigs (every time)
 
 Both drives stay on the PROFIBUS line (MGate → wavemaker, termination OFF → oscillator,
 termination ON): wavemaker slave 2 (blocks 0 / 0), oscillator slave 3 (7 / 6). Nothing is
-replugged; each yaml reaches only its own drive.
+replugged; each yaml reaches only its own drive. **The wavemaker and the vertical oscillator run
+together** (since 2026-11-11, TODO 47); the sloshing oscillator only alone.
 
-1. Stop the running service: `sudo systemctl stop wavemaker@ladertanken` (or `oscillator@`).
-2. The oscillator's mains must be on at the cabinet (A0012 `Ab`, not A0013 `bb`).
-3. For the oscillator: `OSCILLATOR=vertical` in `/etc/default/oscillator`; for the sloshing rig,
-   `sloshing` (or no line). One unit runs either oscillator, so the two can never run together.
-4. Start the matching service. The controller's `Drive status` line in the journal is the
-   position check: `OM AF`, the position near where the slide stands.
-5. **`mgate_example` without options is slave 2 (the wavemaker)**; the oscillator is
+1. The oscillator's mains must be on at the cabinet (A0012 `Ab`, not A0013 `bb`).
+2. `OSCILLATOR=vertical` in `/etc/default/oscillator` for the vertical rig; `sloshing` (or no
+   line) for the sloshing one. One unit runs either oscillator, so those two never run together.
+3. Start what is needed, in either order: `sudo systemctl start wavemaker@ladertanken`,
+   `sudo systemctl start oscillator@ladertanken` (or `start_wavemaker.bat`,
+   `start_oscillator.bat`). Pages: 8080 (wavemaker), 8081 (oscillator). The soft stop button
+   stops every rig that runs.
+4. The controller's `Drive status` line in the journal is the position check: `OM AF`, the
+   position near where the slide or flap stands.
+5. **A wavemaker start after a stop fails with F2074** while the flap rests at about +194°
+   (TODO 48): clear it in IndraWorks, disconnect, start again, then *Return to upright*.
+6. **`mgate_example` without options is slave 2 (the wavemaker)**; the oscillator is
    `--input-base 7 --output-base 6 --profibus-address 3`. In parameter mode it shows
-   `SW=0x0888 PM --` with everything 0 (the drive sends no actual values).
+   `SW=0x0888 PM --` with everything 0 (the drive sends no actual values). Not while a rig runs.
 
-Back to the wavemaker: stop `oscillator@ladertanken`, then `start_wavemaker.bat` or
-`sudo systemctl start wavemaker@ladertanken`. A wavemaker drive powered off on the chain shows
-F4009; clear it before starting its service.
+A wavemaker drive powered off on the chain shows F4009; clear it before starting its service.
 
 ### Done
 
@@ -161,8 +165,6 @@ F4009; clear it before starting its service.
 
 ### Open
 
-- [ ] **Test 2: gateway load with both rigs** ([procedure](#test-2-gateway-load-with-both-rigs-next)).
-  Gates the code for running both rigs (TODO 47).
 - [ ] With the load and water: repeat the brake test (the slide must not drop at mid-height) and
   5 and 20 mm at 2 s, then a sweep at a fixed stroke (for example 10 mm at 3, 2, 1.5, 1, 0.8 s; a
   `generate_oscillations` file played with `play_dat`), watching current and torque in IndraWorks.

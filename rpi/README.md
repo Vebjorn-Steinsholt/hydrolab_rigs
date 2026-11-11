@@ -606,3 +606,10 @@ Passed 2026-10-23, with the messages of the time (one rig at a time, port 8080 f
    sudoers rule): both rigs stop.
 7. `OSCILLATOR=sloshing`: refused next to the running wavemaker, and the wavemaker refused next to
    it (see *Rig test (sloshing)*, step 3).
+
+**Run 2026-11-11 on ladertanken, commit `f9ba5fc`: steps 1-6 passed.** All three units `active`,
+`ip route get 192.168.1.70` with `rto_min lock 20ms`, the soft stop publishing to all three
+topics. One press stopped both waves; with the wavemaker stopped the button still stopped the
+oscillator; after the last rig `soft_stop@` was `inactive`; `systemctl stop soft_stop@...` stopped
+both. Every wavemaker start after a stop needed F2074 cleared in IndraWorks (TODO 48). Step 7
+waits for the sloshing rig (T5).

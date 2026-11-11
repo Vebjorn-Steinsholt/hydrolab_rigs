@@ -15,8 +15,8 @@ be a few lines off.
    hand (COMMISSIONING.md, *Test 2*). T17 (the slow-cycle log) found it.
 3. **T18: set `rto_min` at every rig start** ([T18](#t18-rto_min-on-the-route-to-the-gateway)),
    since a reboot loses it.
-4. **T16 on the Pi**, with T18: `/etc/default/*`, installing the units, the rig checks
-   ([T16](#t16-install-on-the-pi)).
+4. **T16 done on the Pi 2026-11-11**: both rigs run together. Left: the Windows check and the
+   sloshing refusal ([T16](#t16-install-on-the-pi-done-2026-11-11-f9ba5fc)).
 5. **The web page's heartbeat stops** (TODO 49): they cut waves, but are not the gateway.
 6. **T5's last check** when the sloshing rig is connected.
 7. T10 is optional and not needed now.
@@ -24,17 +24,16 @@ be a few lines off.
 | # | File | Where | What | Done when | Left (2026-11-10) |
 |---|---|---|---|---|---|
 | T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Done 2026-11-11 |
-| T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Done in the repo 2026-11-11; on the Pi with T16 |
-| T16 | the ladertanken Pi: `/etc/default/oscillator`, `/etc/systemd/system/` | *T16: install on the Pi* | Port line, copy the units, build, the rig checks | The rig checks listed there | With T18 |
+| T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Done 2026-11-11, on the Pi too |
+| T16 | the ladertanken Pi | *T16* | Install T11-T15 and T18 | The rig checks | Done 2026-11-11; Windows check and sloshing refusal left |
 | T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
 | T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example` | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
 
 ## Scope (2026-11-06)
 
 - **Phase 2, since 2026-11-10: daisy chain.** Both drives stay on the line; the oscillator is
-  PROFIBUS address 3 (MGate slave 3, registers 7 / 6), the wavemaker keeps 2 (0 / 0). One rig
-  still runs at a time; running the wavemaker and the vertical oscillator together is TODO 47
-  (T11-T15). Phase 1 (2026-11-06 – 2026-11-10) replugged one cable between the drives at
+  PROFIBUS address 3 (MGate slave 3, registers 7 / 6), the wavemaker keeps 2 (0 / 0). The
+  wavemaker and the vertical oscillator run together since 2026-11-11 (T11-T18). Phase 1 (2026-11-06 – 2026-11-10) replugged one cable between the drives at
   address 2.
 - **The oscillator is developed by playing motion files** (`play_dat --rig oscillator`).
 - **You write the code.** Each task says what to build, where, and how to check it. Claude
@@ -75,11 +74,10 @@ The full parameter read-out and the comparison with the wavemaker are in
   units "deg" and "rpm" (`indradrive.cpp:27-33`).
 - **Linear IndraDrive scaling (TODO item 19):** `drive_m_per_unit`,
   `drive_velocity_per_unit_per_s`, `drive_direction`, limits from travel (T2, 2026-11-09).
-- **Only one rig runs on the Pi at a time (TODO 47 will allow wavemaker + vertical).**
-  `wavemaker@` and `oscillator@` refuse to start while the other runs (`rpi/refuse_if_busy.sh`,
-  which also catches a launch by hand through the web port), and `windows/_rig.bat` stops the
-  other before starting one. The oscillator launch takes `oscillator:=sloshing|vertical`, set
-  through `OSCILLATOR=` in `/etc/default/oscillator` (T5).
+- **The wavemaker and the vertical oscillator run together; sloshing only alone.**
+  `rpi/refuse_if_busy.sh` refuses sloshing next to the wavemaker, and a launch by hand on a
+  unit's own port; one `soft_stop@` serves both; ports 8080 and 8081. The oscillator launch takes
+  `oscillator:=sloshing|vertical`, set through `OSCILLATOR=` in `/etc/default/oscillator` (T5).
 - **`play_dat` already plays to an oscillator** (`--rig oscillator`, action `move_oscillator`).
   With a rig name it reads limits and namespace from `oscillator.yaml` (`rig_limits.py:20`).
   For a linear IndraDrive, `rig_limits` derives the speed limit from `max_velocity_rpm` and the
@@ -137,50 +135,16 @@ All implemented on 2026-11-09 except where noted.
    like `generate_waves`); the speed limit comes from the yaml (T8). Single waves also run from
    the web page (height = stroke, period).
 
-## T16: install on the Pi
+## T16: install on the Pi (done 2026-11-11, `f9ba5fc`)
 
-After T11-T15 are merged into the branch and Test 2 has passed. Everything here needs the Pi
-(`ssh ladertanken@ladertanken-rpi.local`); both rigs stopped first.
-
-1. **Pull and build:**
-
-   ```bash
-   sudo systemctl stop wavemaker@ladertanken oscillator@ladertanken
-   cd ~/ros_ws/src/hydrolab_rigs && git pull
-   cd ~/ros_ws && colcon build
-   ```
-
-2. **`/etc/default/oscillator`** (`sudoedit /etc/default/oscillator`):
-
-   ```bash
-   ROS_DOMAIN_ID=1
-   PORT=8081
-   OSCILLATOR=vertical
-   MGATE_HOST=192.168.1.70
-   ```
-
-   `/etc/default/wavemaker` gets one line, `MGATE_HOST=192.168.1.70` (T18); the rest is unchanged (8080 by default). `ROS_DOMAIN_ID` must be the same in
-   both files: `soft_stop@` reads the wavemaker's, so an oscillator on another domain never hears
-   the button and stays stopped.
-3. **Install the units:**
-
-   ```bash
-   sudo cp ~/ros_ws/src/hydrolab_rigs/rpi/{wavemaker,oscillator,soft_stop}@.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   ```
-
-   The sudoers rule is unchanged: systemd starts `soft_stop@` through `Requires=`.
-4. **The rig checks:**
-   - wavemaker and vertical start in either order;
-   - sloshing is refused in both directions;
-   - one press stops both;
-   - stopping one rig leaves the other and the button working;
-   - stopping the soft stop unit stops both.
-5. **Windows:** `start_oscillator.bat` with the wavemaker running leaves the wavemaker running
-   and opens port 8081.
-
-Then Claude marks TODO 47 done and rewrites COMMISSIONING.md, *Switching drives* (no stop needed
-for the vertical oscillator any more).
+Installed and checked on the ladertanken Pi: env files (`PORT=8081`, `MGATE_HOST` in both), the
+three units, `rto_min lock 20ms` on the route, and the rig checks 1-6 of `rpi/README.md`, *Rig
+test (wavemaker and vertical together)* (both rigs together, one press stops both, either one
+stopped leaves the other and the button working, the button unit stops after the last rig and
+takes both with it). Left:
+- **Windows:** `start_oscillator.bat` with the wavemaker running leaves it running and opens
+  port 8081 (`_rig.bat`, T15).
+- **Sloshing refused in both directions:** with T5, when the sloshing rig is connected.
 
 ## T5: the Pi
 
