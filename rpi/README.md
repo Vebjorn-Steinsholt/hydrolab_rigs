@@ -72,6 +72,21 @@ To start and stop without a password, add a sudoers rule with
 ladertanken ALL=(root) NOPASSWD: /usr/bin/systemctl start wavemaker@ladertanken, /usr/bin/systemctl stop wavemaker@ladertanken
 ```
 
+**WiFi off** (done on ladertanken 2026-11-11). The Pi runs on the cable only: with WiFi on the
+same subnet, its name also answers with the WiFi address, and traffic to the page, ssh and ROS
+can go over WiFi (TODO 49). On a Pi 5 with Ubuntu, where cloud-init wrote the WiFi into
+`/etc/netplan/50-cloud-init.yaml`:
+
+```bash
+echo "dtoverlay=disable-wifi" | sudo tee -a /boot/firmware/config.txt   # under the last [all]
+echo "network: {config: disabled}" | sudo tee /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+sudo mv /etc/netplan/50-cloud-init.yaml /root/50-cloud-init.yaml.bak
+sudo netplan generate && sudo reboot
+ip -4 -br addr        # after the reboot: only lo and eth0
+```
+
+Log in over the cable (`ssh <user>@<the eth0 address>`) before doing this.
+
 `sudo -l` should list it. The soft stop unit needs no rule: systemd starts it for the rig unit.
 Then start the service once and check the journals (see *Use*): the wavemaker's should show
 `Managed nodes are active` and `Soft stop connected`; the soft stop's
