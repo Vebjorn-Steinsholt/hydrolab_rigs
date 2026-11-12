@@ -1,0 +1,42 @@
+carriage/lilletanken/controller:
+  ros__parameters:
+    rig: lilletanken
+    drive_name: indradrive
+    driver_address: "192.168.1.71"   # the ladertanken gateway, slave 3 (daisy chain)
+    driver_port: 502
+    driver_unit_id: 1
+    input_base_reg: 7                # bytes 14-27; slave 2 (wavemaker) has 0-13
+    input_word_count: 7              # 14 bytes: status, position, velocity, diag (U32)
+    output_base_reg: 6               # bytes 12-23; slave 2 (wavemaker) has 0-11
+    output_word_count: 6             # 12 bytes: control, target, speed cap, override
+    input_uses_fc4: true
+    status_base_reg: 768
+    status_word_count: 9
+    poll_interval_ms: 20
+    write_only_dirty: false
+    profibus_address: 3              # P-0-4025 on the drive, MGate slave 3
+    drive_motion: angular
+    drive_m_per_unit: 0.001              # T2: position tag in mm (0.0001 mm resolution)
+    drive_velocity_per_unit_per_s: 6.0   # T2: velocity tag in 10 mm/min (0.001 mm/min resolution)
+    drive_direction: -1                  # T2: + command moves the slide down; rig uses + = up
+    upright_position_m: 0.0          # drive position about 0 mm at mid-travel
+    travel_minimum_m: 0         # inside the drive's -211 mm
+    travel_maximum_m: 20.0          # inside the drive's +211 mm
+    max_velocity_rpm: 600.0          # velocity tag units: 600 x 10 mm/min = 0.1 m/s - set from the rig
+    hold_velocity_rpm: 60.0          # 10 mm/s
+    in_position_tol_deg: 0.1         # position tag units: 0.1 mm
+    step_timeout_ms: 10000
+    return_to_upright_max_velocity_mps: 0.02
+    # No limit until the loaded tests show where the lag or the mechanics need one (decision 5);
+    # until then only the drive's acceleration (20 m/s^2) and jerk (3 m/s^3) limit a goal.
+    max_goal_acceleration_mps2: 0.0   # 0 = no limit
+    min_period_s: 0.0                 # 0 = no limit
+    # The code's defaults, written out (2026-11-12) so every limit is visible here.
+    return_to_upright_default_tolerance_m: 0.002
+    positioning_velocity_margin: 1.2  # speed cap = peak speed of the goal x this
+    soft_stop_timeout_s: 0.2          # no soft stop message for this long counts as pressed
+
+/carriage/lilletanken/bridge:
+  ros__parameters:
+    rig: lilletanken                  # topic names: oscillator_state, oscillator_message
+    heartbeat_timeout: 1.0            # stop the wave this long after the page's heartbeat stops (TODO 49)

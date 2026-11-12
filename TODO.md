@@ -76,7 +76,9 @@ Decided but not started. Each feature says what and why, the decisions taken, an
 
 An action that moves a rig to a position with a given maximum velocity and acceleration, for
 CLI users. First wanted for the LinMot sloshing oscillator and a future carriage; available on
-every rig (for the wavemakers it is not needed, but costs nothing).
+every rig (for the wavemakers it is not needed, but costs nothing). On the carriage it is the
+**tow**: `position` is where the tow ends, `max_velocity` the tow speed. Oscillating the carriage
+stays on `MoveRig`.
 
 #### Decisions (2026-10-27)
 
@@ -113,9 +115,14 @@ before the end prints `Canceling goal...`; the slide stops and holds.
   - `max_velocity` or `max_acceleration` ≤ 0;
   - `max_velocity` above the drive's maximum (`Actuator::max_velocity_mps()`);
   - `max_acceleration` above `max_goal_acceleration_mps2` (when set) or the drive's maximum;
+  - `max_velocity` above `max_tow_velocity_mps` (when set; for a carriage slower than its drive);
+  - the braking distance `max_velocity² / (2 max_acceleration)` not fitting between the point
+    where the cruise ends and the travel limit (a tow must be able to stop inside the tank);
   - the soft stop engaged, a fault, or another goal or a return running.
 - **During the move:** cancel, the soft stop or a fault halts the drive; the result says which.
-  Feedback: `position` (measured), `remaining` (distance to the target).
+  Feedback: `position` and `velocity` (measured), `remaining` (distance to the target),
+  `elapsed_time`, and `phase`. `phase` is CRUISING while the speed is steady, so a tow's logs
+  and bags can be cut to the cruise.
 - **Done** when the position is within `tolerance` of the target and the motion has ended
   (native: the drive's own status; streamed: the profile has finished). Timeout: the profile's
   duration plus `return_to_upright_timeout_margin_s`.
@@ -142,9 +149,19 @@ uint8 status
 float64 final_position    # m, measured
 string message
 ---
+uint8 ACCELERATING=0
+uint8 CRUISING=1
+uint8 BRAKING=2
+uint8 SETTLING=3          # profile done, waiting for the drive to report in position
 float64 position          # m, measured
+float64 velocity          # m/s, measured
 float64 remaining         # m, to the target
+float64 elapsed_time      # s since the goal was accepted
+uint8 phase
 ```
+
+For a native move the controller derives `phase` from the measured velocity against
+`max_velocity` (within a small band = CRUISING).
 
 #### Native moves in the actuator
 
@@ -165,8 +182,22 @@ virtual bool native_move_done() const {return false;}
 | Drive | Path | Why |
 | --- | --- | --- |
 | LinMot (`LinMotActuator`) | native | VAI is exactly position + velocity + acceleration; done = status bits `kInTargetPosition` set and `kMotionActive` clear (`linmot/linmot_drive.h`). |
-| IndraDrive (`IndraDriveActuator`) | streamed | Positions with a velocity limit, but takes no acceleration. |
+| IndraDrive (`IndraDriveActuator`) | streamed, native after A below | Positions with a velocity limit, but takes no acceleration today. |
 | Future carriage | depends on its drive | Behind the same interface. |
+
+**The IndraDrive for a tow.** A streamed profile is 20 ms position steps. That is fine for a few
+cm of oscillator travel, but on a long tow it shows as speed ripple, exactly in the part that
+should be steady.
+
+**Decided (2026-11-12): acceleration in the cyclic telegram**, since a tow needs its own
+acceleration each time. Map S-0-0260 (positioning acceleration) into the PROFIBUS outputs: 2 more
+output words, the slave's MGate output block and `output_word_count` changed,
+`IndraDrive::move_to(target, velocity, acceleration)` in the driver. The IndraDrive then takes
+the native path: one command per tow, profile from the drive. Rejected: ramping the speed cap
+(braking timed by the controller on feedback one cycle old) and a fixed acceleration set in
+IndraWorks (no acceleration per tow).
+
+The carriage's drive is not decided (`carriage.yaml` is a copy of the vertical oscillator).
 
 To check first, on the LinMot: the bridge keeps sending the latest target every cycle. The
 command-count firmware (OSCILLATOR.md, 2026-10-22) should make the drive treat a repeated
@@ -197,6 +228,16 @@ acceleration caps from the goal.
 - [ ] **6. Rig test, oscillator:** moves of a few sizes and speeds; Ctrl-C mid-move; the soft
   stop mid-move; a rejection (outside the travel). Listen: a native move should be quiet. Then
   one streamed move on the ladertanken wavemaker.
+- [ ] **7. Carriage tow:**
+  - IndraWorks: S-0-0260 in the drive's cyclic outputs (telegram), after a parameter backup.
+  - MGate: the slave's output block 2 words larger; check that the other slave's block does not
+    overlap; new backup in `MGATE_config_backup/`.
+  - Driver: `IndraDrive::move_to(target, velocity, acceleration)`, the fake MGate and its tests.
+  - `IndraDriveActuator`: the three native-move methods; `output_word_count` in the yaml.
+  - `max_tow_velocity_mps` in `carriage.yaml`.
+  - Rig test: tows at a few speeds and accelerations, measured
+    velocity steady during CRUISING, Ctrl-C and the soft stop mid-tow, a rejection for a braking
+    distance that does not fit.
 
 Unit tests (no hardware):
 
