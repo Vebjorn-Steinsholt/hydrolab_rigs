@@ -111,6 +111,24 @@ After a `git pull`:
 
 Then stop and start the service; a running service keeps the old code.
 
+### Back to `master` after `feat-vertical-oscillator` (once, ladertanken Pi)
+
+The ladertanken Pi has run `feat-vertical-oscillator` since T16 (2026-11-11). Once the branch is
+merged into `master`:
+
+```bash
+sudo systemctl stop wavemaker@ladertanken oscillator@ladertanken
+cd ~/ros_ws/src/hydrolab_rigs
+git status --short          # expected: nothing
+git checkout master && git pull
+cd ~/ros_ws && colcon build
+sudo systemctl start wavemaker@ladertanken oscillator@ladertanken
+```
+
+Expected: `git status` prints nothing, `colcon build` ends with `Summary: N packages finished`,
+both units are `active`, and `soft_stop@ladertanken` is `active`. The unit files and
+`/etc/default/*` are the same on both branches, so nothing else changes.
+
 ### Repository renamed to `hydrolab_rigs` (once per Pi, 2026-11)
 
 The repository was `ros2_wavemakers`; the units now run the scripts from
@@ -611,5 +629,5 @@ Passed 2026-10-23, with the messages of the time (one rig at a time, port 8080 f
 `ip route get 192.168.1.70` with `rto_min lock 20ms`, the soft stop publishing to all three
 topics. One press stopped both waves; with the wavemaker stopped the button still stopped the
 oscillator; after the last rig `soft_stop@` was `inactive`; `systemctl stop soft_stop@...` stopped
-both. Every wavemaker start after a stop needed F2074 cleared in IndraWorks (TODO 48). Step 7
-waits for the sloshing rig (T5).
+both. Every wavemaker start after a stop needed F2074 cleared in IndraWorks (TODO 48; fixed the
+same day with the MGate fault value `0x0002`). Step 7 waits for the sloshing rig (TODO 50, 2027).

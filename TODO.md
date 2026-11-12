@@ -27,6 +27,9 @@ the items kept there, and finished items, which are removed (see the git history
 - [ ] **46. Vertical oscillator: tracking under changing loads.** (rig; drive tuning with the drive's owner, from about 2026-11-23)
   Unloaded (2026-11-09) the slide follows with about 180 ms lag; the stroke reaches 97 % at a 2 s period and 90 % at 1 s, for any stroke: a first-order lag of about 77 ms plus about 100 ms delay ([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken)). The load changes between experiments (models, profiles, water resistance, depth), so one fixed correction cannot hold. Options: (1) a stiffer drive (Kv S-0-0104 = 1.0, acceleration feedforward S-0-0348 / P-0-1126 = 0); (2) record and report the measured motion with every run; (3) a calibration sweep per setup and a gain per period (the controller's gain table is wavemaker-only); (4) amplitude correction during the run. 1 and 2 first. To decide with the experimenters: must the slide reach the requested stroke, or is knowing what it did enough?
 
+- [ ] **51. Vertical oscillator: the working values in the yaml.** (`oscillator_bringup/config/oscillator.yaml`, the `vertical` block; with the experimenters)
+  Travel, stroke, maximum speed and rest position are not yet known from the experiments; the yaml has ±0.2 m around 0 and 0.1 m/s (`max_velocity_rpm` 600). The 0.1 m/s is a placeholder from the first commit (`cecf951`), not measured; it caps a sine's stroke at v·T/π (32 mm at 1 s, 64 mm at 2 s). The drive allows 1.6 m/s (S-0-0091 = 96 000 mm/min, [COMMISSIONING.md](COMMISSIONING.md#the-oscillator-drive-read-2026-11-06)), 4800 rpm at the motor with 20 mm/rev: check it against the MSK050C-0300's maximum speed, then raise `max_velocity_rpm` in steps on the rig ([COMMISSIONING.md, *Test 3*](COMMISSIONING.md#test-3-raising-the-speed-limit-todo-51)). Short periods stay small anyway: above about 24 mm at 1 s the drive's 3 m/s³ jerk rounds the sine off. `max_goal_acceleration_mps2` and `min_period_s` stay 0 (no limit) until the loaded tests (item 46) show where the lag or the mechanics become a problem; then set them so the controller rejects a goal that is too steep instead of the drive rounding it off (the drive's own 20 m/s² and 3 m/s³ limit every move today; [oscillator_sketch.md](oscillator_sketch.md#decisions), decision 5).
+
 ## Low
 
 - [ ] **29. `IndraDrive::disable()` can block a lifecycle callback for up to 20 s.** (`drivers/mgate5101_driver/src/indradrive.cpp`)
@@ -52,6 +55,18 @@ the items kept there, and finished items, which are removed (see the git history
   Cause, found 2026-11-11: `Stop requested: Stopped: client heartbeat ... lost`. Every acknowledgment from the page opened a new connection (HTTP/1.0) to `ladertanken-rpi.local`, and the browser's PC sometimes needed about 2.4 s to look the name up again; past 1.5 s (`ACK_TIMEOUT_S` 0.5 s + the bridge's `heartbeat_timeout` 1.0 s) the bridge stops the wave. **Fixed:** the server keeps the connection open (HTTP/1.1), so the name is looked up once; checked on the Pi 13:35-13:50, 15 min by name, no gap. The server now logs each gap (`No page acknowledged for ...; last event sent ...`, `acknowledged again after ...`, `Heartbeat timer ran ...`). Tests: `rig_web/test/`.
   The Pi's WiFi (`wlan0` 192.168.1.99, on the same subnet as the cable) is off for good since 2026-11-11 (`dtoverlay=disable-wifi`, cloud-init's netplan file removed; `rpi/README.md`, *Install*).
   Open: whether the 1.5 s margin is right: it exists to stop a wave when nobody is watching.
+
+- [ ] **50. Sloshing oscillator on the ladertanken Pi: the last check.** (rig; postponed to 2027, when the sloshing rig is connected; was T5 in [oscillator_sketch.md](oscillator_sketch.md))
+  The vertical oscillator's branch changed how the sloshing rig starts (`oscillator:=`, the shared `soft_stop@`, `refuse_if_busy.sh`). The refusal of sloshing's unit next to the running wavemaker passed 2026-11-10 (`ExecStartPre` failed), but sloshing has not run since. Remove `OSCILLATOR` from `/etc/default/oscillator` (or set `sloshing`) and start `oscillator@ladertanken`: the journal shows `LinMot: homed` and the nodes are in `/oscillators/sloshing`. Then step 7 of `rpi/README.md`, *Rig test (wavemaker and vertical together)*: sloshing refused next to the running wavemaker, and the wavemaker refused next to it. Set `OSCILLATOR=vertical` again afterwards.
+
+- [ ] **52. `mgate_example`: step size, speed and limits; install it.** (optional; `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt`; Claude's, handed over 2026-11-10; was T10)
+  Add `--step`, `--speed` and `--min` / `--max` (tag units) to `main()` and `test_move()`, and install `mgate_example` (`install(TARGETS ...)`), so `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back. Today `--move` steps 5 mm at 1.7 mm/s on the vertical oscillator, its limits default to −550…500 (`IndraDriveConfig`, so the drive's ±211 mm are the only backstop), and it runs from `~/ros_ws/build/mgate5101_driver/mgate_example`. Not needed now.
+
+- [ ] **53. One shared gateway connection for both ladertanken drives.** (only if needed; `IndraDriveActuator`, `MGateDriver`, `IndraDrive`)
+  Not needed now: Test 2's slow cycles came from the Pi's 200 ms minimum resend time, fixed by `rto_min` 20 ms at every rig start (T18, 2026-11-11; COMMISSIONING.md, *Test 2*). Do it if the gateway's own resends (about 200 ms, not adjustable) become a problem. Remedies, in this order: (1) one process owns the gateway, both drives on one `MGateDriver` (3 requests per cycle for both rigs instead of 6); `set_cycle_callback` then needs more than one subscriber (`IndraDrive` takes the only slot); tests: two `IndraDriveActuator`s on one `FakeMGate` (it plays only one drive today); (2) read the status area only every Nth cycle; (3) FC23 (probably not usable, the inputs are FC4); (4) a slower oscillator poll. Still to check either way: the MGate's maximum number of Modbus TCP clients (3 worked on 2026-11-10). Background: [oscillator_sketch.md](oscillator_sketch.md#if-test-2-fails).
+
+- [ ] **54. Oscillator: the centre of oscillation from `/etc/default/oscillator`.** (`oscillator_bringup/launch/oscillator.launch.py`, `rpi/run.sh`)
+  `VERTICAL_UPRIGHT_M` / `SLOSHING_UPRIGHT_M` override `upright_position_m` at launch, as `WATER_DEPTH` does for the wavemaker, so another centre needs no edit of the tracked yaml on the Pi. Sketch: [oscillator_sketch.md, *T19*](oscillator_sketch.md#t19-the-centre-from-etcdefaultoscillator).
 
 ## Planned features (all rigs)
 
@@ -205,8 +220,8 @@ Make adding a rig (a future carriage, or others) a matter of one yaml file, plus
 class only when the rig uses a new drive family. The drive is already chosen by config
 (`drive_name`); the rig name and the way a goal becomes a trajectory are not.
 
-**When:** after `feat/oscillator` is merged into `master`, which waits until the current lab use
-ends (end of the week of 2026-10-26). On its own branch.
+**When:** after `feat-vertical-oscillator` is merged into `master` (`feat/oscillator` was merged
+2026-11-02). On its own branch.
 
 #### Decisions (2026-10-28)
 

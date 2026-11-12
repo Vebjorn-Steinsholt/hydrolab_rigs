@@ -1,5 +1,6 @@
 """
 Everything a lab Pi runs: controller, bridge, lifecycle manager, soft stop node and web page.
+
 soft_stop:=false leaves the soft stop node out (the services: soft_stop@.service owns it).
 
 Started by lab staff, normally through the wavemaker service (see rpi/README.md):

@@ -57,7 +57,9 @@ def _launch_setup(context):
                 executable='bridge_node',
                 namespace=namespace,
                 name='bridge',
-                parameters=[{'bond_timeout': bond_timeout}],
+                # Its block /wavemakers/<name>/bridge in wavemakers.yaml (heartbeat_timeout), as
+                # the oscillator's bridge reads oscillator.yaml.
+                parameters=[config_file, {'bond_timeout': bond_timeout}],
                 output='screen',
             )
         )

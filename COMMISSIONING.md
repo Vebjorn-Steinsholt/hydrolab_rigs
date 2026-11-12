@@ -291,6 +291,86 @@ E-stop within reach for every step that can move the slide.
    step, watching the stroke and lag. Keep files under 3 m/s³ jerk (`generate_oscillations`
    warns above it).
 
+### Test 3: raising the speed limit (TODO 51)
+
+**Question:** how fast can the slide run cleanly? The answer sets `max_velocity_rpm` in the
+`vertical` block of `oscillator.yaml`. Today it is 600 (0.1 m/s), a placeholder from the first
+commit (`cecf951`). It caps a sine's stroke at speed × period / π: 32 mm at 1 s, 64 mm at 2 s.
+The drive allows 1.6 m/s (S-0-0091). The largest stroke run so far is 20 mm.
+
+**Units:** `max_velocity_rpm` is in 10 mm/min, so 600 = 0.1 m/s, 1200 = 0.2 m/s and
+1800 = 0.3 m/s. A goal's peak speed is π × stroke / period. The controller rejects a goal whose
+peak speed is above the limit, and logs `Received goal needing up to ... m/s, above the drive's
+maximum of ... m/s, rejecting`.
+
+**Before the test:**
+- [ ] Find the motor's maximum speed (MSK050C-0300 nameplate or datasheet, n_max) and check
+  that 4800 rpm (1.6 m/s at 20 mm/rev) is within it. Stop at the lower of n_max × 20 mm/rev
+  and 1.6 m/s, whatever this test finds.
+- [ ] Ask the rig's owner whether the slide and its mounting are fine at 0.3 m/s and 250 mm of
+  stroke. Note any load on the slide (none in all earlier runs).
+- [ ] Brake test (*Procedures*, step 2): the slide must not drop at mid-height.
+- [ ] E-stop within reach, nobody under or beside the slide, nothing within 200 mm of its travel.
+- [ ] The wavemaker stopped, so only the oscillator runs.
+
+**Setting a level** (on the Pi, between levels; the slide at rest):
+
+```bash
+cd ~/ros_ws/src/hydrolab_rigs
+nano oscillator_bringup/config/oscillator.yaml     # vertical: max_velocity_rpm: 1200.0
+cd ~/ros_ws && colcon build --packages-select oscillator_bringup
+sudo systemctl restart oscillator@ladertanken
+journalctl -u oscillator@ladertanken -n 30 --no-pager | grep -i "drive status"   # OM AF
+```
+
+**Each run:** record it from the lab PC (*Procedures*, step 6: `ros2 bag record -o
+~/bags/speed_<level>_<stroke>mm_<period>s ...`), then enter the height (= stroke, in m) and
+period on the oscillator's page (port 8081). Let it run at least 10 periods. Watch and listen:
+vibration, knocking, belt or slide noise. Stop with *Stop* on the page.
+
+| Level | `max_velocity_rpm` | Runs (stroke at period) | Peak speed | Rejection check |
+|---|---|---|---|---|
+| 1 | 600 (today) | 0.020 m at 2 s, 0.040 m at 2 s, 0.055 m at 2 s | 0.031, 0.063, 0.086 m/s | 0.070 m at 2 s (0.110 m/s) |
+| 2 | 1200 | 0.080 m at 2 s, 0.110 m at 2 s, 0.160 m at 3 s | 0.126, 0.173, 0.168 m/s | 0.130 m at 2 s (0.204 m/s) |
+| 3 | 1800 | 0.160 m at 2 s, 0.245 m at 3 s | 0.251, 0.257 m/s | 0.195 m at 2 s (0.306 m/s) |
+
+Level 1 needs no yaml change. Each level's largest run is at about 86 % of its limit. A
+level's runs go in order: go on to the next run only if the last one passed. Above level 3 only
+if the experiments need it, in steps of 600, and within the limit from *Before the test*.
+
+**At the end of each level**, with the largest run going:
+1. Press the soft stop: the slide stops and holds, and the page shows `SOFT_STOP`. Release it.
+2. Start the run again and use *Stop* on the page: it halts in place. *Return to upright*
+   brings it to 0.
+3. Enter the rejection check: the page shows `Goal rejected by controller (see its log)`,
+   nothing moves, and the
+   journal shows the `rejecting` line with the level's limit (0.1, 0.2 or 0.3 m/s). That shows
+   the new limit is the one in use.
+
+**Pass, for each run:**
+- The drive stays in `AF`: no F-error in IndraWorks or in `journalctl -u oscillator@ladertanken`,
+  and no `MGate cycle ... ms` lines.
+- The stroke reached is about as unloaded before: 97 % at 2 s, 98-99 % at 3 s (bag:
+  `oscillator_position` against `oscillator_setpoint`). Much less means the drive can't keep up.
+- The slide starts and ends within 1 mm of upright.
+- No new noise or vibration compared with the level before.
+
+**If a run fails:** stop it (*Stop*, or the E-stop for anything mechanical), note what was
+seen, and don't go on to a higher level. The level before is the result.
+
+**Afterwards:**
+- Set `max_velocity_rpm` to about 1.2 × the largest peak speed the experiments need, and no
+  higher than the highest level that passed. With less room the drive's speed cap (the goal's
+  peak × `positioning_velocity_margin` 1.2, capped at `max_velocity_rpm`) can't let it catch up
+  after the lag.
+- On the Pi, undo the hand edit so `git pull` stays clean:
+  `git checkout -- oscillator_bringup/config/oscillator.yaml`. Commit the chosen value from the
+  PC, then `git pull` and `colcon build` on the Pi.
+- Note the date, the levels passed, the bags and anything seen under *Log*, and close the
+  speed part of TODO 51.
+- With load and water the stroke and the drive's current change: repeat the largest run that
+  will be used, with the load on (*Open*, first item).
+
 ### Test 2: gateway load with both rigs (next)
 
 **Question:** do two controllers on one MGate (300 requests/s) cause the ~50-210 ms gateway

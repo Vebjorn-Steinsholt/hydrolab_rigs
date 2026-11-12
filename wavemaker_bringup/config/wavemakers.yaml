@@ -27,6 +27,14 @@
     max_position_deg: 275.0
     in_position_tol_deg: 0.1
     step_timeout_ms: 10000
+    # The code's defaults, written out (2026-11-12) so every limit is visible here.
+    max_goal_acceleration_mps2: 0.0   # 0 = no limit: only the drive's own acceleration limits a goal
+    min_period_s: 0.0                 # 0 = no limit
+    return_to_upright_max_velocity_mps: 0.1      # at the flap top
+    return_to_upright_default_tolerance_m: 0.002  # at the flap top (about 3.8 deg)
+    hold_velocity_rpm: 10.0           # speed cap while holding position
+    positioning_velocity_margin: 1.2  # speed cap = peak speed of the goal x this
+    soft_stop_timeout_s: 0.2          # no soft stop message for this long counts as pressed
 
     wavemaker_type: "flap"
     upright_position_m: 0.0  # Upright oscillation center [m]
@@ -52,6 +60,10 @@
     wavemaker_transfer_gain_periods: [0.6, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2.0]
     wavemaker_transfer_gain_values:  [0.64, 0.70, 0.78, 0.80, 0.71, 0.76, 0.76, 0.75, 0.75, 0.75, 0.74, 0.76]
 
+/wavemakers/ladertanken/bridge:
+  ros__parameters:
+    heartbeat_timeout: 1.0   # stop the wave this long after the page's heartbeat stops (TODO 49)
+
 /wavemakers/lilletanken/controller:
   ros__parameters:
     drive_name: "indradrive"
@@ -62,8 +74,6 @@
     # flap_attachment_height omitted — fine, piston never checks it
     drive_motion: "linear"
     max_velocity_rpm: 100.0        # the controller's default, made visible; set from the drive when deployed (TODO 19)
-    min_position_m: 0.0
-    max_position_m: 0.5
     wavemaker_transfer_gain: 1.0  # see ladertanken
 
 /wavemakers/mclab/controller:
@@ -79,6 +89,4 @@
     hinge_height: 0.5
     drive_motion: "linear"
     max_velocity_rpm: 100.0        # the controller's default, made visible; set from the drive when deployed (TODO 19)
-    min_position_m: 0.0
-    max_position_m: 0.5
     wavemaker_transfer_gain: 1.0  # see ladertanken

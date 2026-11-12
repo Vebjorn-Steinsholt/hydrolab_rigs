@@ -8,26 +8,129 @@ diagnosis log) is in
 Line numbers are as of `feat-vertical-oscillator` on 2026-11-10 where checked; older ones may
 be a few lines off.
 
-## Now
+## Status (2026-11-11): done
 
-1. **T11-T15 done in the repo 2026-11-10** ([Done](#done-code)); on the Pi with T16.
-2. **Test 2 passed 2026-11-11** with `rto_min` 20 ms on the Pi's route to the gateway, set by
-   hand (COMMISSIONING.md, *Test 2*). T17 (the slow-cycle log) found it.
-3. **T18: set `rto_min` at every rig start** ([T18](#t18-rto_min-on-the-route-to-the-gateway)),
-   since a reboot loses it.
-4. **T16 done on the Pi 2026-11-11**: both rigs run together, also started from Windows. Left:
-   the sloshing refusal ([T16](#t16-install-on-the-pi-done-2026-11-11-f9ba5fc)).
-5. **The web page's heartbeat stops** (TODO 49): they cut waves, but are not the gateway.
-6. **T5's last check** when the sloshing rig is connected.
-7. T10 is optional and not needed now.
+All tasks are done in the repo and on the ladertanken Pi ([Done](#done-code)): both rigs run
+together (T11-T18, Test 2 passed with `rto_min`). This file stays as the record of the decisions
+and the design. The unfinished work is in [TODO.md](TODO.md):
 
-| # | File | Where | What | Done when | Left (2026-11-10) |
-|---|---|---|---|---|---|
-| T17 | `mgate_driver.h/.cpp`, `indradrive_actuator.hpp/.cpp` | *T17: log slow gateway cycles* | Count and time slow gateway cycles; log each | `MGate cycle ... ms` lines in the journal during Test 2 | Done 2026-11-11 |
-| T18 | `rpi/wavemaker@.service`, `rpi/oscillator@.service`, `/etc/default/*` | *T18* | `rto_min` 20 ms on the route to the gateway at every start | `ip route get 192.168.1.70` shows `rto_min 20ms` after a reboot and a rig start | Done 2026-11-11, on the Pi too |
-| T16 | the ladertanken Pi | *T16* | Install T11-T15 and T18 | The rig checks | Done 2026-11-11; sloshing refusal left (T5) |
-| T5 | the ladertanken Pi | — | Decision 6: the last check | The sloshing rig still starts | When the sloshing rig is connected (the refusal passed 2026-11-10) |
-| T10 (optional, Claude's: `mgate_example` handed over 2026-11-10) | `drivers/mgate5101_driver/examples/example_main.cpp`, `CMakeLists.txt` | `main()` (87-116), `test_move()` (58-83); `install(TARGETS ...)` (49) | `--step`, `--speed`, `--min`/`--max` (tag units) and installing `mgate_example` | `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back | Not needed now |
+| Was | TODO | What |
+|---|---|---|
+| T5 | 50 | The sloshing rig's last check, postponed to 2027 |
+| [Open questions](#open-questions) | 46, 51 | Tracking under load (tuning from about 2026-11-23); the vertical yaml values |
+| T10 | 52 | `mgate_example` options and install (optional) |
+| [Shared connection](#shared-connection-not-needed-now) | 53 | Only if the gateway's own resends become a problem |
+| [T19](#t19-the-centre-from-etcdefaultoscillator) (new, 2026-11-11) | 54 | The centre of oscillation from `/etc/default/oscillator` |
+
+## T19: the centre from `/etc/default/oscillator`
+
+**Problem.** Some experiments oscillate around another point than 0. Today that means editing
+`upright_position_m` in the tracked `oscillator.yaml` on the Pi and rebuilding: `git pull` then
+fails on the edited file, and the value is easy to leave behind for the next user. The wavemaker
+already does this for the depth (`WATER_DEPTH` → `water_depth:=` → a parameter override in
+`wavemakers.launch.py`, `_launch_setup`); do the same for the oscillator's centre.
+
+**What changes for the user.** One line in `/etc/default/oscillator`, then a service restart:
+
+```bash
+# Centre of oscillation in m, + = up for vertical. Empty uses oscillator.yaml.
+VERTICAL_UPRIGHT_M=0.050
+SLOSHING_UPRIGHT_M=
+```
+
+One variable per oscillator, not one `UPRIGHT_M`: `OSCILLATOR=` switches between the two in the
+same file, and a vertical centre of 0.05 m is a valid but wrong sloshing centre (inside its
+0.015..0.185 m travel), so a shared name would carry over silently.
+
+### Decisions
+
+1. **Override at launch, not a yaml edit.** Same path as `WATER_DEPTH`: the controller sees
+   `upright_position_m` as an ordinary parameter, and all its configure checks (inside the travel)
+   and every user of the offset (waves, `return_to_upright`, files' travel checks) stay as they are.
+   No change in `controller_node.cpp`.
+2. **Empty keeps the yaml.** An unset or empty variable passes nothing, so today's behaviour is
+   the default.
+3. **`play_dat` stays as it is** (recommended). It checks files against the yaml's upright and
+   already warns when the running controller's differs (`cross_check_limits`, compares
+   `upright_m` beyond 0.1 mm). With an override the user passes `--upright-m 0.050`, which exists.
+   Alternative, later: take the upright from the running controller when it answers. That changes
+   the rule "files are checked against the yaml", so decide separately.
+
+### Changes
+
+1. **`oscillator_bringup/launch/oscillator.launch.py`.** Declare the argument, and build the
+   controller in an `OpaqueFunction`, as `wavemakers.launch.py` does, so an empty value can be left
+   out (a `ParameterValue` of `''` as a float fails):
+
+   ```python
+   from launch.actions import OpaqueFunction
+
+   def _controller(context):
+       overrides = {}
+       upright = context.launch_configurations['upright_position_m']
+       if upright:
+           overrides['upright_position_m'] = float(upright)
+       return [LifecycleNode(
+           package='rig_controller', executable='controller_node',
+           namespace=['oscillators/', LaunchConfiguration('oscillator')], name='controller',
+           parameters=[config_file, {'bond_timeout': bond_timeout}, overrides],
+           output='screen')]
+
+   # in generate_launch_description(), next to the other arguments:
+   DeclareLaunchArgument(
+       'upright_position_m', default_value='',
+       description='Centre of oscillation in m for this run; empty uses oscillator.yaml'),
+   # and in place of the controller's LifecycleNode:
+   OpaqueFunction(function=_controller),
+   ```
+
+   `config_file` and `bond_timeout` move to module level, or into `_controller`. The bridge,
+   manager, soft stop and web page are unchanged.
+
+2. **`rpi/run.sh`, the `oscillator)` case.** Pick the chosen oscillator's variable and log it, so
+   the journal says which centre a session ran with:
+
+   ```bash
+   oscillator)
+     osc="${OSCILLATOR:-sloshing}"
+     launch=(oscillator_bringup oscillator.launch.py)
+     args=(port:="${PORT:-8081}" oscillator:="$osc" soft_stop:=false)
+     upright_var="${osc^^}_UPRIGHT_M"           # VERTICAL_UPRIGHT_M or SLOSHING_UPRIGHT_M
+     if [[ -n "${!upright_var}" ]]; then
+       args+=(upright_position_m:="${!upright_var}")
+       echo "$upright_var=${!upright_var}: centre from /etc/default/oscillator, not oscillator.yaml"
+     fi
+     ;;
+   ```
+
+   The unit file is unchanged (`EnvironmentFile=/etc/default/oscillator` passes every line).
+
+3. **Nothing in the controller**, as decision 1. It already refuses a centre outside the travel at
+   configure (`upright_position_m must be within travel_minimum_m and travel_maximum_m`), and the
+   service then fails to start: the journal shows why.
+
+### Tests and docs (Claude)
+
+- `test_launch_soft_stop.py`'s pattern for the launch: with `upright_position_m:=0.05` the
+  controller gets the override; with it empty, no `upright_position_m` beyond the yaml's.
+- `run.sh` with a stub `ros2` (as `test_units_rto_min.py` stubs `ip`): `OSCILLATOR=vertical` with
+  `VERTICAL_UPRIGHT_M=0.05` passes `upright_position_m:=0.05`; `SLOSHING_UPRIGHT_M` is ignored
+  then; both empty pass nothing.
+- `rpi/README.md`: the two lines in the `/etc/default/oscillator` example; under *Oscillator → Use*,
+  changing the centre (edit, restart, *Return to upright* before the first wave, `play_dat
+  --upright-m`), and that a stroke must fit in 2 × (200 mm − |centre|) on the vertical.
+
+### Check on the rig
+
+1. `VERTICAL_UPRIGHT_M=0.050`, restart: the journal shows the `run.sh` line;
+   `ros2 param get /oscillators/vertical/controller upright_position_m` → `0.05`.
+2. *Return to upright* moves the slide to +50 mm; a 20 mm wave at 2 s from the page runs between
+   +40 and +60 mm (bag or IndraWorks).
+3. `play_dat <file> vertical --rig oscillator --dry-run` warns that the controller's upright differs;
+   with `--upright-m 0.050` it does not.
+4. `VERTICAL_UPRIGHT_M=0.250` (outside the travel): the service fails at configure with the travel
+   message; nothing moves.
+5. Empty again, restart: back to 0.
 
 ## Scope (2026-11-06)
 
@@ -142,21 +245,14 @@ three units, `rto_min lock 20ms` on the route, and the rig checks 1-6 of `rpi/RE
 test (wavemaker and vertical together)* (both rigs together, one press stops both, either one
 stopped leaves the other and the button working, the button unit stops after the last rig and
 takes both with it). `start_oscillator.bat` with the wavemaker running left it running (T15,
-2026-11-11). Left: **sloshing refused in both directions**, with T5 when the sloshing rig is
-connected.
+2026-11-11). Left: **sloshing refused in both directions**, moved to TODO 50 (2027).
 
 ## T5: the Pi
 
-Left: one check. The refusal passed 2026-11-10: with `wavemaker@ladertanken` running,
-`sudo systemctl start oscillator@ladertanken` failed in `ExecStartPre` (`refuse_if_busy.sh`).
-
-1. **The sloshing rig, when it is connected.** Remove `OSCILLATOR` from `/etc/default/oscillator`
-   (or set `sloshing`) and start; the journal shows `LinMot: homed` and the nodes are in
-   `/oscillators/sloshing`.
-2. **Afterwards.** The Pi stays on `feat-vertical-oscillator`, so the wavemaker runs this branch's
-   code too. T2 leaves ladertanken's numbers unchanged (the tests check it), but the first wavemaker
-   run after the switch should be a small wave. Back to `master` once the branch is merged:
-   `git checkout master && git pull`, `colcon build`.
+Code and the refusal done (2026-11-10: with `wavemaker@ladertanken` running,
+`sudo systemctl start oscillator@ladertanken` failed in `ExecStartPre`, `refuse_if_busy.sh`).
+The check with the sloshing rig connected is TODO 50, postponed to 2027. Putting the Pi back on
+`master` after the merge: `rpi/README.md`, *Update*.
 
 ## If Test 2 fails
 
@@ -199,7 +295,7 @@ start.
 
 ### Shared connection (not needed now)
 
-If the gateway's own resends turn out to matter:
+If the gateway's own resends turn out to matter (TODO 53):
 
 ### Background and remedies
 
@@ -238,9 +334,9 @@ runs per slave.
   only today); (4) amplitude correction during the run (closed loop, steady sines only).
   Recommended: 1 and 2 first. **To decide with the experimenters:** must the slide reach the
   requested stroke exactly, or is it enough to know exactly what it did?
-  **Tuning (option 1) waits for Robert, back about 2026-11-23.** Until then: code.
+  **Tuning (option 1) waits for Robert, back about 2026-11-23.** Now TODO 46.
 - Travel, stroke, max speed and rest position wanted for the vertical oscillator (they set the
-  yaml).
+  yaml). Now TODO 51.
 
 The drive and gateway questions (GSD, P-0-4088, jerk, brake, counterbalance, the button) are in
 COMMISSIONING.md, *Vertical oscillator*, *Open*.
