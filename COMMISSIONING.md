@@ -198,6 +198,8 @@ A wavemaker drive powered off on the chain shows F4009; clear it before starting
 | Acceleration resolution | 0.001 mm/s² | Not in the cyclic data; the drive's own positioning acceleration applies |
 | Torque/force resolution | 0.1 % | Not in the cyclic data |
 | Position limits | −211 … +211 mm | The drive's backstop; the controller's travel goes inside it |
+| Clearance around 0 | 270 mm up, more than 1 m down (2026-11-12, by eye on the rig) | Beyond the drive's ±211 mm both ways: the drive's limits and the yaml's ±0.2 m are the travel limits, not the mechanics |
+| Axis | Ball screw, about 660 mm long, driven from the motor by an AT5 timing belt (screw pulley AT5/36) (2026-11-12, photo). Gear 1:1 (S-0-0121/0122), so the lead is the feed constant, 20 mm; travel range S-0-0278 = 600 mm | Screw 20 mm outer diameter, bearing blocks at both ends (2026-11-12, photo). Critical speed (fixed–supported, root ≈17 mm, L 600 mm, 80 %) ≈5700 rpm, above the motor's 4700. The ball nut sets the limit instead: d·n 60 000-100 000 gives 3000-5000 rpm; take 3000 rpm = 1.0 m/s until the nut's datasheet says more |
 | Current position | about 0 mm | Mid-travel |
 | Direction (measured 2026-11-09) | **+ command = down** | The rig uses + = up: `drive_direction: -1` |
 | Scaling check (2026-11-09) | `--move` +5: drive 4.925 mm, sensor 4.940 mm at 1.68 mm/s | `drive_m_per_unit: 0.001` and `drive_velocity_per_unit_per_s: 6.0` confirmed (*First move*) |
@@ -294,8 +296,8 @@ E-stop within reach for every step that can move the slide.
 ### Test 3: raising the speed limit (TODO 51)
 
 **Question:** how fast can the slide run cleanly? The answer sets `max_velocity_rpm` in the
-`vertical` block of `oscillator.yaml`. Today it is 600 (0.1 m/s), a placeholder from the first
-commit (`cecf951`). It caps a sine's stroke at speed × period / π: 32 mm at 1 s, 64 mm at 2 s.
+`vertical` block of `oscillator.yaml`. It was 600 (0.1 m/s), a placeholder from the first
+commit (`cecf951`), until this test set it to 1800 (2026-11-12, *Result* below). It caps a sine's stroke at speed × period / π: 32 mm at 1 s, 64 mm at 2 s.
 The drive allows 1.6 m/s (S-0-0091). The largest stroke run so far is 20 mm.
 
 **Units:** `max_velocity_rpm` is in 10 mm/min, so 600 = 0.1 m/s, 1200 = 0.2 m/s and
@@ -304,14 +306,23 @@ peak speed is above the limit, and logs `Received goal needing up to ... m/s, ab
 maximum of ... m/s, rejecting`.
 
 **Before the test:**
-- [ ] Find the motor's maximum speed (MSK050C-0300 nameplate or datasheet, n_max) and check
+- [x] Find the motor's maximum speed (MSK050C-0300 nameplate or datasheet, n_max) and check
   that 4800 rpm (1.6 m/s at 20 mm/rev) is within it. Stop at the lower of n_max × 20 mm/rev
-  and 1.6 m/s, whatever this test finds.
-- [ ] Ask the rig's owner whether the slide and its mounting are fine at 0.3 m/s and 250 mm of
-  stroke. Note any load on the slide (none in all earlier runs).
-- [ ] Brake test (*Procedures*, step 2): the slide must not drop at mid-height.
-- [ ] E-stop within reach, nobody under or beside the slide, nothing within 200 mm of its travel.
-- [ ] The wavemaker stopped, so only the oscillator runs.
+  and 1.6 m/s, whatever this test finds. *Nameplate (2026-11-12, MSK050C-0300-NN-M1-UG1-NNNN,
+  MNR R911309706): n_max 4700 min⁻¹, so the motor, not the drive, sets the ceiling: 94 m/min
+  ≈ 1.57 m/s, `max_velocity_rpm` 9400 at most. S-0-0091 (4800 rpm) is above it,
+  but the drive also caps at S-0-0113 (motor's maximum speed), read as 4700 on 2026-11-12.*
+- [x] Ask the rig's owner whether the slide and its mounting are fine at 0.3 m/s and 250 mm of
+  stroke. Note any load on the slide (none in all earlier runs). *The owner has retired and
+  Robert doesn't know (2026-11-12). Found from the axis instead (drive table, *Axis*): clearance
+  270 mm up and over 1 m down; 20 mm ball screw, 20 mm lead, supported at both ends; ceiling
+  1.0 m/s (ball nut), well above level 3. Load for this test: the standard "naked" load (no
+  water), 2026-11-12.*
+- [x] Brake test (*Procedures*, step 2): the slide must not drop at mid-height. *Passed
+  2026-11-12 with the naked load: stopped at 0, restarted at +0.016 and +0.032 mm (drive
+  direction, = down), so about 0.016 mm per stop.*
+- [x] E-stop within reach, nobody under or beside the slide, nothing within 200 mm of its travel.
+- [x] The wavemaker stopped, so only the oscillator runs. *(2026-11-12: stopped, power off.)*
 
 **Setting a level** (on the Pi, between levels; the slide at rest):
 
@@ -330,7 +341,7 @@ vibration, knocking, belt or slide noise. Stop with *Stop* on the page.
 
 | Level | `max_velocity_rpm` | Runs (stroke at period) | Peak speed | Rejection check |
 |---|---|---|---|---|
-| 1 | 600 (today) | 0.020 m at 2 s, 0.040 m at 2 s, 0.055 m at 2 s | 0.031, 0.063, 0.086 m/s | 0.070 m at 2 s (0.110 m/s) |
+| 1 | 600 (before the test) | 0.020 m at 2 s, 0.040 m at 2 s, 0.055 m at 2 s | 0.031, 0.063, 0.086 m/s | 0.070 m at 2 s (0.110 m/s) |
 | 2 | 1200 | 0.080 m at 2 s, 0.110 m at 2 s, 0.160 m at 3 s | 0.126, 0.173, 0.168 m/s | 0.130 m at 2 s (0.204 m/s) |
 | 3 | 1800 | 0.160 m at 2 s, 0.245 m at 3 s | 0.251, 0.257 m/s | 0.195 m at 2 s (0.306 m/s) |
 
@@ -370,6 +381,57 @@ seen, and don't go on to a higher level. The level before is the result.
   speed part of TODO 51.
 - With load and water the stroke and the drive's current change: repeat the largest run that
   will be used, with the load on (*Open*, first item).
+
+**Results (2026-11-12, naked load, no water; bags in `~/bags` on the lab PC):**
+
+| Run | Bag | Periods | Stroke reached | Lag | Error after lag (rms / max) | Start / end | Journal |
+|---|---|---|---|---|---|---|---|
+| 1a 0.020 m at 2 s | `speed_600_020mm_2s` | 14 | 19.45 mm, 97.3 % | 160 ms | 0.32 / 0.69 mm | −0.02 / −0.16 mm | clean |
+| 1b 0.040 m at 2 s | `speed_600_040mm_2s` | 19 | 38.91 mm, 97.3 % | 180 ms | 0.55 / 1.79 mm | 0.00 / −0.16 mm | clean |
+| 1c 0.055 m at 2 s | `speed_600_055mm_2s` | 18 + 13 | 53.49 mm, 97.3 % | 180 ms | — | 0.00 / +0.17 mm | clean |
+| 2a 0.080 m at 2 s | `speed_1200_080mm_2s` | 13 | 77.82 mm, 97.3 % | 180 ms | 1.00 / 2.23 mm | −0.01 / +0.42 mm (last bag sample, before settling; IndraWorks: 0) | clean |
+| 2b 0.110 m at 2 s | `speed_1200_110mm_2s` | 14 | 107.0 mm, 97.3 % | 180 ms | 1.42 / 4.55 mm outside 9.0-12.6 s (see below) | 0.00 / −0.09 mm | clean |
+| 2c 0.160 m at 3 s | `speed_1200_160mm_3s` | 18 + 10 + 10 | 158.07 mm, 98.8 % | 160 ms | 1.81 / 7.37 mm (3 single late samples above 4.5 mm) | 0.00 / −0.02 mm | clean |
+| 3a 0.160 m at 2 s | `speed_1800_160mm_2s` | 23 | 155.65 mm, 97.3 % | 180 ms | 1.80 / 6.79 mm (4 single late samples above 4.5 mm) | −0.01 / +15.7 mm (halted by *Stop*; bag ends before *Return to upright*) | clean; noise normal |
+| 3b 0.245 m at 3 s | `speed_1800_245mm_3s` | 17 | 242.05 mm, 98.8 % | 180 ms | 1.76 / 13.5 mm outside 15.3-17.6 s (see below) | 0.00 / −0.01 mm | clean |
+
+In 2b the bag's samples arrived in bursts for 3.4 s (9.0-12.4 s into the run, about
+14:16:04-14:16:07 on the lab PC): gaps of 120-150 ms, then several samples with one receive
+time. All 175 samples are there and their values are smooth, so the delay was in delivery to
+the lab PC, not in the slide; the error analysis leaves that window out. The journal is empty
+for 14:15:55-14:16:15 (no stall on the Pi, no page drop): the network to the lab PC.
+
+In 3b the same happened at 15.3-17.6 s (115 samples, smooth values). Outside it, 42 single
+samples are 4.5-7.5 mm off, and four just after the burst up to 13.5 mm. At 0.257 m/s one
+sample period (20 ms) of receive-time jitter is 5 mm, so the bag's receive times can't resolve
+the tracking error better than that at this speed; the stroke (98.8 %, steady to ±0.01 mm) is
+the reliable measure. For the real following error, record S-0-0189 in the IndraWorks
+oscilloscope.
+
+Level 1 end checks (in `speed_600_055mm_2s`): the soft stop and *Stop* both halted the slide, and
+it held still (checked with a separate sensor: the bag has no position samples while the slide
+holds, as the topics are published only during motion). 0.070 m at 2 s was rejected:
+`Received goal needing up to 0.109967 m/s, above the drive's maximum of 0.100000 m/s, rejecting`.
+**Level 1 passed.**
+
+Level 2 end checks (in `speed_1200_160mm_3s`): *Stop* and the soft stop both halted the slide.
+The rejection check was a goal of 0.160 m at 2 s, entered by mistake instead of 3 s:
+`Received goal needing up to 0.251353 m/s, above the drive's maximum of 0.200000 m/s, rejecting`,
+which shows the 0.2 m/s limit in use. Journal clean (no ERROR, no `MGate cycle`).
+**Level 2 passed.**
+
+Level 3 end checks: *Stop* ended 3b (14:35:22). 0.195 m at 2 s was rejected:
+`Received goal needing up to 0.306336 m/s, above the drive's maximum of 0.300000 m/s, rejecting`.
+Journal clean (no ERROR apart from the soft stop gap after the restart, TODO 56; no `MGate cycle`).
+The soft stop during 0.245 m at 3 s (14:41:31) halted the slide and it held (separate sensor).
+**Level 3 passed.**
+
+**Result (2026-11-12):** all three levels passed with the naked load: up to 0.257 m/s and
+±122.5 mm, the stroke stayed at 97.3 % (2 s) and 98.8 % (3 s), the lag at 160-180 ms, no drive
+error, no `MGate cycle`, noise normal. 0.3 m/s (`max_velocity_rpm` 1800) is safe to use; the
+ceiling from the axis is about 1.0 m/s (ball nut), not tested above 0.3 m/s. `oscillator.yaml` set
+to 1800 the same day; lower it if the experimenters' fastest goal needs much less (*Afterwards*).
+
 
 ### Test 2: gateway load with both rigs (next)
 

@@ -52,7 +52,7 @@
     upright_position_m: 0.0          # drive position about 0 mm at mid-travel
     travel_minimum_m: -0.200         # inside the drive's -211 mm
     travel_maximum_m: 0.200          # inside the drive's +211 mm
-    max_velocity_rpm: 600.0          # velocity tag units: 600 x 10 mm/min = 0.1 m/s - set from the rig
+    max_velocity_rpm: 1800.0         # velocity tag units: 1800 x 10 mm/min = 0.3 m/s; Test 3 passed to here (2026-11-12, COMMISSIONING.md)
     hold_velocity_rpm: 60.0          # 10 mm/s
     in_position_tol_deg: 0.1         # position tag units: 0.1 mm
     step_timeout_ms: 10000

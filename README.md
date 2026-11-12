@@ -344,7 +344,7 @@ steps and the log are in [COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator
 `drive_name: indradrive`, `drive_motion: linear` with the drive's units
 (`drive_m_per_unit: 0.001`, `drive_velocity_per_unit_per_s: 6.0`, `drive_direction: -1`, see
 [Actuator and limits](#actuator-and-limits)), travel −0.2…0.2 m around upright 0, speed limit
-`max_velocity_rpm: 600` (0.1 m/s).
+`max_velocity_rpm: 1800` (0.3 m/s, tested on the rig 2026-11-12, [COMMISSIONING.md, *Test 3*](COMMISSIONING.md#test-3-raising-the-speed-limit-todo-51)).
 
 **Start and stop** on the ladertanken Pi, through the oscillator service with
 `OSCILLATOR=vertical` in `/etc/default/oscillator` ([rpi/README.md](rpi/README.md#oscillator)):
@@ -778,7 +778,7 @@ ros2 run rig_controller play_dat session_motion.dat vertical --rig oscillator --
 
 | Oscillator | Travel (around upright) | Speed | Acceleration |
 |---|---|---|---|
-| `vertical` | −0.2…+0.2 m (upright 0) | 0.1 m/s (`max_velocity_rpm` 600 × 10 mm/min) | none set |
+| `vertical` | −0.2…+0.2 m (upright 0) | 0.3 m/s (`max_velocity_rpm` 1800 × 10 mm/min) | none set |
 | `sloshing` | 0.015…0.185 m (upright 0.1 m) | 2.0 m/s (the LinMot's default) | 9.81 m/s² |
 
 A run outside them is listed as `skipped` with the reason and left out of the file.
