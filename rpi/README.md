@@ -113,7 +113,10 @@ Then stop and start the service; a running service keeps the old code.
 
 ### Back to `master` after `feat-vertical-oscillator` (once, ladertanken Pi)
 
-The ladertanken Pi has run `feat-vertical-oscillator` since T16 (2026-11-11). Once the branch is
+**Done 2026-11-13:** the ladertanken Pi is back on `master` (`eba8953`, with `transfer_function`),
+and `python3-scipy` is installed. Kept for reference.
+
+The ladertanken Pi ran `feat-vertical-oscillator` from T16 (2026-11-11). Once the branch was
 merged into `master`:
 
 ```bash

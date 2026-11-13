@@ -11,6 +11,7 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime
 import os
+import re
 import shlex
 import sys
 
@@ -26,6 +27,7 @@ STILL_S = 10.0           # probe checked over this long before the run (Change 5
 STILL_RATIO = 0.1        # warn if the probe's std before the run is above this x the run's
 STILL_FLOOR_M = 0.001    # but never below this: ~3x the probe's noise (check on a still record)
 MATCH_MIN = 2.0          # offset match: peak / next-best peak below this is refused
+F_TOP_FP = 1.5           # irregular: trust up to this x fp; second-order waves sit at 2 fp
 ENVELOPE_SMOOTH_TP = 3   # smooth the envelope over this many wave periods (Change 4)
 
 
@@ -49,17 +51,57 @@ def read_command(dat_path: str, run: int) -> tuple[np.ndarray, float, list[dict]
     return x_file, dt, table, row
 
 
-def read_record_csv(path: str) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    """Time [s] and {column header: values}. Refuse a non-uniform time column."""
-    with open(path, newline='') as f:
-        reader = csv.reader(f)
-        names = next(reader)
-        values = np.array([[float(v) for v in r] for r in reader if r])
+def read_record(path: str) -> tuple[float, dict[str, np.ndarray]]:
+    """
+    Return the sample interval [s] and {channel name: values} of a record.
+
+    catman's ASCII export (first line HBM_CATMAN_DATAFILE...) or a CSV with time [s] first.
+    """
+    with open(path, newline='', encoding='cp1252') as f:
+        lines = f.read().splitlines()
+    if lines and lines[0].startswith('HBM_CATMAN_DATAFILE'):
+        return read_catman_ascii(path, lines)
+    return read_csv(path, lines)
+
+
+def read_catman_ascii(path: str, lines: list[str]) -> tuple[float, dict[str, np.ndarray]]:
+    """
+    Return dt [s] and {name: values} from catman's ASCII export.
+
+    The names follow the blank line after CHANNELS/SEPARATOR/MAXLINES, the data the next blank
+    line. dt comes from the header's "dt =" line: catman rounds its time column (to 0.01 s at
+    200 Hz), so that column is left out.
+    """
+    i_channels = next((i for i, line in enumerate(lines) if line.startswith('CHANNELS:')), None)
+    if i_channels is None:
+        raise ValueError(f'{path}: no CHANNELS line in the catman header')
+    sep = '\t'
+    for line in lines[i_channels:i_channels + 4]:
+        if line.startswith('SEPARATOR:'):
+            sep = chr(int(line.split(':')[1]))
+    i_names = lines.index('', i_channels) + 1
+    names = [n.strip() for n in lines[i_names].split(sep)]
+    i_data = lines.index('', i_names) + 1
+    dt_line = next((line for line in lines[i_names:i_data] if line.startswith('dt =')), '')
+    match = re.match(r'dt =\s*([\d,.]+)\s*(ms|s)\b', dt_line)
+    if match is None:
+        raise ValueError(f'{path}: no "dt =" line in the catman header')
+    dt = float(match.group(1).replace(',', '.')) * (0.001 if match.group(2) == 'ms' else 1.0)
+    values = np.array([[float(v.replace(',', '.')) for v in line.split(sep) if v.strip()]
+                       for line in lines[i_data:] if line.strip()])
+    return dt, {n: values[:, i] for i, n in enumerate(names) if not n.lower().startswith('time')}
+
+
+def read_csv(path: str, lines: list[str]) -> tuple[float, dict[str, np.ndarray]]:
+    """Return dt [s] and {name: values} from a CSV, time [s] first. Refuse a non-uniform time."""
+    rows = list(csv.reader(lines))
+    names = rows[0]
+    values = np.array([[float(v) for v in r] for r in rows[1:] if r])
     t = values[:, 0]
     step = np.diff(t)
     if len(t) < 2 or step.min() <= 0 or np.abs(step - step.mean()).max() > 1e-3 * step.mean():
         raise ValueError(f'{path}: the time column ({names[0]}) is not uniform')
-    return t, {name: values[:, i] for i, name in enumerate(names) if i > 0}
+    return float(step.mean()), {name: values[:, i] for i, name in enumerate(names) if i > 0}
 
 
 def record_channel(channels: dict, name: str, scale: float, decimation: int) -> np.ndarray:
@@ -225,7 +267,8 @@ def band_mask(f, coh, row) -> np.ndarray:
         ok[np.argmin(np.abs(f - 1 / float(row['period_s'])))] = True
         return ok
     if row['kind'] == 'irregular':
-        in_band = (f >= float(row['f_min_hz'])) & (f <= float(row['f_max_hz']))
+        f_top = min(float(row['f_max_hz']), F_TOP_FP / float(row['peak_period_s']))
+        in_band = (f >= float(row['f_min_hz'])) & (f <= f_top)
         return in_band & (coh >= COHERENCE_MIN)
     raise ValueError(f"run {row['run']} is of kind '{row['kind']}'; only regular and irregular")
 
@@ -256,7 +299,7 @@ def undo_travel(y, dt, depth_m, distance_m) -> np.ndarray:
 
 def residual_delay(f, G, ok) -> tuple[np.ndarray, float]:
     """Return (residual phase, delay_s); G is measured on a wave with the travel removed."""
-    res = np.unwrap(np.angle(G[ok]))
+    res = np.unwrap(np.angle(G[ok])) - np.pi / 2   # theory: the wave leads the stroke by 90 deg
     res -= 2 * np.pi * np.round(np.median(res) / (2 * np.pi))
     if ok.sum() < 2:
         return res, np.nan
@@ -365,11 +408,11 @@ def analyse(args, argv, config) -> None:
     x = x_file[round(float(row['start_s']) / dt):round(float(row['end_s']) / dt)]
 
     # 3. record (Change 3)
-    t, channels = read_record_csv(args.record)
-    ratio = dt / (t[1] - t[0])
+    record_dt, channels = read_record(args.record)
+    ratio = dt / record_dt
     q = round(ratio)
     if q < 1 or abs(ratio - q) > 1e-3:
-        raise ValueError(f'the record at {1 / (t[1] - t[0]):g} Hz is not a whole multiple '
+        raise ValueError(f'the record at {1 / record_dt:g} Hz is not a whole multiple '
                          f'of the file at {1 / dt:g} Hz')
     eta_all = record_channel(channels, args.probe, args.probe_scale, q)
     s_all = record_channel(channels, args.stroke, args.stroke_scale, q) if args.stroke else None
@@ -394,7 +437,8 @@ def analyse(args, argv, config) -> None:
             offset_s, quality = offset_from_envelopes(x_match, eta_all, dt, tp_s, travel_s,
                                                       min_sep)
             how = 'from the envelopes'
-        how += f', match {quality:.1f}x the next'
+        how += (', the only match' if np.isinf(quality)
+                else f', match {quality:.1f}x the next')
         if quality < MATCH_MIN:
             raise ValueError(f'offset {offset_s:.1f} s ({how}): an unclear match, below '
                              f'{MATCH_MIN}x; give --offset-s')
@@ -410,9 +454,10 @@ def analyse(args, argv, config) -> None:
     check_still(eta_all, i0, dt, eta.std())
 
     # 6. estimate (Changes 6, 8); regular: a whole number of periods per segment
-    if row['kind'] == 'regular':
+    if row['kind'] == 'regular':   # whole periods, at most half the window: >= 3 averages
         period_s = float(row['period_s'])
-        nperseg = round(max(1, round(args.segment_s / period_s)) * period_s / dt)
+        segment_s = min(args.segment_s, len(x) * dt / 2)
+        nperseg = round(max(1, int(segment_s / period_s)) * period_s / dt)
     else:
         nperseg = round(args.segment_s / dt)
     kw = {'fs': 1 / dt, 'window': 'hann', 'nperseg': nperseg, 'detrend': 'constant'}

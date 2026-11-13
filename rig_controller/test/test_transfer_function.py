@@ -63,13 +63,13 @@ def drive_response(f):
 
 
 def water_response(wm, f):
-    """Flap at the waterline -> wave at the probe: WATER_GAIN x theory, and the travel."""
+    """Flap at the waterline -> wave at the probe: WATER_GAIN x theory, 90 deg lead, the travel."""
     out = np.zeros(len(f), complex)
     for i, fi in enumerate(f):
         if 0.05 < fi < 5.0:      # the command has no energy outside; sinh(kh) overflows above
             kh = gw.wavenumber_depth(1 / fi, DEPTH_M)
-            out[i] = (WATER_GAIN * gw.stroke_ratio(kh, wm)
-                      * np.exp(-1j * kh / DEPTH_M * DISTANCE_M))
+            out[i] = (WATER_GAIN * gw.stroke_ratio(kh, wm)          # 1j: the wave leads by 90 deg
+                      * 1j * np.exp(-1j * kh / DEPTH_M * DISTANCE_M))
     return out
 
 
@@ -192,10 +192,13 @@ def test_irregular_recovers_drive_water_and_gain(capsys, session):
     assert code == 0, err
     f = cols['f_hz']
     assert len(f) > 20                         # most of the band is trusted
+    # 0.1 Hz in from the band's edges: the test's 90 deg lead (x 1j) is a Hilbert transform,
+    # whose tails spill past the run and bias the edge bins; a real wavemaker is causal
+    inner = (f > f.min() + 0.1) & (f < f.max() - 0.1)
     drive = np.abs(drive_response(f))          # 0.9 and the lag's roll-off
     for name, expected in (('drive', drive), ('water', WATER_GAIN),
                            ('gain', WATER_GAIN * drive)):
-        error = np.abs(cols[name] - expected)
+        error = np.where(inner, np.abs(cols[name] - expected), 0.0)
         # within the reported error, with a margin for the smoothing over a sloping curve
         assert np.all(error <= 3 * cols[f'{name}_err'] + 0.01), (
             name, f[np.argmax(error)], cols[name][np.argmax(error)])
@@ -353,3 +356,43 @@ def test_record_that_stops_after_the_last_run(capsys, session):
                                  name=f'early_{stroke}')
         assert code == 0, err
         assert printed_offset(out) == pytest.approx(STILL_BEFORE_S, abs=1.0)
+
+
+def write_catman_ascii(path, csv_path):
+    """Rewrite a test record as catman's ASCII export (as item38.ASC, 2026-11-13)."""
+    with open(csv_path, newline='') as f:
+        rows = list(csv.reader(f))
+    header = [
+        'HBM_CATMAN_DATAFILE_40', '', '13.11.2026', '14:06', 'CHANNELS: 3', 'SEPARATOR: 9',
+        f'MAXLINES: {len(rows) - 1}              ', '',
+        'WP1\tStroke\tTime  1 - default sample rate', 'mm\tmm\ts',
+        'T0 =05.11.2026 12:13:58\tT0 =05.11.2026 12:13:58\tT0 =05.11.2026 12:13:58',
+        'dt =5 ms\tdt =5 ms\tdt =5 ms', 'fg = 20 Hz ID=945\tfg = 20 Hz ID=945\t-', '']
+
+    def comma(v):
+        return v.replace('.', ',')
+
+    # catman rounds its time column to 0.01 s: not a clock at 200 Hz
+    lines = [f'{comma(wp)}\t{comma(st)}\t{comma(f"{float(t):.2f}")}\t'
+             for t, wp, st in rows[1:]]
+    with open(path, 'w', newline='', encoding='cp1252') as f:
+        f.write('\r\n'.join(header + lines) + '\r\n')
+    return str(path)
+
+
+def test_catman_ascii_gives_the_same_as_csv(capsys, session):
+    record = write_catman_ascii(session['dir'] / 'record.ASC', session['record'])
+    code, out, err, cols = call(capsys, session, record=record, name='catman')
+    assert code == 0, err
+    _, out_csv, _, cols_csv = call(capsys, session, name='catman_ref')
+    assert printed_offset(out) == pytest.approx(printed_offset(out_csv), abs=0.01)
+    assert cols['gain'] == pytest.approx(cols_csv['gain'], rel=1e-3)
+
+
+def test_catman_ascii_without_dt_is_refused(capsys, session, tmp_path):
+    path = tmp_path / 'no_dt.ASC'
+    path.write_text('HBM_CATMAN_DATAFILE_40\r\n\r\nCHANNELS: 2\r\nSEPARATOR: 9\r\n\r\n'
+                    'WP1\tStroke\r\nmm\tmm\r\n\r\n0,1\t0,2\t\r\n', encoding='cp1252')
+    code, _, err, _ = call(capsys, session, record=str(path))
+    assert code == 1
+    assert 'no "dt =" line' in err
