@@ -185,12 +185,21 @@ Why the code does a few things differently from what the first sketch said:
 
 ### Still to do
 
-1. **Find which reading is off: the command, the draw wire or WP1** (*Check on the data*,
-   step 7). Inclinometer test, Monday 2026-11-16.
-2. **Commit** `transfer_function.py`, `test_transfer_function.py`, `rpi/README.md` and this
-   sketch (uncommitted on `master` since 2026-11-13).
-3. **The next irregular session**, after step 1: one 10-minute irregular run at the tank's
-   current depth (±1–2 % on the gain), and a mild regular run at 1.1 s.
+Planned Monday/Tuesday 2026-11-16/17, in this order:
+
+1. **WP1's scaling in catman.** The sensor database has 0.0229 m/V, but the WP1 channel was
+   scaled with 0.03981 in every export of 2026-11-13 (0.0229 on 2026-11-05). Assign the sensor
+   from the database to the channel again, then calibrate statically: the probe moved -5, 0, +5 cm
+   in still water must read +-50 mm. Check the channel's scaling before every session.
+2. **Repeat the check run** (`2026-11-13_check/matrix.csv`: regular 0.8, 1.0, 1.1, 1.3, 1.6 s at
+   1/60, depth 1.0 m) with WP1 confirmed. Expected from 2026-11-13 (corrected): H/target 0.99-1.01
+   at 1.0-1.6 s, 0.92 at 0.8 s.
+3. **Then the 0.8 s entry** in `wavemakers.yaml`: about 1.00 instead of 1.08, if step 2 confirms.
+4. **One 10-minute irregular run** at 1.0 m (+-1-2 % on the gain), for the table across the band.
+5. **`offset_from_stroke` with regular runs only** (Claude, if wanted): a sine flipped looks
+   like a sine shifted half a period, so the sign check refused `check.ASC` (negative peak
+   -0.882 against +0.868). Refuse only when the negative peak is clearly larger (> 1.2 x);
+   until then, `--offset-s`.
 
 The tests are done:
 [test_transfer_function.py](rig_controller/test/test_transfer_function.py), 18 tests on a
@@ -267,19 +276,22 @@ depth 1.0 m, catman `test38.ASC` and a bag of the setpoint and position).
    is 0.54 of that. `WM_Position` counts positive away from the beach (`--stroke-scale -1`).
    Pulled by hand 30 cm, the wire read 0.368 m (rough: 1.1–1.35 × the pull), so it doesn't
    read half, as first suspected.
-7. **Open: the command, the draw wire or WP1.** With the wire's own scale, the flap moves about
-   0.40–0.50 of the command. That would put the error in `actuator_lead_m_per_degree` (about
-   2.3 cm per 100 deg, not 5.3), but then the flap would make about 1.9 × linear theory's wave
-   per metre of real stroke, which a flap doesn't do. So one of three is off: the command (the
-   constant), the draw wire (not measuring the flap's horizontal travel 1:1), or WP1 (its scale
-   making the waves look larger; the October table, also from WP1, would hide that). **Test,
-   Monday 2026-11-16:** an inclinometer on a rigid part of the flap at upright, then at a
-   position held by Stop during `drawwire.dat`, with catman and the bag recording. At 0.10 m at
-   the attachment the controller predicts 4.7 deg of tilt, a flap moving 0.44 of the command
-   2.1 deg. Compare the tilt from the inclinometer (B − A), from the last setpoint
-   (setpoint / 1.21 m) and from the draw wire (`WM_Position` change / 1.285 m): the two that
-   agree are right. If WP1 is the suspect, film a ruler on the tank wall at WP1 during a
-   regular run.
+7. **Settled 2026-11-13: the geometry was off.** `flap_attachment_height` was 1.30 but is
+   1.30 above the hinge, so 1.39 m above the floor (the code's reference). And
+   `actuator_lead_m_per_degree` was 0.00053: a staircase file held the flap at +-0.03, +-0.06,
+   +-0.09 m, and an inclinometer on the arm's bracket showed 0.78 +- 0.03 of the tilt that
+   predicted (two Stop-held extremes earlier: 0.80); the drive was at its setpoint to 0.1 mm
+   (bag). New value 0.000413. The draw wire is linear but reads 0.74 of the horizontal travel at
+   1.375 m (a wire at an angle, probably): `--stroke-scale -1.342`. The yaml was changed the same
+   day: both values, and a gain table measured with them from run 3 (now 0.88-1.16; drive about
+   1.0, water 1.10-1.17 x theory).
+8. **Check run with the new yaml, 2026-11-13** (`2026-11-13_check`, depth 1.0 m, `check.ASC`,
+   `check_bag`): the drive followed every run (0.98-0.99, 0.1 s). WP1 read 1.74 x too high: its
+   catman channel was scaled with 0.03981 m/V, the sensor database has 0.0229 (as on
+   2026-11-05). With `--probe-scale 0.5752` (0.0229 / 0.03981) and `--offset-s 16.04` (see *Still
+   to do*, 5), H/target with the new table: 0.92 (0.8 s), 1.01 (1.0 s), 0.99 (1.1 s), 0.98
+   (1.3 s), 0.99 (1.6 s); the old yaml would have given 1.03, 1.02, 1.15, 1.09, 1.11. To be
+   repeated with WP1 confirmed (*Still to do*, 1-2).
 
 ## Limits of the first pass
 
