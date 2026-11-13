@@ -77,7 +77,7 @@ def check_spec(spec: RunSpec, row: int):
     if isinstance(spec, RegularSpec):
         positive('period_s')
         positive('stroke_m')
-        if spec.n_periods < 2*spec.n_ramp:
+        if spec.n_periods < 2 * spec.n_ramp:
             raise ValueError(f'row {row}: n_periods {spec.n_periods} is shorter than the two '
                              f'ramps ({2 * spec.n_ramp} periods)')
     elif isinstance(spec, IrregularSpec):
@@ -140,8 +140,10 @@ def irregular_signal(spec: IrregularSpec, dt: float):
     spectrum = motion_files.jonswap(f, df, spec.sig_stroke_m, spec.tp_s, spec.gamma)
     a = motion_files.wave_amplitudes(spectrum, df)
     x = motion_files.synthesize(n, a, motion_files.random_phases(spec.seed, len(f)), n_samples)
-    x = motion_files.apply_ramps(x, round(spec.n_ramp * spec.tp_s / dt), shape='cosine')
-    row = {'kind': 'irregular', 'peak_period_s': spec.tp_s, 'sig_stroke_m': spec.sig_stroke_m,
+    n_ramp_samples = round(spec.n_ramp * spec.tp_s / dt)
+    x = motion_files.apply_ramps(x, n_ramp_samples, shape='cosine')
+    row = {'kind': 'irregular', 'ramp_s': round(n_ramp_samples * dt, 6),
+           'peak_period_s': spec.tp_s, 'sig_stroke_m': spec.sig_stroke_m,
            'gamma': spec.gamma, 'seed': spec.seed,
            'f_min_hz': round(float(f[0]), 4), 'f_max_hz': round(float(f[-1]), 4),
            'std_m': round(float(x.std()), 5), 'peak_m': round(float(np.abs(x).max()), 5)}
@@ -154,8 +156,10 @@ def regular_signal(spec: RegularSpec, dt: float):
     n = round(spec.n_periods * spec.period_s / dt)
     t = np.arange(1, n + 1) * dt
     x = amplitude * np.sin(2.0 * math.pi / spec.period_s * t)
-    x = motion_files.apply_ramps(x, round(spec.n_ramp * spec.period_s / dt), shape='cosine')
-    row = {'kind': 'regular', 'period_s': spec.period_s, 'stroke_m': spec.stroke_m,
+    n_ramp_samples = round(spec.n_ramp * spec.period_s / dt)
+    x = motion_files.apply_ramps(x, n_ramp_samples, shape='cosine')
+    row = {'kind': 'regular', 'ramp_s': round(n_ramp_samples * dt, 6),
+           'period_s': spec.period_s, 'stroke_m': spec.stroke_m,
            'amplitude_m': round(amplitude, 5)}
     return x, row
 
@@ -169,7 +173,7 @@ def peak_jerk(x, dt: float) -> float:
 # The shared parts are in motion_files.
 
 
-OSCILLATION_COLUMNS = ['run', 'start_s', 'end_s', 'kind',
+OSCILLATION_COLUMNS = ['run', 'start_s', 'end_s', 'kind', 'ramp_s',
                        'period_s', 'stroke_m', 'amplitude_m',                    # regular
                        'peak_period_s', 'sig_stroke_m', 'gamma', 'seed',         # irregular
                        'f_min_hz', 'f_max_hz', 'std_m', 'peak_m',

@@ -79,9 +79,9 @@ def generate(tmp_path, oscillator='vertical', rows=(REGULAR_ROW,), *options):
 # ---------------------------------------------------------------- the oscillators
 
 def test_vertical_limits(vertical):
-    """T8: the speed limit from max_velocity_rpm in the drive's units (600 x 10 mm/min)."""
+    """T8: the speed limit from max_velocity_rpm in the drive's units (1800 x 10 mm/min)."""
     assert (vertical.min_m, vertical.max_m, vertical.upright_m) == (-0.2, 0.2, 0.0)
-    assert vertical.max_velocity_mps == pytest.approx(0.1)
+    assert vertical.max_velocity_mps == pytest.approx(0.3)
     assert vertical.namespace == '/oscillators/vertical'
 
 
@@ -143,7 +143,8 @@ def test_regular_signal_amplitude_is_half_the_stroke():
     x, row = go.regular_signal(regular(), DT_S)
     assert len(x) == round(10 * 2.0 / DT_S)
     assert np.abs(x).max() == pytest.approx(0.01, rel=1e-3)
-    assert row == {'kind': 'regular', 'period_s': 2.0, 'stroke_m': 0.02, 'amplitude_m': 0.01}
+    assert row == {'kind': 'regular', 'ramp_s': 4.0, 'period_s': 2.0, 'stroke_m': 0.02,
+                   'amplitude_m': 0.01}
 
 
 @pytest.mark.parametrize('make, period', [(regular, 2.0), (irregular, 1.5)])
@@ -173,6 +174,7 @@ def test_irregular_significant_stroke_is_4_sigma():
     assert row['std_m'] == round(float(x.std()), 5)
     assert row['peak_m'] == round(float(np.abs(x).max()), 5)
     assert (row['f_min_hz'], row['f_max_hz']) == pytest.approx((1 / 3, 2.0), abs=0.01)
+    assert row['ramp_s'] == 4.5     # 3 peak periods of 1.5 s
 
 
 def test_same_seed_same_run_other_seed_other_run():
@@ -221,7 +223,7 @@ def test_no_jerk_warning_for_a_skipped_run(tmp_path, capsys):
 # ---------------------------------------------------------------- assemble and files
 
 def test_assemble_skips_a_run_too_fast(vertical):
-    fast = regular(period_s=1.0, stroke_m=0.1)              # peak speed 0.31 m/s > 0.1
+    fast = regular(period_s=1.0, stroke_m=0.2)              # peak speed 0.63 m/s > 0.3
     frames, rows = go.assemble(vertical, [regular(), fast], DT_S, vertical.max_velocity_mps)
     assert [r['status'] for r in rows] == ['', 'skipped']
     assert rows[1]['start_s'] == ''
@@ -250,6 +252,7 @@ def test_main_end_to_end(tmp_path, capsys, oscillator):
         table = list(reader)
     assert reader.fieldnames == go.OSCILLATION_COLUMNS
     assert [r['kind'] for r in table] == ['regular', 'irregular']
+    assert table[0]['ramp_s'] != '' and table[1]['ramp_s'] != ''
     assert table[0]['stroke_m'] == '0.02' and table[1]['sig_stroke_m'] == '0.01'
     assert all(r['peak_jerk_mps3'] for r in table)
 
@@ -268,7 +271,7 @@ def test_record_next_to_the_file(tmp_path):
     assert f'command      generate_oscillations vertical {tmp_path}/m.csv -o {out}' in record
     assert 'oscillator   vertical\n' in record
     assert 'max jerk     3.0 m/s^3 (warning only)' in record
-    assert 'max speed    0.1000 m/s\n' in record
+    assert 'max speed    0.3000 m/s\n' in record
     assert 'water depth' not in record
     assert record.endswith(f'test matrix {tmp_path}/m.csv:\n' + ','.join(HEADER) + '\n'
                            'regular,2.0,0.02,10,,,,,,2,5\n')

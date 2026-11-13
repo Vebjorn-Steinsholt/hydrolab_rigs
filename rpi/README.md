@@ -426,6 +426,12 @@ travel limit, and the first irregular run on the rig. Keep a hand near the e-sto
    upright.
 5. **Pass:** every run accepted and no faults, and the page's plot of each run matches the `.png`.
    Measure the wave heights with probes (TODO 43).
+6. **The transfer gain, after the session** (`transfer_function`, see the top-level README,
+   *Transfer gain from a run*). In catman, record the whole file, from at least 10 s of still
+   water before run 0 to after the last run, with the probes and the flap's draw wire. Note the
+   draw wire's height above the tank floor, each probe's distance from the flap and the measured
+   depth. Export the record as CSV (time in seconds, one column per channel). Then run
+   `transfer_function` on each run, with the session's `.dat` and its run table.
 
 **Run 2026-11-05 on ladertanken, Pi on `master`: steps 1-4 passed. The wave heights were not
 measured, because no probes were available (TODO 43).** Water depth 0.98 m; the gain table is for
