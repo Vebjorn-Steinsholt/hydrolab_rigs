@@ -373,6 +373,8 @@ def analyse(args, argv, config) -> None:
                          f'of the file at {1 / dt:g} Hz')
     eta_all = record_channel(channels, args.probe, args.probe_scale, q)
     s_all = record_channel(channels, args.stroke, args.stroke_scale, q) if args.stroke else None
+    # the record may stop after the last run, before the file's final rest
+    x_match = x_file[:round(max(float(r['end_s']) for r in table if r['end_s']) / dt) + 1]
 
     # 4. offset: --offset-s, else offset_from_stroke, else offset_from_envelopes (Change 4)
     tp_s = float(row['peak_period_s'] or row['period_s'])
@@ -382,14 +384,14 @@ def analyse(args, argv, config) -> None:
     if args.offset_s is not None:
         offset_s, how = args.offset_s, '--offset-s'
     else:
-        if len(eta_all) < len(x_file):
+        if len(eta_all) < len(x_match):
             raise ValueError(f'the record ({len(eta_all) * dt:.1f} s) is shorter than the file '
-                             f'({len(x_file) * dt:.1f} s); give --offset-s')
+                             f'({len(x_match) * dt:.1f} s); give --offset-s')
         if s_all is not None:
-            offset_s, quality = offset_from_stroke(x_file, s_all, dt, min_sep)
+            offset_s, quality = offset_from_stroke(x_match, s_all, dt, min_sep)
             how = 'from the stroke'
         else:
-            offset_s, quality = offset_from_envelopes(x_file, eta_all, dt, tp_s, travel_s,
+            offset_s, quality = offset_from_envelopes(x_match, eta_all, dt, tp_s, travel_s,
                                                       min_sep)
             how = 'from the envelopes'
         how += f', match {quality:.1f}x the next'
