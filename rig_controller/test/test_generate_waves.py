@@ -87,9 +87,10 @@ def newton_kh(period_s, depth):
 # ---------------------------------------------------------------- wavemaker from the yaml
 
 def test_ladertanken_limits(ladertanken):
-    assert ladertanken.min_m == pytest.approx(-0.14575)
-    assert ladertanken.max_m == pytest.approx(0.14575)
-    assert ladertanken.max_velocity_mps == pytest.approx(0.7632)
+    """+-275 deg and 240 rpm through 0.000413 m/deg (the lead measured 2026-11-13)."""
+    assert ladertanken.min_m == pytest.approx(-0.113575)
+    assert ladertanken.max_m == pytest.approx(0.113575)
+    assert ladertanken.max_velocity_mps == pytest.approx(0.59472)
     assert ladertanken.max_acceleration_mps2 is None
 
 
@@ -132,7 +133,7 @@ def test_acceleration_limit_read_when_set(tmp_path):
 
 # ---------------------------------------------------------------- gain and physics
 
-@pytest.mark.parametrize('period_s, gain', [(1.05, 0.755), (0.5, 0.64), (2.5, 0.76), (1.0, 0.80)])
+@pytest.mark.parametrize('period_s, gain', [(1.05, 1.12), (0.5, 0.88), (2.5, 1.05), (1.0, 1.11)])
 def test_gain_table(ladertanken, period_s, gain):
     assert gw.transfer_gain(ladertanken, period_s) == pytest.approx(gain)
 
@@ -162,18 +163,22 @@ def test_stroke_ratio_reference_values(tmp_path):
 
 
 @pytest.mark.parametrize('period_s, height_m, amplitude_m',
-                         [(1.0, 0.05, 0.028342), (1.5, 0.10, 0.095470), (1.3, 0.171, 0.131552)])
+                         [(1.0, 0.05, 0.021946), (1.5, 0.10, 0.066894), (1.3, 0.171, 0.092596)])
 def test_paddle_amplitude_matches_controller(ladertanken, period_s, height_m, amplitude_m):
     assert gw.paddle_amplitude(ladertanken, period_s, height_m) == pytest.approx(
         amplitude_m, rel=1e-3)
 
 
-def test_yaml_comment_check_248_deg_200_rpm(ladertanken):
-    """wavemakers.yaml, 2026-10-20: 0.171 m at 1.3 s needs +-248 deg and 200 rpm."""
+def test_0171_m_at_13_s_fits_the_drive(ladertanken):
+    """0.171 m at 1.3 s (item38 run 2): +-224 deg and 181 rpm with the 2026-11-13 values.
+
+    It needed +-248 deg and 200 rpm with the old geometry and gain table (wavemakers.yaml,
+    2026-10-20); the new table at 1.3 s is higher than the old one scaled to the new geometry.
+    """
     amplitude = gw.paddle_amplitude(ladertanken, 1.3, 0.171)
-    lead = 0.00053
-    assert amplitude / lead == pytest.approx(248, abs=1)
-    assert amplitude * 2 * math.pi / 1.3 / lead / 6 == pytest.approx(200, abs=1)
+    lead = 0.000413
+    assert amplitude / lead == pytest.approx(224, abs=1)
+    assert amplitude * 2 * math.pi / 1.3 / lead / 6 == pytest.approx(181, abs=1)
 
 
 # ---------------------------------------------------------------- test matrix
@@ -253,8 +258,9 @@ def test_regular_signal(ladertanken):
     assert len(x) == round(20 * 1.0 / DT_S)
     assert x[-1] == 0.0
     # Sampled at dt, the crest is missed by up to half a step: peak >= a cos(pi dt / T).
-    assert row['amplitude_m'] * math.cos(math.pi * DT_S / 1.0) <= np.abs(x).max()
-    assert np.abs(x).max() <= row['amplitude_m'] * (1 + 1e-4)
+    # amplitude_m is rounded to 5 decimals in the run table
+    assert row['amplitude_m'] * math.cos(math.pi * DT_S / 1.0) <= np.abs(x).max() + 5e-6
+    assert np.abs(x).max() <= row['amplitude_m'] * (1 + 1e-4) + 5e-6
     assert row['kind'] == 'regular' and row['steepness'].startswith('1/')
     assert row['ramp_s'] == 3.0     # 3 periods of 1.0 s
 
@@ -472,7 +478,7 @@ def test_record_next_to_the_file(tmp_path):
     assert 'wavemaker    ladertanken (flap)' in record
     assert 'water depth  0.98 m (--water-depth; the yaml has 1.0 m)' in record
     assert 'dt           0.02 s' in record
-    assert 'max speed    0.7632 m/s\n' in record
+    assert 'max speed    0.5947 m/s\n' in record
     assert 'result       1 runs, 0 skipped' in record
     assert f'config       {pathlib.Path(CONFIG).resolve()}' in record
     assert re.search(r'^commit       ([0-9a-f]{7,40}(-dirty)?|unknown)$', record, re.M)

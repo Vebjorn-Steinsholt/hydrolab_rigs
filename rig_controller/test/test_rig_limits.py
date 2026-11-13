@@ -28,8 +28,8 @@ LINEAR = {'drive_name': 'indradrive', 'drive_motion': 'linear',
 
 def test_ladertanken():
     limits = rig_limits.load_limits('wavemaker', 'ladertanken', WAVEMAKERS)
-    assert (limits.min_m, limits.max_m) == pytest.approx((-0.14575, 0.14575))
-    assert limits.max_velocity_mps == pytest.approx(0.7632)
+    assert (limits.min_m, limits.max_m) == pytest.approx((-0.113575, 0.113575))
+    assert limits.max_velocity_mps == pytest.approx(0.59472)
     assert limits.max_acceleration_mps2 is None
     assert limits.upright_m == 0.0
     assert limits.namespace == '/wavemakers/ladertanken'
@@ -177,7 +177,7 @@ def test_compare_reports_a_changed_limit():
     live = rig_limits.limits_from_parameters('wavemaker', 'ladertanken', params, 'controller')
     lines = rig_limits.compare(rig_limits.load_limits('wavemaker', 'ladertanken', WAVEMAKERS),
                                live)
-    assert lines == ['max_m: wavemakers.yaml +0.14575 m, controller +0.13250 m']
+    assert lines == ['max_m: wavemakers.yaml +0.11358 m, controller +0.10325 m']
 
 
 def test_compare_reports_a_changed_speed():

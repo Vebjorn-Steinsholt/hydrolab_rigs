@@ -31,7 +31,7 @@
     max_goal_acceleration_mps2: 0.0   # 0 = no limit: only the drive's own acceleration limits a goal
     min_period_s: 0.0                 # 0 = no limit
     return_to_upright_max_velocity_mps: 0.1      # at the flap top
-    return_to_upright_default_tolerance_m: 0.002  # at the flap top (about 3.8 deg)
+    return_to_upright_default_tolerance_m: 0.002  # at the flap top (about 4.8 deg of drive)
     hold_velocity_rpm: 10.0           # speed cap while holding position
     positioning_velocity_margin: 1.2  # speed cap = peak speed of the goal x this
     soft_stop_timeout_s: 0.2          # no soft stop message for this long counts as pressed
@@ -40,25 +40,27 @@
     upright_position_m: 0.0  # Upright oscillation center [m]
     upright_is_minimum: false
     water_depth: 1.0         
-    flap_attachment_height: 1.30
+    flap_attachment_height: 1.39  # above the floor: 1.30 above the hinge (2026-11-13; was 1.30)
     hinge_height: 0.09  # pivot above the floor, wall below closed (2026-10-20)
     drive_motion: "angular"
     actuator_upright_angle_deg: 0.0
-    actuator_lead_m_per_degree: 0.00053  # 5.3 cm flap change per 100 deg [m/deg]
+    # 4.13 cm at the attachment per 100 deg of drive (2026-11-13; was 0.00053): six holds from
+    # -0.09 to +0.09 m, flap tilt by inclinometer = 0.78 x what 0.00053 predicted (fit to 3 %).
+    actuator_lead_m_per_degree: 0.000413
     # Measured / target wave height (regular waves only); the stroke is divided by it.
     # 1.0 = linear theory. To correct: new gain = old gain * measured / target.
-    wavemaker_transfer_gain: 0.8
+    wavemaker_transfer_gain: 1.13
     # Gain per period [s], interpolated linearly, nearest end value outside; replaces
     # wavemaker_transfer_gain when set (COMMISSIONING.md, Transfer gain calibration).
-    # From the 2026-10-20 WP1 runs (Calib20oct.BIN, 24 runs, 0.6-2.0 s, steepness 1/60-1/20):
-    # one point per period, mostly from a single run; repeat scatter was about 6 %. 0.8 s is
-    # estimated from one 1/20 run. The smoothed alternative was [0.6, 0.8, 0.9, 2.0] ->
-    # [0.64, 0.70, 0.76, 0.76]. Steep waves (1/20-1/15) come out about 4 % lower.
-    # Valid for water_depth 1.0 and this probe position only.
-    # Checked 2026-10-21: 1.0 s and 1.5 s within 1 %; 0.7 s and 1.05-1.15 s 11-46 % low, cause
-    # not found yet (COMMISSIONING.md, item 33).
+    # 2026-11-13, with the geometry above: transfer_function on item38 run 3 (irregular, Hs 0.03 m,
+    # 120 s, WP1 at 3 m, depth 0.98 m), +-0.01-0.02 at 0.8-1.3 s and 1.6 s, +-0.05-0.10 at 1.4,
+    # 1.5 and 1.8 s. 0.6 and 2.0 s are outside what that run measured: the 2026-10-20 values
+    # x 1.3787, the factor that keeps their waves unchanged under the new geometry.
+    # Before 2026-11-13 (old geometry): [0.64, 0.70, 0.78, 0.80, 0.71, 0.76, 0.76, 0.75, 0.75,
+    # 0.75, 0.74, 0.76], from the 2026-10-20 WP1 runs (Calib20oct.BIN). To be checked with regular
+    # runs at 1.0 m (wave_sessions/2026-11-13_check).
     wavemaker_transfer_gain_periods: [0.6, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2.0]
-    wavemaker_transfer_gain_values:  [0.64, 0.70, 0.78, 0.80, 0.71, 0.76, 0.76, 0.75, 0.75, 0.75, 0.74, 0.76]
+    wavemaker_transfer_gain_values:  [0.88, 1.08, 1.15, 1.11, 1.13, 1.15, 1.16, 1.13, 1.15, 1.15, 1.11, 1.05]
 
 /wavemakers/ladertanken/bridge:
   ros__parameters:

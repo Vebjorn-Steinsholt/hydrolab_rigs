@@ -126,7 +126,7 @@ The setpoint is not rounded to a coarse step anywhere on the way to the drive:
 
 - Goals carry positions as 64-bit floats in metres (a `.dat` file stores 32-bit floats, about
   0.01 µm at full travel), and the controller converts them to drive degrees in 64-bit floats
-  (÷ 0.00053 m/deg).
+  (÷ 0.000413 m/deg on ladertanken).
 - The drive's target position register is a 32-bit integer in steps of 0.0001°, and the setpoint
   is rounded to the nearest step (`ProcessImage::set_scaled`). One step is **0.053 µm** at the
   attachment point (about 0.04 µm at the waterline). The register reaches ±214 748°; the travel
@@ -650,13 +650,14 @@ x_attachment = (S / 2) / gain × (attachment_height − hinge_height) / (water_d
 
 where S is the stroke at the waterline for wave height H (S = H / transfer function, with the
 hinge at `hinge_height`), and the gain, heights and depth are from the wavemaker's block in
-`wavemakers.yaml`. For ladertanken (attachment 1.30 m, hinge 0.09 m) the last factor is 1.33 at
-1.0 m depth and 1.36 at 0.98 m, and the gain is the table for the period (0.64-0.80). A piston
+`wavemakers.yaml`. For ladertanken (attachment 1.39 m, hinge 0.09 m, both above the floor) the
+last factor is 1.43 at 1.0 m depth and 1.46 at 0.98 m, and the gain is the table for the period
+(0.88-1.16, since 2026-11-13). A piston
 moves the same at every height: x = (S / 2) / gain. A file is only right for the depth it was
 made for; note the depth with it.
 
-**Limits** (ladertanken; others in their yaml block): positions within ±0.146 m and speed below
-0.763 m/s. `play_dat --dry-run` checks every run against them; a file in mm is refused there,
+**Limits** (ladertanken; others in their yaml block): positions within ±0.114 m and speed below
+0.595 m/s (±275° and 240 rpm at 0.000413 m/deg). `play_dat --dry-run` checks every run against them; a file in mm is refused there,
 as its travel is 1000 times too large.
 
 **Layout:** little-endian; `int32` time step in whole milliseconds (10 or 20
@@ -886,7 +887,7 @@ ros2 action send_goal --feedback /wavemakers/ladertanken/move_wavemaker \
   rig_interfaces/action/MoveRig "{height: 0.0001, period: 10.0}"
 ```
 
-For ladertanken (flap, 1.0 m depth, 1.30 m attachment, 0.00053 m/deg) this is about ±1.2° at the
+For ladertanken (flap, 1.0 m depth, 1.39 m attachment, 0.000413 m/deg) this is about ±1.8° at the
 drive. Recalculate if those values change.
 
 Pregenerated (`height` and `period` left at 0): absolute paddle positions in m at a fixed
@@ -895,7 +896,7 @@ Pregenerated (`height` and `period` left at 0): absolute paddle positions in m a
 ```bash
 ros2 action send_goal --feedback /wavemakers/ladertanken/move_wavemaker \
   rig_interfaces/action/MoveRig \
-  "{positions: [-0.00053, 0.0, 0.00053, 0.0, -0.00053], sample_interval: 1.0}"
+  "{positions: [-0.000413, 0.0, 0.000413, 0.0, -0.000413], sample_interval: 1.0}"
 ```
 
 A goal is **rejected** if the controller is not active, another goal or a return is running, the

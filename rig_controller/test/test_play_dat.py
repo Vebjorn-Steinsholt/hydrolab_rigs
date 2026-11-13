@@ -498,7 +498,7 @@ def test_main_bad_runs_argument(tmp_path):
 def test_name_takes_the_limits_from_the_yaml(tmp_path, capsys):
     assert dry_run(tmp_path, limits=('ladertanken', '--config', WAVEMAKERS)) == 0
     out = capsys.readouterr().out
-    assert 'limits from wavemakers.yaml (ladertanken): -0.14575..+0.14575 m, 0.7632 m/s' in out
+    assert 'limits from wavemakers.yaml (ladertanken): -0.11358..+0.11358 m, 0.5947 m/s' in out
     assert 'namespace /wavemakers/ladertanken' in out
     assert out.count(' OK') == 3
 
@@ -520,7 +520,7 @@ def test_option_overrides_one_value(tmp_path, capsys):
     assert dry_run(tmp_path, limits=('ladertanken', '--config', WAVEMAKERS,
                                      '--max-m', '0.1')) == 0
     out = capsys.readouterr().out
-    assert '--max-m overridden: -0.14575..+0.10000 m, 0.7632 m/s' in out
+    assert '--max-m overridden: -0.11358..+0.10000 m, 0.5947 m/s' in out
 
 
 def test_override_is_checked_against(tmp_path, capsys):
