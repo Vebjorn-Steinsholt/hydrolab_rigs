@@ -283,8 +283,10 @@ def irregular_signal(wm: Wavemaker, spec: IrregularSpec, dt: float):
     a = wave_amplitudes(jonswap(f, df, spec.hs_m, spec.tp_s, spec.gamma), df)
     p = paddle_amplitudes(wm, f, a)
     x = synthesize(n, p, random_phases(spec.seed, len(f)), n_samples)
-    x = apply_ramps(x, round(spec.n_ramp * spec.tp_s / dt))
-    row = {'kind': 'irregular', 'peak_period_s': spec.tp_s, 'hs_m': spec.hs_m,
+    n_ramp_samples = round(spec.n_ramp * spec.tp_s / dt)
+    x = apply_ramps(x, n_ramp_samples)
+    row = {'kind': 'irregular', 'ramp_s': round(n_ramp_samples * dt, 6),
+           'peak_period_s': spec.tp_s, 'hs_m': spec.hs_m,
            'gamma': spec.gamma, 'seed': spec.seed,
            'f_min_hz': round(float(f[0]), 4), 'f_max_hz': round(float(f[-1]), 4),
            'paddle_std_m': round(float(x.std()), 5),
@@ -302,8 +304,10 @@ def regular_signal(wm: Wavemaker, spec: RegularSpec, dt: float):
     n = round(spec.n_periods * spec.period_s / dt)
     t = np.arange(1, n + 1) * dt
     x = amplitude * np.sin(2.0 * math.pi / spec.period_s * t)
-    x = apply_ramps(x, round(spec.n_ramp * spec.period_s / dt))
-    row = {'kind': 'regular', 'period_s': spec.period_s, 'height_m': round(height, 5),
+    n_ramp_samples = round(spec.n_ramp * spec.period_s / dt)
+    x = apply_ramps(x, n_ramp_samples)
+    row = {'kind': 'regular', 'ramp_s': round(n_ramp_samples * dt, 6),
+           'period_s': spec.period_s, 'height_m': round(height, 5),
            'steepness': f'1/{wavelength(wm, spec.period_s) / height:.1f}',
            'gain': round(transfer_gain(wm, spec.period_s), 4),
            'amplitude_m': round(amplitude, 5)}
@@ -313,7 +317,7 @@ def regular_signal(wm: Wavemaker, spec: RegularSpec, dt: float):
 # ---------------------------------------------------------------- assemble and write
 # The shared parts are in motion_files; these keep the wavemaker's signatures.
 
-WAVE_COLUMNS = ['run', 'start_s', 'end_s', 'kind',
+WAVE_COLUMNS = ['run', 'start_s', 'end_s', 'kind', 'ramp_s',
                 'period_s', 'height_m', 'steepness', 'amplitude_m',              # regular
                 'peak_period_s', 'hs_m', 'gamma', 'seed', 'f_min_hz', 'f_max_hz',  # irregular
                 'paddle_std_m', 'paddle_peak_m',

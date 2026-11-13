@@ -26,6 +26,7 @@
   <exec_depend>python3-numpy</exec_depend>       <!-- play_dat, generate_waves -->
   <exec_depend>python3-yaml</exec_depend>        <!-- generate_waves -->
   <exec_depend>python3-matplotlib</exec_depend>  <!-- generate_waves plot -->
+  <exec_depend>python3-scipy</exec_depend>      <!-- transfer_function -->
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

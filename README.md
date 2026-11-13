@@ -44,7 +44,7 @@ Modbus TCP / PROFIBUS gateway.
 | `drivers/mgate5101_driver` | Standalone C++ driver: cyclic Modbus TCP client for the MGate (`MGateDriver`) and the IndraDrive state machine on top of it (`IndraDrive`). Includes `poll_rate_probe` and a monitor/move example. Register mapping is explained in [MAPPING.md](drivers/mgate5101_driver/MAPPING.md). |
 | `drivers/linmot_serial_driver` | Standalone C++ driver for the LinMot oscillator: the serial link to the Arduino serial-to-CAN bridge (`SerialBridge`, firmware in `firmware/linmot_serial_bridge`) and the LinMot drive's start-up and faults on top of it (`LinMotDrive`). `linmot_probe` checks the link without moving anything. Not used by the controller yet. |
 | `rig_interfaces` | `MoveRig` action, `ReturnToUpright` and `CancelAllGoals` services. |
-| `rig_controller` | `controller_node` (the lifecycle controller), the wave and trajectory maths, the IndraDrive actuator adapter, and `bridge_node` (see the note below). |
+| `rig_controller` | `controller_node` (the lifecycle controller), the wave and trajectory maths, the IndraDrive actuator adapter, and `bridge_node` (see the note below). Also the Python tools: `play_dat`, `generate_waves`, `generate_oscillations` and `transfer_function` (the wavemaker's gain from a run and a probe record; [Transfer gain from a run](#transfer-gain-from-a-run)). |
 | `wavemaker_bringup` | Launch file and per-wavemaker configuration (`config/wavemakers.yaml`). |
 | `oscillator_bringup` | Launch file and configuration of the oscillators (`config/oscillator.yaml`: `sloshing`, `vertical`); `oscillator:=` picks one. |
 | `rig_web` | Web page for running a wavemaker or the oscillator through the bridge (`rig` parameter; see [Web page](#web-page)). |
@@ -570,9 +570,10 @@ File names are relative to the current folder, for the test matrix and for `-o`;
 give full paths (`~/wave_sessions/2026-11-05/session.csv -o ~/wave_sessions/2026-11-05/session_waves`). It writes:
 
 - `session_waves.dat`: the motion file for `play_dat`.
-- `session_waves.csv`: the run table: per run its start and end, the parameters, H and 1/x
-  (regular), the paddle amplitude or its standard deviation and peak (irregular), and `skipped`
-  with the reason for a run that does not fit the wavemaker.
+- `session_waves.csv`: the run table: per run its start and end, the length of each ramp
+  (`ramp_s`), the parameters, H and 1/x (regular), the paddle amplitude or its standard
+  deviation and peak (irregular), and `skipped` with the reason for a run that does not fit the
+  wavemaker.
 - `session_waves.png`: paddle position and speed over the whole file, with the wavemaker's
   limits dashed and the runs numbered as in the run table.
 - `session_waves.txt`: how the file was made (date, command, commit, yaml, water depth, dt, speed
@@ -689,12 +690,68 @@ position with what you computed.
 The peaks of an irregular run depend on the seed: a sea state that fits with one seed can be
 skipped with another, and the run table gives the paddle's peak for each.
 
+### Transfer gain from a run
+
+`transfer_function` (`rig_controller/src/transfer_function.py`) measures the wavemaker's
+transfer gain from one run of a motion file and a catman record of it: across the whole band
+from one irregular run, or at its one period from a regular run. It prints the gain next to the
+yaml's table; it doesn't change the yaml. Why it works the way it does is in
+[transfer_function_sketch.md](transfer_function_sketch.md).
+
+**What it needs:**
+
+- The `.dat` and its run table, from `generate_waves`. Files made before 2026-11-13 have no
+  `ramp_s` column and are refused: generate the file again from its test matrix and its
+  `.txt`'s depth. The seeds are fixed, so the motion is the same.
+- A catman record of the whole file, exported as CSV: a time column in seconds, then one column
+  per channel, with the channel names in the header. At least the wave probe; best also the
+  flap's draw-wire sensor, which splits the gain into the drive's part and the water's part.
+- Still water before the first run, the probe's distance from the flap, the measured water
+  depth, and the draw wire's height above the tank floor.
+
+```bash
+ros2 run rig_controller transfer_function item38.dat ladertanken --run 3 \
+    --record item38.csv --probe WP1 --probe-scale 0.001 --probe-distance-m 3.0 \
+    --stroke Stroke --stroke-scale 0.001 --stroke-height-m 1.20 \
+    --depth-m 0.98 -o item38_run3_tf --plot
+```
+
+It finds where the file starts in the record by itself: from the draw wire if there is one,
+else from the wave's envelope. It prints a row per period of the yaml's gain table, with the
+measured gain, its ±, the coherence and the table's value (and with the draw wire also the
+drive's and the water's part), then a summary: the offset found, the window, the averages and
+the checks. It writes:
+
+- `<output>.csv`: every trusted frequency bin, raw and smoothed.
+- `<output>.txt`: the command, the commit and the summary: what the result was made from.
+- `<output>.png` (with `--plot`): gain, drive and water, coherence and residual phase against
+  period.
+
+| Option | Use |
+|---|---|
+| `--run N` | The run, as numbered in the run table (required) |
+| `--record`, `--probe` | The CSV and the probe's column name (required) |
+| `--probe-distance-m` | The probe's distance from the flap (required) |
+| `--depth-m` | The measured depth (required: no default from the yaml) |
+| `--probe-scale`, `--stroke-scale` | To metres: `0.001` for a channel in mm |
+| `--stroke`, `--stroke-height-m` | The draw wire's column and its height above the floor (together) |
+| `--offset-s` | Where the file starts in the record, in seconds, when the match can't find it |
+| `--segment-s 40` | Welch segment length; longer resolves finer, with a larger ± |
+| `--smooth-hz 0.05` | Average over the beach reflection's ripple; `0` for the raw gain |
+| `--config <file>` | Another `wavemakers.yaml` |
+
+How to read the output, and what a bad value points to: *Reading the output* in the sketch.
+
 ### Tests
 
 ```bash
 cd ~/ros_ws/src/hydrolab_rigs
 python3 -m pytest rig_controller/test/test_generate_waves.py -v
+python3 -m pytest rig_controller/test/test_transfer_function.py -v
 ```
+
+`test_transfer_function.py` builds a session with a known drive and water and checks that the
+tool gives them back.
 
 ## Generating oscillator motion files
 
@@ -749,9 +806,9 @@ ros2 run rig_controller generate_oscillations vertical session.csv -o session_mo
 It writes:
 
 - `session_motion.dat`: the motion file for `play_dat`.
-- `session_motion.csv`: the run table: per run its start and end, the parameters, the amplitude
-  (regular) or the standard deviation and peak (irregular), `peak_jerk_mps3`, and `skipped` for a
-  run that does not fit the oscillator.
+- `session_motion.csv`: the run table: per run its start and end, the length of each ramp
+  (`ramp_s`), the parameters, the amplitude (regular) or the standard deviation and peak
+  (irregular), `peak_jerk_mps3`, and `skipped` for a run that does not fit the oscillator.
 - `session_motion.png`: position and speed over the whole file, the limits dashed.
 - `session_motion.txt`: how the file was made (date, command, commit, yaml, oscillator, jerk
   limit, dt, speed limit) and a copy of the test matrix. Keep it with the `.dat` and the measured

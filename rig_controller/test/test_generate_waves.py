@@ -256,6 +256,7 @@ def test_regular_signal(ladertanken):
     assert row['amplitude_m'] * math.cos(math.pi * DT_S / 1.0) <= np.abs(x).max()
     assert np.abs(x).max() <= row['amplitude_m'] * (1 + 1e-4)
     assert row['kind'] == 'regular' and row['steepness'].startswith('1/')
+    assert row['ramp_s'] == 3.0     # 3 periods of 1.0 s
 
 
 def test_regular_row_records_steepness_for_height_runs(ladertanken):
@@ -339,6 +340,7 @@ def test_irregular_signal(ladertanken):
     assert row['kind'] == 'irregular' and row['peak_period_s'] == 1.2
     assert row['f_min_hz'] >= 0.5 / 1.2 and row['f_max_hz'] <= 3.0 / 1.2
     assert row['paddle_peak_m'] == pytest.approx(np.abs(x).max(), abs=1e-5)
+    assert row['ramp_s'] == 6.0     # 5 peak periods of 1.2 s, whole samples
 
 
 # ---------------------------------------------------------------- checks
@@ -419,9 +421,12 @@ def test_main_end_to_end(tmp_path, capsys):
     # the short play_dat form (item 40): limits from the yaml by name
     assert f'play_dat {out}.dat ladertanken --dry-run' in printed
     with open(out + '.csv', newline='') as f:
-        table = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        table = list(reader)
+    assert reader.fieldnames == gw.WAVE_COLUMNS
     assert [r['kind'] for r in table] == ['regular', 'irregular']
     assert table[1]['peak_period_s'] == '1.2' and table[0]['period_s'] == '1.0'
+    assert (table[0]['ramp_s'], table[1]['ramp_s']) == ('3.0', '6.0')
 
 
 def small_matrix(tmp_path):
