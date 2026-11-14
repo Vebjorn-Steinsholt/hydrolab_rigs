@@ -361,3 +361,13 @@ the Pi have no trigger output.
 
 Until then the generator keeps writing 1 during each run; changing the channel has no effect on
 the rig.
+
+### Transfer function from every run (long term)
+
+Pool every run's transfer gain (from `transfer_function` today, and live from a wave probe on a
+topic later) into one smooth gain model per wavemaker, with an error bar per period. The model
+flags runs that disagree with it and prints a suggested gain table. The design is in
+[gain_estimation_sketch.md](gain_estimation_sketch.md).
+
+**When:** not started. Stage 0 (offline pooling) needs nothing new; the live stages need a probe
+on a topic. Item 43 first.
