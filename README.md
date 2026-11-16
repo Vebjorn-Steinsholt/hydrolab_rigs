@@ -344,7 +344,7 @@ steps and the log are in [COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator
 `drive_name: indradrive`, `drive_motion: linear` with the drive's units
 (`drive_m_per_unit: 0.001`, `drive_velocity_per_unit_per_s: 6.0`, `drive_direction: -1`, see
 [Actuator and limits](#actuator-and-limits)), travel −0.2…0.2 m around upright 0, speed limit
-`max_velocity_rpm: 1800` (0.3 m/s, tested on the rig 2026-11-12, [COMMISSIONING.md, *Test 3*](COMMISSIONING.md#test-3-raising-the-speed-limit-todo-51)).
+`max_velocity_rpm: 1800` (0.3 m/s, tested on the rig 2026-11-12, [COMMISSIONING.md, *Done*](COMMISSIONING.md#done)).
 
 **Start and stop** on the ladertanken Pi, through the oscillator service with
 `OSCILLATOR=vertical` in `/etc/default/oscillator` ([rpi/README.md](rpi/README.md#oscillator)):

@@ -63,7 +63,7 @@ MGATE_HOST=192.168.1.70
 Before each start, the unit sets the route to `MGATE_HOST` to resend a lost packet after 20 ms
 instead of Linux's 200 ms minimum (`rto_min`, as root for this one command). With two rigs on
 one MGate the gateway drops a frame now and then, and a 200 ms wait stalled the gateway cycle up
-to 415 ms, close to the 500 ms fault timeout (COMMISSIONING.md, *Test 2*). Check after a start:
+to 415 ms, close to the 500 ms fault timeout (COMMISSIONING.md, *Vertical oscillator*, *Done*). Check after a start:
 `ip route get 192.168.1.70` shows `rto_min 20ms`.
 
 systemd only treats lines starting with `#` as comments; a comment after a value becomes part of

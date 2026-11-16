@@ -15,23 +15,98 @@ the items kept there, and finished items, which are removed (see the git history
 ## High
 
 - [ ] **43. Confirm the new gain table with probes. (rig)** (the gain table in `wavemakers.yaml`, `transfer_function`)
-  Since 2026-11-13 the yaml has the recalibrated geometry (attachment 1.39 m, lead 0.000413 m/deg) and a gain table measured with it from item38 run 3 (COMMISSIONING.md, *Actuator conversion calibration*). The check run that day (`~/wave_sessions/2026-11-13_check`, depth 1.0 m) gave H/target 0.92 (0.8 s), 1.01 (1.0 s), 0.99 (1.1 s), 0.98 (1.3 s), 0.99 (1.6 s), but only after correcting WP1, whose catman channel was scaled 0.03981 m/V instead of the database's 0.0229 (`--probe-scale 0.5752`, `--offset-s 16.04`). Planned 2026-11-16/17, in this order:
-  1. In catman, assign WP1 from the sensor database again (0.0229), then calibrate statically: the probe moved -5, 0, +5 cm in still water must read ±50 mm.
-  2. Repeat the check run (`2026-11-13_check/matrix.csv`: regular 0.8, 1.0, 1.1, 1.3, 1.6 s at 1/60). Pass: H/target within the table's scatter (~6 %).
-  3. If step 2 confirms, set the 0.8 s entry to about 1.00 (now 1.08).
-  4. One 10-minute irregular run at 1.0 m (±1-2 % on the gain), for the table across the band.
-  5. (Claude, if wanted) `offset_from_stroke` with regular runs only: the sign check refused `check.ASC` (negative peak -0.882 against +0.868), because a flipped sine looks like a shifted one. Refuse only when the negative peak is clearly larger (> 1.2 ×); until then, `--offset-s`.
+  Since 2026-11-13 the yaml has the recalibrated geometry (attachment 1.39 m, lead 0.000413 m/deg) and a gain table measured with it from item38 run 3 (COMMISSIONING.md, *Actuator conversion calibration*). The check run that day (`~/wave_sessions/2026-11-13_check`, depth 1.0 m) gave H/target 0.92 (0.8 s), 1.01 (1.0 s), 0.99 (1.1 s), 0.98 (1.3 s), 0.99 (1.6 s), but only after correcting WP1, whose catman channel was scaled 0.03981 m/V instead of the database's 0.0229 (`--probe-scale 0.5752`, `--offset-s 16.04`). Planned 2026-11-16/17, in this order. The irregular run goes first in the same file as the regular check, so one catman record and one bag cover the session, and the draw wire finds the offset without `--offset-s` (with regular runs only, a flipped sine looks like a shifted one).
+
+  1. **WP1 in catman.** Assign WP1 from the sensor database to its channel again and check the channel's scaling reads 0.0229 m/V. Zero it in still water, then move the probe -5, 0, +5 cm on its stand: it must read -50, 0, +50 mm (±1 mm). Also check `WM_Position` is recorded. Note the depth with a ruler.
+
+  2. **The session file, on the Pi.** Depth 1.0 m means `WATER_DEPTH` empty; another depth goes there (README, *Water depth*).
+
+     ```bash
+     ssh ladertanken@ladertanken-rpi.local
+     grep WATER_DEPTH /etc/default/wavemaker          # empty for 1.0 m
+     sudo systemctl start wavemaker@ladertanken
+     source ~/ros_ws/install/setup.bash && export ROS_DOMAIN_ID=1
+     mkdir -p ~/wave_sessions/2026-11-16_check && cd ~/wave_sessions/2026-11-16_check
+     cat > matrix.csv <<'END'
+     kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+     irregular,,,,,0.03,1.2,3.3,600,1,5,60
+     regular,0.8,,1/60,15,,,,,,3,60
+     regular,1.0,,1/60,15,,,,,,3,60
+     regular,1.1,,1/60,15,,,,,,3,60
+     regular,1.3,,1/60,15,,,,,,3,60
+     regular,1.6,,1/60,15,,,,,,3,60
+     END
+     ros2 run rig_controller generate_waves ladertanken matrix.csv -o check2
+     ros2 run rig_controller play_dat check2.dat ladertanken --dry-run
+     ```
+
+     Pass: the dry run lists runs 0-5 without errors; the file is about 17 min long.
+
+  3. **Record and play.** Start catman (WP1, `WM_Position`) with at least 30 s of still water before the file. In a second Pi terminal, the bag (the drive against its setpoint):
+
+     ```bash
+     source ~/ros_ws/install/setup.bash && export ROS_DOMAIN_ID=1
+     cd ~/wave_sessions/2026-11-16_check
+     ros2 bag record -o check2_bag /wavemakers/ladertanken/wavemaker_setpoint /wavemakers/ladertanken/wavemaker_position
+     ```
+
+     Then, in the first terminal:
+
+     ```bash
+     ros2 run rig_controller play_dat check2.dat ladertanken
+     ```
+
+     Stop catman about 30 s after the last run, then the bag (Ctrl-C). Export the record as catman ASCII to the stick as `check2.ASC`.
+
+  4. **Analyse, on the lab PC.** Stick in:
+
+     ```bash
+     mkdir -p ~/wave_sessions/2026-11-16_check && cd ~/wave_sessions/2026-11-16_check
+     scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-16_check/{matrix.csv,check2.dat,check2.csv,check2.txt,check2_bag} .
+     cp /media/hydrolab-linux/LADERSCHTIC/check2.ASC .
+     source ~/ros_ws/install/setup.bash
+     for run in 0 1 2 3 4 5; do
+       ros2 run rig_controller transfer_function check2.dat ladertanken --run $run \
+           --record check2.ASC --probe WP1 --probe-distance-m 3.0 \
+           --stroke WM_Position --stroke-scale -1.342 --stroke-height-m 1.375 \
+           --depth-m 1.0 -o run$run --plot
+     done
+     ```
+
+     Use the measured depth in `--depth-m`, and `--probe-scale 0.001` if WP1 is exported in mm. Run 0 is the irregular run: its rows are the gain across the band. Runs 1-5 are the regular check: H/target = the measured `gain` / the table's value in the same row. Pass: within ~6 % (the table's scatter); `drive` about 1.0 and `chain` a few %. If run 0 refuses the offset, run it once with `--offset-s` from runs 1-5's summary line.
+
+  5. **The 0.8 s entry,** if step 4 confirms about 0.92 there: in `wavemaker_bringup/config/wavemakers.yaml`, `wavemaker_transfer_gain_values`' second value (0.8 s) from 1.08 to about 1.00, or to the irregular run's value at 0.8 s if its ± is small. Then, on the PC:
+
+     ```bash
+     cd ~/ros_ws/src/hydrolab_rigs
+     python3 -m pytest -q rig_controller/test/   # no test uses the 0.8 s entry; all should still pass
+     git add wavemaker_bringup/config/wavemakers.yaml
+     git commit -m "ladertanken: 0.8 s gain from the 2026-11-16 check" && git push
+     ```
+
+     and on the Pi:
+
+     ```bash
+     cd ~/ros_ws/src/hydrolab_rigs && git pull && cd ~/ros_ws && colcon build --packages-select wavemaker_bringup
+     sudo systemctl restart wavemaker@ladertanken
+     ```
+
+     Note the result and the date in COMMISSIONING.md, *Actuator conversion calibration*.
+
+  6. (Claude, if wanted) `offset_from_stroke` with regular runs only: the sign check refused `check.ASC` (negative peak -0.882 against +0.868). Refuse only when the negative peak is clearly larger (> 1.2 ×). Not needed for a file that starts with an irregular run.
+
   Still open from October and 2026-11-05: long runs at 1.5 s and above see the beach reflection after about 21 s; measure before it arrives, or separate incident and reflected waves (3 probes, *Transfer function from every run*).
+
 ## Medium
 
 - [ ] **19. Linear drives (lilletanken, mclab): set their units.** Deferred: neither is deployed yet (they need gateways). (`wavemaker_bringup/config/wavemakers.yaml`)
-  The code is done (2026-11-09, for the vertical oscillator): `drive_m_per_unit`, `drive_velocity_per_unit_per_s` and `drive_direction` in `DriveScale`, one set of limits (`travel_*`, the drive's derived from them), and `rig_limits` derives the speed from `max_velocity_rpm`. lilletanken and mclab still carry placeholders (1.0, 1/6, 1, and `max_velocity_rpm: 100`, which `rig_limits` turns into 600 m/s). Set them from each drive's scaling (item 19 in [COMMISSIONING.md](COMMISSIONING.md)); their `min_position_m` / `max_position_m` are no longer read and can go.
+  Lilletanken and mclab still carry placeholders: `drive_m_per_unit` 1.0, `drive_velocity_per_unit_per_s` 1/6, `drive_direction` 1 and `max_velocity_rpm: 100` which `rig_limits` turns into 600 m/s). Set them from each drive's scaling (item 19 in [COMMISSIONING.md](COMMISSIONING.md)); their `min_position_m` / `max_position_m` are no longer read and can go.
 
 - [ ] **46. Vertical oscillator: tracking under changing loads.** (rig; drive tuning with the drive's owner, from about 2026-11-23)
   Unloaded (2026-11-09) the slide follows with about 180 ms lag; the stroke reaches 97 % at a 2 s period and 90 % at 1 s, for any stroke: a first-order lag of about 77 ms plus about 100 ms delay ([COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken)). The load changes between experiments (models, profiles, water resistance, depth), so one fixed correction cannot hold. Options: (1) a stiffer drive (Kv S-0-0104 = 1.0, acceleration feedforward S-0-0348 / P-0-1126 = 0); (2) record and report the measured motion with every run; (3) a calibration sweep per setup and a gain per period (the controller's gain table is wavemaker-only); (4) amplitude correction during the run. 1 and 2 first. To decide with the experimenters: must the slide reach the requested stroke, or is knowing what it did enough?
 
 - [ ] **51. Vertical oscillator: the working values in the yaml.** (`oscillator_bringup/config/oscillator.yaml`, the `vertical` block; with the experimenters)
-  Travel, stroke, maximum speed and rest position are not yet known from the experiments; the yaml has ±0.2 m around 0 and, since 2026-11-12, 0.3 m/s (`max_velocity_rpm` 1800; 0.1 m/s before, a placeholder from `cecf951`). The speed caps a sine's stroke at v·T/π (95 mm at 1 s, 191 mm at 2 s). The drive allows 1.6 m/s (S-0-0091 = 96 000 mm/min, [COMMISSIONING.md](COMMISSIONING.md#the-oscillator-drive-read-2026-11-06)), 4800 rpm at the motor with 20 mm/rev, but the MSK050C-0300's nameplate gives n_max 4700 min⁻¹ (read 2026-11-12), so the ceiling is ≈1.57 m/s (`max_velocity_rpm` 9400). Test 3 ([COMMISSIONING.md](COMMISSIONING.md#test-3-raising-the-speed-limit-todo-51)) passed up to 0.3 m/s (`max_velocity_rpm` 1800) with the naked load on 2026-11-12; the axis allows about 1.0 m/s (ball nut). The yaml now has 1800. Still to do: ask the experimenters for their fastest goal (π × stroke / period); lower `max_velocity_rpm` to about 1.2 × that if it is well below 0.25 m/s, or test further levels if it is above. Short periods stay small anyway: above about 24 mm at 1 s the drive's 3 m/s³ jerk rounds the sine off. `max_goal_acceleration_mps2` and `min_period_s` stay 0 (no limit) until the loaded tests (item 46) show where the lag or the mechanics become a problem; then set them so the controller rejects a goal that is too steep instead of the drive rounding it off (the drive's own 20 m/s² and 3 m/s³ limit every move today; decision 5 in `git show c6bba03:oscillator_sketch.md`).
+  Travel, stroke, maximum speed and rest position are not yet known from the experiments; the yaml has ±0.2 m around 0 and, since 2026-11-12, 0.3 m/s (`max_velocity_rpm` 1800; 0.1 m/s before, a placeholder from `cecf951`). The speed caps a sine's stroke at v·T/π (95 mm at 1 s, 191 mm at 2 s). The drive allows 1.6 m/s (S-0-0091 = 96 000 mm/min, [COMMISSIONING.md](COMMISSIONING.md#the-oscillator-drive-read-2026-11-06)), 4800 rpm at the motor with 20 mm/rev, but the MSK050C-0300's nameplate gives n_max 4700 min⁻¹ (read 2026-11-12), so the ceiling is ≈1.57 m/s (`max_velocity_rpm` 9400). Test 3 ([COMMISSIONING.md](COMMISSIONING.md#done)) passed up to 0.3 m/s (`max_velocity_rpm` 1800) with the naked load on 2026-11-12; the axis allows about 1.0 m/s (ball nut). The yaml now has 1800. Still to do: ask the experimenters for their fastest goal (π × stroke / period); lower `max_velocity_rpm` to about 1.2 × that if it is well below 0.25 m/s, or test further levels if it is above. Short periods stay small anyway: above about 24 mm at 1 s the drive's 3 m/s³ jerk rounds the sine off. `max_goal_acceleration_mps2` and `min_period_s` stay 0 (no limit) until the loaded tests (item 46) show where the lag or the mechanics become a problem; then set them so the controller rejects a goal that is too steep instead of the drive rounding it off (the drive's own 20 m/s² and 3 m/s³ limit every move today; decision 5 in `git show c6bba03:oscillator_sketch.md`).
 
 ## Low
 
@@ -60,10 +135,8 @@ the items kept there, and finished items, which are removed (see the git history
   Seen 2026-11-06 on ladertanken (drive power off during a return, F2026; *Controller and driver fixes* in `git show c6bba03:rpi/README.md`). The controller handles the fault itself: `handle_driver_fault()` deactivates, `on_deactivate` returns `ERROR`, and `on_error` releases everything and leaves it `unconfigured`. `stop_activity()` breaks the bond on the way, so the lifecycle manager logs `CRITICAL FAILURE: SERVER controller IS DOWN after not receiving a heartbeat`, resets all nodes, and its deactivate and cleanup of the controller fail with `No transition matching 4 (2) found for current state unconfigured` and `Failed to change state for node: controller`. Harmless (the drive is already released, the bridge is reset, a service restart recovers), but one fault gives about ten `ERROR` lines, and the real cause (`Driver fault: drive error F2026`) is easy to miss among them.
   Options: (a) on a driver fault, do not transition the controller; only halt and disable the drive, break the bond, and let the manager's reset do deactivate and cleanup (one path for every failure, but the controller then depends on the manager to release the drive); (b) keep today's path and document the burst in `rpi/README.md`, *Troubleshooting*, with "look for `Driver fault:` first"; (c) both: keep `on_error` as the safety net if the manager is gone. Check first whether the manager's `attempt_respawn_reconnection: False` affects which path it takes. The unit test `DriverFaultReleasesResourcesAndAllowsReconfigure` covers today's path.
 
-- [ ] **49. Waves stopped by themselves: fixed; the heartbeat margin left to decide.** (`rig_web`, the ladertanken Pi)
-  Cause, found 2026-11-11: `Stop requested: Stopped: client heartbeat ... lost`. Every acknowledgment from the page opened a new connection (HTTP/1.0) to `ladertanken-rpi.local`, and the browser's PC sometimes needed about 2.4 s to look the name up again; past 1.5 s (`ACK_TIMEOUT_S` 0.5 s + the bridge's `heartbeat_timeout` 1.0 s) the bridge stops the wave. **Fixed:** the server keeps the connection open (HTTP/1.1), so the name is looked up once; checked on the Pi 13:35-13:50, 15 min by name, no gap. The server now logs each gap (`No page acknowledged for ...; last event sent ...`, `acknowledged again after ...`, `Heartbeat timer ran ...`). Tests: `rig_web/test/`.
-  The Pi's WiFi (`wlan0` 192.168.1.99, on the same subnet as the cable) is off for good since 2026-11-11 (`dtoverlay=disable-wifi`, cloud-init's netplan file removed; `rpi/README.md`, *Install*).
-  Open: whether the 1.5 s margin is right: it exists to stop a wave when nobody is watching.
+- [ ] **49. The page's heartbeat margin.** (`rig_web`, `bridge_node.cpp`)
+  A wave stops when the page has not acknowledged for 1.5 s (`ACK_TIMEOUT_S` 0.5 s + the bridge's `heartbeat_timeout` 1.0 s). The cause of the waves that stopped by themselves (a name lookup per request) is fixed (2026-11-11). Open: whether 1.5 s is right; it exists to stop a wave when nobody is watching. The server logs each gap (`No page acknowledged for ...`), so a too-tight margin shows in the journal.
 
 - [ ] **50. Sloshing oscillator on the ladertanken Pi: the last check.** (rig; postponed to 2027, when the sloshing rig is connected; was T5 in the vertical oscillator's sketch)
   The vertical oscillator's branch changed how the sloshing rig starts (`oscillator:=`, the shared `soft_stop@`, `refuse_if_busy.sh`). The refusal of sloshing's unit next to the running wavemaker passed 2026-11-10 (`ExecStartPre` failed), but sloshing has not run since. Remove `OSCILLATOR` from `/etc/default/oscillator` (or set `sloshing`) and start `oscillator@ladertanken`: the journal shows `LinMot: homed` and the nodes are in `/oscillators/sloshing`. Then step 7 of `rpi/README.md`, *Rig test (wavemaker and vertical together)*: sloshing refused next to the running wavemaker, and the wavemaker refused next to it. Set `OSCILLATOR=vertical` again afterwards.
@@ -72,7 +145,7 @@ the items kept there, and finished items, which are removed (see the git history
   Add `--step`, `--speed` and `--min` / `--max` (tag units) to `main()` and `test_move()`, and install `mgate_example` (`install(TARGETS ...)`), so `ros2 run mgate5101_driver mgate_example --move --profibus-address 3 --input-base 7 --output-base 6 --step 50` moves 50 mm and back. Today `--move` steps 5 mm at 1.7 mm/s on the vertical oscillator, its limits default to −550…500 (`IndraDriveConfig`, so the drive's ±211 mm are the only backstop), and it runs from `~/ros_ws/build/mgate5101_driver/mgate_example`. Not needed now.
 
 - [ ] **53. One shared gateway connection for both ladertanken drives.** (only if needed; `IndraDriveActuator`, `MGateDriver`, `IndraDrive`)
-  Not needed now: Test 2's slow cycles came from the Pi's 200 ms minimum resend time, fixed by `rto_min` 20 ms at every rig start (T18, 2026-11-11; COMMISSIONING.md, *Test 2*). Do it if the gateway's own resends (about 200 ms, not adjustable) become a problem. Remedies, in this order: (1) one process owns the gateway, both drives on one `MGateDriver` (3 requests per cycle for both rigs instead of 6); `set_cycle_callback` then needs more than one subscriber (`IndraDrive` takes the only slot); tests: two `IndraDriveActuator`s on one `FakeMGate` (it plays only one drive today); (2) read the status area only every Nth cycle; (3) FC23 (probably not usable, the inputs are FC4); (4) a slower oscillator poll. Still to check either way: the MGate's maximum number of Modbus TCP clients (3 worked on 2026-11-10). Background: *If Test 2 fails* in `git show c6bba03:oscillator_sketch.md`.
+  Not needed now: Test 2's slow cycles came from the Pi's 200 ms minimum resend time, fixed by `rto_min` 20 ms at every rig start (T18, 2026-11-11; COMMISSIONING.md, *Vertical oscillator*, *Done*). Do it if the gateway's own resends (about 200 ms, not adjustable) become a problem. Remedies, in this order: (1) one process owns the gateway, both drives on one `MGateDriver` (3 requests per cycle for both rigs instead of 6); `set_cycle_callback` then needs more than one subscriber (`IndraDrive` takes the only slot); tests: two `IndraDriveActuator`s on one `FakeMGate` (it plays only one drive today); (2) read the status area only every Nth cycle; (3) FC23 (probably not usable, the inputs are FC4); (4) a slower oscillator poll. Still to check either way: the MGate's maximum number of Modbus TCP clients (3 worked on 2026-11-10). Background: *If Test 2 fails* in `git show c6bba03:oscillator_sketch.md`.
 
 - [ ] **54. Oscillator: the centre of oscillation from `/etc/default/oscillator`.** (`oscillator_bringup/launch/oscillator.launch.py`, `rpi/run.sh`)
   `VERTICAL_UPRIGHT_M` / `SLOSHING_UPRIGHT_M` override `upright_position_m` at launch, as `WATER_DEPTH` does for the wavemaker, so another centre needs no edit of the tracked yaml on the Pi. Sketch: [oscillator_centre_sketch.md](oscillator_centre_sketch.md).
@@ -229,8 +302,7 @@ Make adding a rig (a future carriage, or others) a matter of one yaml file, plus
 class only when the rig uses a new drive family. The drive is already chosen by config
 (`drive_name`); the rig name and the way a goal becomes a trajectory are not.
 
-**When:** after `feat-vertical-oscillator` is merged into `master` (`feat/oscillator` was merged
-2026-11-02). On its own branch.
+**When:** not started. On its own branch.
 
 #### Decisions (2026-10-28)
 
@@ -297,46 +369,6 @@ colcon test-result --verbose
 ```
 
 Expected: `Summary: N tests, 0 errors, 0 failures`.
-
-### Oscillator motion generator
-
-`generate_oscillations`: motion files for the oscillators (`sloshing`, `vertical`), built like
-the wavemakers' `rig_controller/src/generate_waves.py`. Files must play with
-`play_dat --rig oscillator` and be accepted by the controller. `play_dat` takes the oscillator's
-limits, upright and namespace from `oscillator.yaml` (`play_dat <file> vertical --rig oscillator`).
-
-**Status (2026-11-10): done.** `rig_controller/src/generate_oscillations.py`, installed as
-`ros2 run rig_controller generate_oscillations`, with the shared code in `motion_files.py`, tests in
-`test_generate_oscillations.py` and the README section *Generating oscillator motion files*.
-Played on the rig 2026-11-10 (ladertanken, vertical, no load): three runs of 10 mm (regular 2 s and 1 s,
-irregular Tp 1.5 s for 60 s) from the PC with `play_dat`; the controller's setpoints equal the file
-within 0.003 mm, the slide reached 97 % / 90 % / 93 % (4σ) with 160-190 ms lag, as item 46.
-
-#### Decided (2026-11-09)
-
-- A test matrix as the wavemaker's: one row per run, regular (`period_s`, `stroke_m`,
-  `n_periods`) and irregular (`sig_stroke_m`, 4σ of the position, `tp_s`, `gamma`, `duration_s`,
-  `seed`), `n_ramp` and `pause_s`.
-- The same four files (`.dat`, run table, record, plot), from `motion_files`.
-- A cosine ramp (no acceleration step where the ramp ends); the peak jerk in the run table and a
-  warning above the vertical oscillator's 3 m/s³ (S-0-0193).
-
-#### Decided (2026-11-03)
-
-- Its own script, not a branch in `generate_waves.py`: the input is a stroke, not a wave height,
-  so the test matrices differ.
-- Same file contract as the wavemakers: `play_dat`'s `.dat` layout and run table, checked by
-  reading the file back with `play_dat`'s own functions.
-
-#### Differences from the wavemaker generator
-
-- Config `oscillator_bringup/config/oscillator.yaml`, key `/oscillators/<name>/controller`.
-- No wave physics: amplitude = H / 2 (H is the stroke; `WaveTrajectory::configure`, type
-  `oscillator`). No transfer gain.
-- Limits from `rig_limits`: sloshing within 0.015..0.185 m around upright 0.1 m, 2.0 m/s (the
-  LinMot's default), acceleration the lower of `max_goal_acceleration_mps2` (9.81) and the drive's
-  20; vertical within ±0.2 m around 0, 0.3 m/s (`max_velocity_rpm` 1800 in 10 mm/min), no
-  acceleration limit.
 
 ### Trigger output
 
