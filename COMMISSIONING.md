@@ -91,9 +91,9 @@ both files; gaps in the numbering are the items kept there.
 
 Checks for the vertical oscillator's IndraDrive on the ladertanken MGate (slave 3, daisy-chained
 behind the wavemaker's drive since 2026-11-10). What to code, and why:
-[oscillator_sketch.md](oscillator_sketch.md).
+`git show c6bba03:oscillator_sketch.md` (done).
 
-- [Starting the rigs](#starting-the-rigs-every-time), [Done](#done), [Open](#open)
+- [Starting the rigs](STARTUP.md#oscillator-ladertanken), [Done](#done), [Open](#open)
 - [The oscillator drive](#the-oscillator-drive-read-2026-11-06): the parameters
 - [Procedures](#procedures): monitor, brake, test move, dry run, fault timeout, recorded runs
 - [Test 2](#test-2-gateway-load-with-both-rigs-next) (next), [Test 1](#test-1-kill-test-with-both-rigs-running-passed-2026-11-10)
@@ -106,31 +106,9 @@ On the Pi (`ssh ladertanken@ladertanken-rpi.local`), in tmux:
 cd ~/ros_ws && source install/setup.bash
 ```
 
-### Starting the rigs (every time)
+### Starting the rigs
 
-Both drives stay on the PROFIBUS line (MGate → wavemaker, termination OFF → oscillator,
-termination ON): wavemaker slave 2 (blocks 0 / 0), oscillator slave 3 (7 / 6). Nothing is
-replugged; each yaml reaches only its own drive. **The wavemaker and the vertical oscillator run
-together** (since 2026-11-11, TODO 47); the sloshing oscillator only alone.
-
-1. The oscillator's mains must be on at the cabinet (A0012 `Ab`, not A0013 `bb`).
-2. `OSCILLATOR=vertical` in `/etc/default/oscillator` for the vertical rig; `sloshing` (or no
-   line) for the sloshing one. One unit runs either oscillator, so those two never run together.
-3. Start what is needed, in either order: `sudo systemctl start wavemaker@ladertanken`,
-   `sudo systemctl start oscillator@ladertanken` (or `start_wavemaker.bat`,
-   `start_oscillator.bat`). Pages: 8080 (wavemaker), 8081 (oscillator). The soft stop button
-   stops every rig that runs.
-4. The controller's `Drive status` line in the journal is the position check: `OM AF`, the
-   position near where the slide or flap stands.
-5. **After a stop the wavemaker drive stays in operating mode without torque** (A0012, `Ab`):
-   the MGate's fault value for slave 2 is control word `0x0002` (since 2026-11-11, TODO 48). The
-   flap then falls to its rest (about +194-211°); *Return to upright* after the start. With the
-   old fault value (all `00`) every start after a stop failed with F2074.
-6. **`mgate_example` without options is slave 2 (the wavemaker)**; the oscillator is
-   `--input-base 7 --output-base 6 --profibus-address 3`. In parameter mode it shows
-   `SW=0x0888 PM --` with everything 0 (the drive sends no actual values). Not while a rig runs.
-
-A wavemaker drive powered off on the chain shows F4009; clear it before starting its service.
+Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
 
 ### Done
 
@@ -438,7 +416,7 @@ to 1800 the same day; lower it if the experimenters' fastest goal needs much les
 **Question:** do two controllers on one MGate (300 requests/s) cause the ~50-210 ms gateway
 stalls? Those stalls appeared on 2026-10-07 at the same rate from one client polling every 10 ms.
 A stall freezes both rigs' setpoints. Over 500 ms, it would switch a drive off. If it fails, the
-code remedies are in [oscillator_sketch.md](oscillator_sketch.md#if-test-2-fails).
+code remedies are in *If Test 2 fails* in `git show c6bba03:oscillator_sketch.md`.
 
 **First run 2026-11-11 (08:17-08:27, 604 s, bag `~/bags/load_both` on the lab PC): not passed,
 no baseline yet.**
@@ -490,7 +468,7 @@ capture in `~/bags/load_both5/`): 9 retransmissions, all by the Pi, each after 2
 freeze, 0.07 % repeated samples.** Two heartbeat stops (12:18:46, 12:24:49; TODO 49) cut the
 waves; they are the web page, not the gateway. `TcpRetransSegs` +105 (5620 → 5725), the same as
 before: most of it is not the gateway's. The setting is lost at a reboot: making it permanent is
-T18 in oscillator_sketch.md.
+T18 in `git show c6bba03:oscillator_sketch.md`.
 
 **Why the oscillator only holds.** Each controller writes its whole output block and reads its
 inputs and the status area every 20 ms (`write_only_dirty: false`), moving or not. So a holding
@@ -683,7 +661,7 @@ Stop and return are right, and a period-dependent loss exists even unloaded.
   position-loop time constant of 60 ms if it acts without feedforward. Open: where the 77 ms
   comes from (Kv with the drive's interpolation of a target that steps every 20 ms is the
   candidate), and whether to fix it in the drive (with its owner) or compensate in the
-  controller or the files ([oscillator_sketch.md](oscillator_sketch.md#open-questions)).
+  controller or the files (now TODO 46 and 51).
 
 #### Phase 2: daisy chain (done 2026-11-10)
 
@@ -754,7 +732,7 @@ wavemaker's slave 2 is back at `80 00 08`): P-0-4073 `Data-Exch WD+`, `slave=liv
 #### After the fix (2026-11-09)
 
 - **`wait_for_data()` race** in `MGateDriver`: `mgate_example --move` failed at once with
-  "gateway offline" and `slave=DOWN`. Fixed in code (oscillator_sketch.md, *Done*). The
+  "gateway offline" and `slave=DOWN`. Fixed in code (`git show c6bba03:oscillator_sketch.md`, *Done*). The
   controller was not affected (it waits 200 ms).
 - **Mains:** `enable()` timed out waiting for `Ab` (status word 0x488E, A0013 `bb`). The power
   section needs mains switched on at the cabinet (a button); then A0012 `Ab`.
@@ -866,8 +844,9 @@ Kept as a record of physical checks already done.
 - Activation caused no physical motion.
 - Small position oscillation at standstill (the servo holding position) is accepted; it shows as larger velocity oscillation, but the controller only uses position. Measured below ±0.5° (≈ ±0.27 mm on ladertanken), well inside the 2 mm return-to-upright tolerance (≈ 3.8° then, ≈ 4.8° at 0.000413 m/deg).
 - The flap was disconnected for the first motor tests (2026-10-07) and reconnected for the lab waves (2026-10-08).
+- Rig tests through the service on ladertanken, all passed: goal type per goal and `play_dat` (TODO 26, 2026-11-02, `e096801`); `play_dat` limits from the yaml (TODO 40, 2026-11-04, `8a458eb`); `generate_waves` (TODO 38, 2026-11-05; probes measured the same day, TODO 43); controller and driver fixes (TODO 20-25, 2026-11-06, `ca87b35`). Steps and results: `git show c6bba03:rpi/README.md`, *Rig test*.
 - Calibration: 5–10 positions used, measured at the flap top, which is at `flap_attachment_height`; scale `b = 0.053 / 100 = 0.00053 m/deg`; offset `a = 0.0 m`; actuator zero = upright (`actuator_upright_angle_deg: 0.0`).
-- **Recalibrated 2026-11-13:** `actuator_lead_m_per_degree: 0.000413` and `flap_attachment_height: 1.39`. The attachment is 1.30 m above the hinge, so 1.39 m above the floor, which is the reference the code uses (it had 1.30). Six positions held by a staircase motion file (±0.03, ±0.06, ±0.09 m), flap tilt read with an inclinometer on the arm's bracket: the flap turned 0.78 ± 0.03 of what 0.00053 m/deg predicted, with the drive at its setpoint to 0.1 mm (bag). Two earlier Stop-held extremes gave 0.80. The draw wire (`WM_Position`, 1.375 m above the floor) is linear but reads 0.74 of the horizontal travel there (probably a wire at an angle); calibrated against the inclinometer, use `--stroke-scale -1.342` in `transfer_function`. The gain table was replaced with values measured with the new geometry (item38 run 3, `transfer_function`); see `wavemakers.yaml` and transfer_function_sketch.md, *Check on the data*. Checked the same day with regular runs at 1.0 m: within 2 % at 1.0–1.6 s, 8 % low at 0.8 s, once WP1 was corrected: its catman **channel** had been scaled with 0.03981 m/V, while the sensor database has 0.0229 (as on 2026-11-05). Check WP1's channel scaling before each session; to be confirmed by a static probe calibration (2026-11-16/17).
+- **Recalibrated 2026-11-13:** `actuator_lead_m_per_degree: 0.000413` and `flap_attachment_height: 1.39`. The attachment is 1.30 m above the hinge, so 1.39 m above the floor, which is the reference the code uses (it had 1.30). Six positions held by a staircase motion file (±0.03, ±0.06, ±0.09 m), flap tilt read with an inclinometer on the arm's bracket: the flap turned 0.78 ± 0.03 of what 0.00053 m/deg predicted, with the drive at its setpoint to 0.1 mm (bag). Two earlier Stop-held extremes gave 0.80. The draw wire (`WM_Position`, 1.375 m above the floor) is linear but reads 0.74 of the horizontal travel there (probably a wire at an angle); calibrated against the inclinometer, use `--stroke-scale -1.342` in `transfer_function`. The gain table was replaced with values measured with the new geometry (item38 run 3, `transfer_function`); see `wavemakers.yaml` and *Check on the data* in `git show c6bba03:transfer_function_sketch.md`. Checked the same day with regular runs at 1.0 m: within 2 % at 1.0–1.6 s, 8 % low at 0.8 s, once WP1 was corrected: its catman **channel** had been scaled with 0.03981 m/V, while the sensor database has 0.0229 (as on 2026-11-05). Check WP1's channel scaling before each session; to be confirmed by a static probe calibration (2026-11-16/17).
 - The PC reaches the gateway at 192.168.1.70 over the wired network.
 - Motor nameplate (ladertanken): Rexroth MSK071E-0450-NN-M1-UG0-NNNN, 3-phase permanent magnet; n max 6000 min⁻¹ (4500 rated), MdN 23.0 Nm / IdN 20.0 A natural convection (34.5 Nm / 30.0 A surface cooled), Km 1.29 Nm/A, KE 82.7 V/1000 min⁻¹, 23.5 kg.
 - Poll interval (2026-10-07): `poll_interval_ms` is 20 ms (50 before). Normal gateway cycles take 4–8 ms with no read/write errors or reconnects. The 10 s sweep had single cycles of about 210 ms at 40, 10, 5 and 2 ms; at 2 ms nearly every cycle stalled, so the stalls grow with polling rate (the gateway, or packets lost under load). A 60 s run at 20 ms had none (3000 cycles, max 8.1 ms). Stalls during waves are watched in item 13.

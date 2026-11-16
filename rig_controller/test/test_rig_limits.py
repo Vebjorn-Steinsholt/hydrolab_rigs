@@ -1,8 +1,6 @@
 """
 Tests for src/rig_limits.py: the controller's goal-limit rules, from a yaml and from parameters.
 
-Written before rig_limits.py exists (TODO item 40, sketch.md); they fail until it does.
-
     cd ~/ros_ws/src/hydrolab_rigs
     python3 -m pytest rig_controller/test/test_rig_limits.py -v
 """

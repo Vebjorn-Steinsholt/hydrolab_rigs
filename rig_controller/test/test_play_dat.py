@@ -493,7 +493,7 @@ def test_main_bad_runs_argument(tmp_path):
 
 
 # ---------------------------------------------------------------- limits from the yaml (item 40)
-# Written before the change (sketch.md); they fail until play_dat takes the rig name.
+# play_dat with the rig name.
 
 def test_name_takes_the_limits_from_the_yaml(tmp_path, capsys):
     assert dry_run(tmp_path, limits=('ladertanken', '--config', WAVEMAKERS)) == 0

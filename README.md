@@ -335,7 +335,7 @@ A second Rexroth IndraDrive (rotary motor with linear scaling, 20 mm/rev) moves 
 down. It is daisy-chained behind the ladertanken wavemaker's drive on the ladertanken MGate:
 PROFIBUS address 3, gateway registers 7 (inputs) and 6 (outputs); the wavemaker keeps address 2
 and registers 0 / 0. The two rigs can run at the same time (one soft stop button stops both). The decisions and
-code plan are in [oscillator_sketch.md](oscillator_sketch.md); the drive, the commissioning
+code plan are in `git show c6bba03:oscillator_sketch.md` (done); the drive, the commissioning
 steps and the log are in [COMMISSIONING.md](COMMISSIONING.md#vertical-oscillator-ladertanken).
 
 **Configuration:** the `vertical` blocks in
@@ -373,9 +373,9 @@ and depends on the load (TODO item 46). Record `oscillator_position` with every 
 
 ## Generating motion files
 
-> **Regular and irregular waves played on the rig** (ladertanken, 2026-11-04 and 2026-11-05,
-> [rpi/README.md](rpi/README.md)). The wave heights have not yet been measured with probes
-> ([TODO.md](TODO.md), item 43).
+> **Measured with probes on ladertanken** (2026-11-05 and 2026-11-13): with the gain table of
+> 2026-11-13, regular waves at 1.0–1.6 s came within 2 % of the target; 0.8 s was 8 % low. To be
+> confirmed with WP1 recalibrated ([TODO.md](TODO.md), item 43).
 
 `generate_waves` (`rig_controller/src/generate_waves.py`) turns a test matrix into a motion file for one wavemaker,
 ready for `play_dat`. Wavemakers only; the oscillators have `generate_oscillations`
@@ -696,26 +696,33 @@ skipped with another, and the run table gives the paddle's peak for each.
 `transfer_function` (`rig_controller/src/transfer_function.py`) measures the wavemaker's
 transfer gain from one run of a motion file and a catman record of it: across the whole band
 from one irregular run, or at its one period from a regular run. It prints the gain next to the
-yaml's table; it doesn't change the yaml. Why it works the way it does is in
-[transfer_function_sketch.md](transfer_function_sketch.md).
+yaml's table; it doesn't change the yaml. The design and its decisions are in the git history
+(`git show c6bba03:transfer_function_sketch.md`).
 
 **What it needs:**
 
 - The `.dat` and its run table, from `generate_waves`. Files made before 2026-11-13 have no
   `ramp_s` column and are refused: generate the file again from its test matrix and its
   `.txt`'s depth. The seeds are fixed, so the motion is the same.
-- A catman record of the whole file, exported as CSV: a time column in seconds, then one column
-  per channel, with the channel names in the header. At least the wave probe; best also the
-  flap's draw-wire sensor, which splits the gain into the drive's part and the water's part.
+- A catman record of the whole file: an ASCII export (`.ASC`, read with its channel names and
+  `dt`), or a CSV with a time column in seconds and one column per channel. At least the wave
+  probe; best also the flap's draw wire (`WM_Position`), which splits the gain into the drive's
+  part and the water's part.
 - Still water before the first run, the probe's distance from the flap, the measured water
   depth, and the draw wire's height above the tank floor.
+- **WP1's scaling checked in catman** before the session: the channel must use the sensor
+  database's 0.0229 m/V (on 2026-11-13 it had 0.03981, and every height read 1.74 × too high).
 
 ```bash
 ros2 run rig_controller transfer_function item38.dat ladertanken --run 3 \
-    --record item38.csv --probe WP1 --probe-scale 0.001 --probe-distance-m 3.0 \
-    --stroke Stroke --stroke-scale 0.001 --stroke-height-m 1.20 \
+    --record item38.ASC --probe WP1 --probe-distance-m 3.0 \
+    --stroke WM_Position --stroke-scale -1.342 --stroke-height-m 1.375 \
     --depth-m 0.98 -o item38_run3_tf --plot
 ```
+
+`--stroke-scale -1.342` is ladertanken's draw wire: it counts positive away from the beach and
+reads 0.74 of the horizontal travel at its height (calibrated with an inclinometer, 2026-11-13,
+COMMISSIONING.md, *Actuator conversion calibration*).
 
 It finds where the file starts in the record by itself: from the draw wire if there is one,
 else from the wave's envelope. It prints a row per period of the yaml's gain table, with the
@@ -731,17 +738,52 @@ the checks. It writes:
 | Option | Use |
 |---|---|
 | `--run N` | The run, as numbered in the run table (required) |
-| `--record`, `--probe` | The CSV and the probe's column name (required) |
+| `--record`, `--probe` | The record (`.ASC` or `.csv`) and the probe's channel name (required) |
 | `--probe-distance-m` | The probe's distance from the flap (required) |
 | `--depth-m` | The measured depth (required: no default from the yaml) |
-| `--probe-scale`, `--stroke-scale` | To metres: `0.001` for a channel in mm |
-| `--stroke`, `--stroke-height-m` | The draw wire's column and its height above the floor (together) |
+| `--probe-scale`, `--stroke-scale` | To metres: `0.001` for a channel in mm; negative flips the sign |
+| `--stroke`, `--stroke-height-m` | The draw wire's channel and its height above the floor (together) |
 | `--offset-s` | Where the file starts in the record, in seconds, when the match can't find it |
 | `--segment-s 40` | Welch segment length; longer resolves finer, with a larger ± |
 | `--smooth-hz 0.05` | Average over the beach reflection's ripple; `0` for the raw gain |
 | `--config <file>` | Another `wavemakers.yaml` |
 
-How to read the output, and what a bad value points to: *Reading the output* in the sketch.
+**Reading the output:**
+
+- **`gain`** is |G_cmd| over theory: the number for the gain table. **`drive`** is |G_drive|
+  and **`water`** is |G_water| over theory, both at the waterline and both 1.0 when ideal (only
+  with `--stroke`). The ± columns are absolute: the value × the random error / √n_smooth.
+- **Drive below 1 and falling with frequency** is the drive lagging.
+- **Water about 1 and drive about the table's gain** means the table is correcting the drive,
+  not the water. The drive's response may change with load; the water's doesn't.
+- **`chain`**, the largest difference between G_cmd and drive × water: a few % at most. A large
+  one means the stroke and the probe don't belong together (wrong channel, wrong scale).
+- **`delay`** (G_cmd's residual phase as a straight line) is the drive's delay plus the
+  offset's error, so it's no measure of the drive. It checks the offset: well under 1 s without
+  the stroke, and about the drive's lag (0.1–0.2 s) or less with it.
+- **`water delay`** is free of the offset (stroke and probe are sampled together): 0 when the
+  distance and the depth are right. A slope is an error in `--probe-distance-m` or `--depth-m`.
+  The residual phases are after the wave's travel to the probe and linear theory's 90° lead
+  over the stroke are taken out.
+- **Curvature in a residual phase** is a lag; a straight line is a pure delay.
+- **Coherence** below 0.8 removes a bin, and so does everything above 1.5 fp, where
+  second-order waves at 2 fp would count as gain. At the band's edges the bins have the least
+  energy and the largest ±.
+- **The stillness warning** compares the probe's std in the 10 s before the run with 10 % of the
+  run's, with a 1 mm floor.
+- **Segments**: `--segment-s 40` gives df = 0.025 Hz and about 14 averages on a 300 s run.
+  Longer segments resolve finer and show the beach reflection's ripple in |G| fully, with a
+  larger ±; `--smooth-hz` averages it away.
+
+**Limits:**
+
+- The drive's absolute delay isn't measured: only the shape of its response.
+- A low irregular wave (Hs 0.03 m) gives the linear gain only. Steepness effects need regular
+  runs.
+- The wave's travel is taken out with linear dispersion; for steep waves the real speed is a
+  little higher.
+- With files of regular runs only, the draw-wire match can refuse a correct offset (a sine
+  flipped looks like a sine shifted half a period). Give `--offset-s` then (TODO 43).
 
 ### Tests
 

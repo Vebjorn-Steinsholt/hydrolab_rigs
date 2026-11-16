@@ -5,7 +5,7 @@ from occasional calibrations, and why. This is a long-term plan. Stage 0 works w
 today. Stages 1 and 2 need a wave probe that publishes on a ROS topic.
 
 **Status (2026-11-14): not started.** Builds on
-[transfer_function_sketch.md](transfer_function_sketch.md) (done) and on
+`transfer_function` (done; its sketch: `git show c6bba03:transfer_function_sketch.md`) and on
 [TODO.md](TODO.md) item 43.
 
 Line numbers are as of `master` on 2026-11-14 (`62ab4de`).
