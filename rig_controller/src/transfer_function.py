@@ -3,7 +3,8 @@
 Transfer function of a wavemaker from one run of a motion file and a catman record.
 
 G_cmd (command -> wave, the gain table's number), and with the flap's stroke G_drive
-(command -> flap) and G_water (flap -> wave). See transfer_function_sketch.md.
+(command -> flap) and G_water (flap -> wave). Use: README.md, *Transfer gain from a run*;
+the design: git show c6bba03:transfer_function_sketch.md.
 """
 
 import argparse
@@ -22,13 +23,13 @@ import numpy as np
 import play_dat
 from scipy import ndimage, signal
 
-COHERENCE_MIN = 0.8      # decision 8
-STILL_S = 10.0           # probe checked over this long before the run (Change 5)
+COHERENCE_MIN = 0.8      # bins below are dropped
+STILL_S = 10.0           # probe checked over this long before the run
 STILL_RATIO = 0.1        # warn if the probe's std before the run is above this x the run's
 STILL_FLOOR_M = 0.001    # but never below this: ~3x the probe's noise (check on a still record)
 MATCH_MIN = 2.0          # offset match: peak / next-best peak below this is refused
 F_TOP_FP = 1.5           # irregular: trust up to this x fp; second-order waves sit at 2 fp
-ENVELOPE_SMOOTH_TP = 3   # smooth the envelope over this many wave periods (Change 4)
+ENVELOPE_SMOOTH_TP = 3   # smooth the envelope over this many wave periods
 
 
 # ---------------------------------------------------------------- inputs
@@ -396,18 +397,18 @@ def plot(path, cols, wm) -> None:
 
 
 def analyse(args, argv, config) -> None:
-    # 1. wavemaker; depth from the command line, warn if it differs from the yaml (Change 7)
+    # 1. wavemaker; depth from the command line, warn if it differs from the yaml
     wm = gw.load_wavemaker(args.wavemaker, config)
     yaml_depth = wm.water_depth
     if wm.gain_periods and args.depth_m != yaml_depth:
         print(f'warning: the gain table is for {yaml_depth} m, not {args.depth_m} m')
     wm.water_depth = args.depth_m                 # the flap's hinge term uses it too
 
-    # 2. command (Change 3)
+    # 2. command
     x_file, dt, table, row = read_command(args.file, args.run)
     x = x_file[round(float(row['start_s']) / dt):round(float(row['end_s']) / dt)]
 
-    # 3. record (Change 3)
+    # 3. record
     record_dt, channels = read_record(args.record)
     ratio = dt / record_dt
     q = round(ratio)
@@ -419,7 +420,7 @@ def analyse(args, argv, config) -> None:
     # the record may stop after the last run, before the file's final rest
     x_match = x_file[:round(max(float(r['end_s']) for r in table if r['end_s']) / dt) + 1]
 
-    # 4. offset: --offset-s, else offset_from_stroke, else offset_from_envelopes (Change 4)
+    # 4. offset: --offset-s, else offset_from_stroke, else offset_from_envelopes
     tp_s = float(row['peak_period_s'] or row['period_s'])
     travel_s = args.probe_distance_m / group_velocity(1 / tp_s, args.depth_m)
     rests = [float(b['start_s']) - float(a['end_s']) for a, b in zip(table, table[1:])]
@@ -443,7 +444,7 @@ def analyse(args, argv, config) -> None:
             raise ValueError(f'offset {offset_s:.1f} s ({how}): an unclear match, below '
                              f'{MATCH_MIN}x; give --offset-s')
 
-    # 5. window (Change 5)
+    # 5. window
     i0 = round((offset_s + float(row['start_s'])) / dt)
     skip = round(float(row['ramp_s']) / dt)
     eta_all = undo_travel(eta_all, dt, args.depth_m, args.probe_distance_m)
@@ -463,7 +464,7 @@ def analyse(args, argv, config) -> None:
     kw = {'fs': 1 / dt, 'window': 'hann', 'nperseg': nperseg, 'detrend': 'constant'}
     cmd = frf(x, eta, kw)
 
-    # 7. gain and smoothing (Change 7)
+    # 7. gain and smoothing
     ok = band_mask(cmd.f, cmd.coh, row)
     if not ok.any():
         raise ValueError(f'no bin in the band has coherence >= {COHERENCE_MIN}')
@@ -480,10 +481,10 @@ def analyse(args, argv, config) -> None:
     cols = {'period_s': 1 / cmd.f[ok], 'f_hz': cmd.f[ok],
             **gain_cols('gain', cmd.h1, cmd, g_lin), 'coh': cmd.coh[ok]}
 
-    # 8. residual phase (Change 9)
+    # 8. residual phase
     cols['phase_res_rad'], delay_s = residual_delay(cmd.f, cmd.h1, ok)
     stroke_info: list[str] = []
-    if s is not None:          # drive and water (Change 8), with the same settings as cmd
+    if s is not None:          # drive and water, with the same settings as cmd
         x_wl = to_waterline(x, wm.attachment_height, wm, args.depth_m)
         s_wl = to_waterline(s, args.stroke_height_m, wm, args.depth_m)
         drive = frf(x_wl, s_wl, kw)        # 1.0 = the flap follows the command
@@ -499,7 +500,7 @@ def analyse(args, argv, config) -> None:
             f'water delay  {delay_water_s:.2f} s (G_water: 0 if distance and depth are right)',
             f'chain        G_cmd vs drive x water: largest difference {chain:.0%} in the band']
 
-    # 9. output (Change 10)
+    # 9. output
     info = [
         f'wavemaker    {wm.name} ({wm.type}), {os.path.realpath(config)}',
         f'water depth  {args.depth_m} m (--depth-m; the yaml has {yaml_depth} m)',
@@ -533,14 +534,14 @@ def main(argv=None):
     parser.add_argument('file', help='.dat with its run table <file>.csv')
     parser.add_argument('wavemaker', help='name in wavemakers.yaml')
     parser.add_argument('--run', type=int, required=True, help='run number in the run table')
-    parser.add_argument('--record', required=True, help='catman CSV export')
+    parser.add_argument('--record', required=True, help='catman ASCII export (.ASC) or CSV')
     parser.add_argument('--probe', required=True, help='column name of the wave probe')
     parser.add_argument('--probe-distance-m', type=float, required=True)
     parser.add_argument('--probe-scale', type=float, default=1.0, help='to m, e.g. 0.001 for mm')
     parser.add_argument('--stroke', help="column name of the flap's draw wire")
     parser.add_argument('--stroke-height-m', type=float, help='above the floor; with --stroke')
     parser.add_argument('--stroke-scale', type=float, default=1.0)
-    parser.add_argument('--depth-m', type=float, required=True, help='measured (decision 7)')
+    parser.add_argument('--depth-m', type=float, required=True, help='measured; no yaml default')
     parser.add_argument('--config', help='another wavemakers.yaml')
     parser.add_argument('--offset-s', type=float, help='file start in the record; skips the match')
     parser.add_argument('--segment-s', type=float, default=40.0)
