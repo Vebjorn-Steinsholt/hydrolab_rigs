@@ -15,7 +15,7 @@ the items kept there, and finished items, which are removed (see the git history
 ## High
 
 - [ ] **43. Confirm the new gain table with probes. (rig)** (the gain table in `wavemakers.yaml`, `transfer_function`)
-  Since 2026-11-13 the yaml has the recalibrated geometry (attachment 1.39 m, lead 0.000413 m/deg) and a gain table measured with it from item38 run 3 (COMMISSIONING.md, *Actuator conversion calibration*). The check run that day (`~/wave_sessions/2026-11-13_check`, depth 1.0 m) gave H/target 0.92 (0.8 s), 1.01 (1.0 s), 0.99 (1.1 s), 0.98 (1.3 s), 0.99 (1.6 s), but only after correcting WP1, whose catman channel was scaled 0.03981 m/V instead of the database's 0.0229 (`--probe-scale 0.5752`, `--offset-s 16.04`). Planned 2026-11-16/17, in this order. The irregular run goes first in the same file as the regular check, so one catman record and one bag cover the session, and the draw wire finds the offset without `--offset-s` (with regular runs only, a flipped sine looks like a shifted one).
+  Since 2026-11-13 the yaml has the recalibrated geometry (attachment 1.39 m, lead 0.000413 m/deg) and a gain table measured with it from item38 run 3 (COMMISSIONING.md, *Actuator conversion calibration*). The check run that day (`~/wave_sessions/2026-11-13_check`, depth 1.0 m) gave H/target 0.92 (0.8 s), 1.01 (1.0 s), 0.99 (1.1 s), 0.98 (1.3 s), 0.99 (1.6 s), but only after correcting WP1, whose catman channel was scaled 0.03981 m/V instead of the database's 0.0229 (`--probe-scale 0.5752`, `--offset-s 16.04`). Planned 2026-11-17, in this order. The irregular run goes first in the same file as the regular check, so one catman record and one bag cover the session, and the draw wire finds the offset without `--offset-s` (with regular runs only, a flipped sine looks like a shifted one).
 
   1. **WP1 in catman.** Assign WP1 from the sensor database to its channel again and check the channel's scaling reads 0.0229 m/V. Zero it in still water, then move the probe -5, 0, +5 cm on its stand: it must read -50, 0, +50 mm (±1 mm). Also check `WM_Position` is recorded. Note the depth with a ruler.
 
@@ -26,7 +26,7 @@ the items kept there, and finished items, which are removed (see the git history
      grep WATER_DEPTH /etc/default/wavemaker          # empty for 1.0 m
      sudo systemctl start wavemaker@ladertanken
      source ~/ros_ws/install/setup.bash && export ROS_DOMAIN_ID=1
-     mkdir -p ~/wave_sessions/2026-11-16_check && cd ~/wave_sessions/2026-11-16_check
+     mkdir -p ~/wave_sessions/2026-11-17_check && cd ~/wave_sessions/2026-11-17_check
      cat > matrix.csv <<'END'
      kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
      irregular,,,,,0.03,1.2,3.3,600,1,5,60
@@ -46,7 +46,7 @@ the items kept there, and finished items, which are removed (see the git history
 
      ```bash
      source ~/ros_ws/install/setup.bash && export ROS_DOMAIN_ID=1
-     cd ~/wave_sessions/2026-11-16_check
+     cd ~/wave_sessions/2026-11-17_check
      ros2 bag record -o check2_bag /wavemakers/ladertanken/wavemaker_setpoint /wavemakers/ladertanken/wavemaker_position
      ```
 
@@ -61,8 +61,8 @@ the items kept there, and finished items, which are removed (see the git history
   4. **Analyse, on the lab PC.** Stick in:
 
      ```bash
-     mkdir -p ~/wave_sessions/2026-11-16_check && cd ~/wave_sessions/2026-11-16_check
-     scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-16_check/{matrix.csv,check2.dat,check2.csv,check2.txt,check2_bag} .
+     mkdir -p ~/wave_sessions/2026-11-17_check && cd ~/wave_sessions/2026-11-17_check
+     scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-17_check/{matrix.csv,check2.dat,check2.csv,check2.txt,check2_bag} .
      cp /media/hydrolab-linux/LADERSCHTIC/check2.ASC .
      source ~/ros_ws/install/setup.bash
      for run in 0 1 2 3 4 5; do
@@ -81,7 +81,7 @@ the items kept there, and finished items, which are removed (see the git history
      cd ~/ros_ws/src/hydrolab_rigs
      python3 -m pytest -q rig_controller/test/   # no test uses the 0.8 s entry; all should still pass
      git add wavemaker_bringup/config/wavemakers.yaml
-     git commit -m "ladertanken: 0.8 s gain from the 2026-11-16 check" && git push
+     git commit -m "ladertanken: 0.8 s gain from the 2026-11-17 check" && git push
      ```
 
      and on the Pi:
