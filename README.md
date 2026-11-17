@@ -465,8 +465,11 @@ ros2 run rig_controller play_dat session_waves.dat ladertanken
 If it stops with `no move_wavemaker server; is the controller up and active?` while the page
 shows the controller running, `ROS_DOMAIN_ID` is not set in this tmux window (step 2).
 
-It plays the runs in order, with the pauses between them. `--runs 1` or `--runs 0-1` plays only
-some runs (numbers as in the dry run). It warns if the running controller's limits differ from
+It plays the runs in order, with the pauses between them. Each goal goes out at its run's time
+in the file, counted from the first goal, not a pause after the previous run's result, so a
+goal's start latency (about 50 ms) doesn't add up over a session. `--runs 1` or `--runs 0-1`
+plays only some runs (numbers as in the dry run); after a skipped run, the pause is played from
+the previous result. It warns if the running controller's limits differ from
 the yaml's; then stop and find out why. **To stop:** press Ctrl-C in the tmux window, or use
 Stop on the web page, the soft stop or the e-stop. A stop cancels the run and ends `play_dat`.
 The paddle stops where it is and holds position with the drive enabled; *Return to upright* on
@@ -697,7 +700,8 @@ skipped with another, and the run table gives the paddle's peak for each.
 transfer gain from one run of a motion file and a catman record of it: across the whole band
 from one irregular run, or at its one period from a regular run. It prints the gain next to the
 yaml's table; it doesn't change the yaml. The design and its decisions are in the git history
-(`git show c6bba03:transfer_function_sketch.md`).
+(`git show c6bba03:transfer_function_sketch.md`); finding each run in the record is in
+`run_timeline_sketch.md`.
 
 **What it needs:**
 
@@ -724,11 +728,23 @@ ros2 run rig_controller transfer_function item38.dat ladertanken --run 3 \
 reads 0.74 of the horizontal travel at its height (calibrated with an inclinometer, 2026-11-13,
 COMMISSIONING.md, *Actuator conversion calibration*).
 
-It finds where the file starts in the record by itself: from the draw wire if there is one,
-else from the wave's envelope. It prints a row per period of the yaml's gain table, with the
-measured gain, its ±, the coherence and the table's value (and with the draw wire also the
-drive's and the water's part), then a summary: the offset found, the window, the averages and
-the checks. It writes:
+It finds where each run is in the record by itself, also in a long file with several runs. One
+offset for the whole file doesn't hold: `play_dat` used to start each run's goal about 50 ms
+later than the file says, and catman's clock runs against the Pi's (+253 ppm on 2026-11-17, half
+a second over a 17-minute session). So it:
+
+1. **anchors** on the first run, from the draw wire if there is one (on at most 120 s of the run),
+   else from the wave's envelope (on the whole run);
+2. **walks** every run in time order, in pieces of at most 60 s, each searched within ±0.4
+   periods of the last (with the probe only, the probe with its travel and linear theory's 90°
+   lead taken out);
+3. **fits** one start per run and one clock drift for the file, from runs of two pieces or more
+   (at least 180 s of them; otherwise the drift is *not measured* and taken as 0), and reads the
+   analysed run at the record times this gives.
+
+It prints a row per period of the yaml's gain table, with the measured gain, its ±, the
+coherence and the table's value (and with the draw wire also the drive's and the water's part),
+then a summary: where the run is, the window, the averages and the checks. It writes:
 
 - `<output>.csv`: every trusted frequency bin, raw and smoothed.
 - `<output>.txt`: the command, the commit and the summary: what the result was made from.
@@ -743,13 +759,25 @@ the checks. It writes:
 | `--depth-m` | The measured depth (required: no default from the yaml) |
 | `--probe-scale`, `--stroke-scale` | To metres: `0.001` for a channel in mm; negative flips the sign |
 | `--stroke`, `--stroke-height-m` | The draw wire's channel and its height above the floor (together) |
-| `--offset-s` | Where the file starts in the record, in seconds, when the match can't find it |
+| `--offset-s` | This run's start in the record less its start in the file, in seconds (the `offset` line), when the anchor or the walk can't find it. Skips both; the drift then comes from this run's own pieces |
+| `--drift-ppm` | catman's clock against the Pi's, when it can't be fitted; `0` with `--offset-s` is one offset for the run |
 | `--segment-s 40` | Welch segment length; longer resolves finer, with a larger ± |
 | `--smooth-hz 0.05` | Average over the beach reflection's ripple; `0` for the raw gain |
 | `--config <file>` | Another `wavemakers.yaml` |
 
 **Reading the output:**
 
+- **`offset`** is the analysed run's start in the record less its start in the file, and how it
+  was found (the anchor's match: refused below 2× the next best). It includes the drive's lag
+  (0.1–0.2 s) when found from the draw wire.
+- **`runs`** is the same for every run walked, and **`late`** each run's start against the
+  first, drift removed: the goals' accumulated start latency. With the current `play_dat` it
+  should stay within about ±20 ms of 0 (the drive's lag changes a little with period); in
+  records played with an older `play_dat` it rises by about 50 ms a run.
+- **`drift`** is catman's clock against the Pi's, with the pieces it came from and their rms
+  scatter about the fit; a warning above 10 ms means something moved the timeline inside a
+  run. Above 1000 ppm it's refused (the wrong record, or a gap in it). Measure it every
+  session; don't carry it over.
 - **`gain`** is |G_cmd| over theory: the number for the gain table. **`drive`** is |G_drive|
   and **`water`** is |G_water| over theory, both at the waterline and both 1.0 when ideal (only
   with `--stroke`). The ± columns are absolute: the value × the random error / √n_smooth.
@@ -782,8 +810,11 @@ the checks. It writes:
   runs.
 - The wave's travel is taken out with linear dispersion; for steep waves the real speed is a
   little higher.
-- With files of regular runs only, the draw-wire match can refuse a correct offset (a sine
-  flipped looks like a sine shifted half a period). Give `--offset-s` then (TODO 43).
+- With a regular run first, the draw-wire anchor can refuse a correct offset (a sine flipped
+  looks like a sine shifted half a period). Put an irregular run first, or give `--offset-s`
+  (TODO 43).
+- A run whose start moved more than 0.4 periods from the run before (a goal started very late)
+  is refused, naming the run: give `--offset-s` for it.
 
 ### Tests
 
@@ -793,8 +824,8 @@ python3 -m pytest rig_controller/test/test_generate_waves.py -v
 python3 -m pytest rig_controller/test/test_transfer_function.py -v
 ```
 
-`test_transfer_function.py` builds a session with a known drive and water and checks that the
-tool gives them back.
+`test_transfer_function.py` builds a session with a known drive and water, optionally with late
+goals and a drifting catman clock, and checks that the tool gives them back.
 
 ## Generating oscillator motion files
 

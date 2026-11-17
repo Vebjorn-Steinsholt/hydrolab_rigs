@@ -285,6 +285,22 @@ def print_table(runs: list[Run], sample_interval_s: float, issues: dict[int, lis
     print('times in s, max|x| in m relative to upright, speed in m/s')
 
 
+def goal_time_s(run: Run, previous: Run | None, t0_s: float | None, now_s: float,
+                sample_interval_s: float) -> tuple[float, bool]:
+    """
+    Return (when to send run's goal, on the monotonic clock; whether that is on the timeline).
+
+    On the timeline: the run follows previous in the file and t0_s (the file's time 0 on the
+    monotonic clock) is known, so the goal goes at t0_s + the run's start in the file. Waiting
+    gap_before_s after the previous result instead adds each goal's latency to the next start
+    (~49 ms a goal on 2026-11-17; run_timeline_sketch.md). Otherwise (the first run, or runs
+    skipped by --runs in between): gap_before_s from now.
+    """
+    if previous is not None and t0_s is not None and run.index == previous.index + 1:
+        return t0_s + run.start_sample * sample_interval_s, True
+    return now_s + run.gap_before_s, False
+
+
 # ---------------------------------------------------------------- ROS (goals)
 
 def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str],
@@ -305,10 +321,15 @@ def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str
             return 3
         if limits is not None:
             cross_check_limits(node, limits)
+        t0_s, previous = None, None
         for run in runs:
-            pause_end_s = time.monotonic() + run.gap_before_s
-            while time.monotonic() < pause_end_s:
-                rclpy.spin_once(node, timeout_sec=0.1)
+            now_s = time.monotonic()
+            pause_end_s, on_timeline = goal_time_s(run, previous, t0_s, now_s, sample_interval_s)
+            if pause_end_s < now_s:
+                node.get_logger().warning(f'run {run.index}: {now_s - pause_end_s:.2f} s late '
+                                          'on the file')
+            while time.monotonic() < pause_end_s:          # within 10 ms of its time
+                rclpy.spin_once(node, timeout_sec=0.01)
             d = describe_run(run, sample_interval_s)
             node.get_logger().info(
                 f"run {run.index} ({run.kind}): {d['duration_s']:.1f} s, "
@@ -316,7 +337,11 @@ def play(runs: list[Run], sample_interval_s: float, rig: str, ros_args: list[str
             goal = MoveRig.Goal()
             goal.positions = run.positions_m.tolist()
             goal.sample_interval = sample_interval_s
+            sent_s = time.monotonic()
             future = client.send_goal_async(goal)
+            if not on_timeline:                             # the timeline starts here
+                t0_s = sent_s - run.start_sample * sample_interval_s
+            previous = run
             rclpy.spin_until_future_complete(node, future)
             goal_handle = future.result()  # None if spinning stopped early (shutdown)
             if goal_handle is None or not goal_handle.accepted:

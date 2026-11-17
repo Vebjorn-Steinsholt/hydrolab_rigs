@@ -2,7 +2,8 @@
 Tests for src/play_dat.py, without a controller.
 
 Covers file reading, run splitting, the run table, measuring, the checks and the command line
-(dry run). play() is not tested here; use fake_controller.
+(dry run), and when play() sends each goal (goal_time_s). play() itself is not tested here;
+use fake_controller.
 
     cd ~/ros_ws/src/hydrolab_rigs
     python3 -m pytest rig_controller/test/test_play_dat.py -v
@@ -200,6 +201,55 @@ def test_rest_mask_zeros_are_rest_motion_is_not():
     assert rest[-90:].all()
     moving = rest[100:-100]
     assert not moving.any(), 'a sample exactly at a zero crossing must not count as rest'
+
+
+# ---------------------------------------------------------------- goal_time_s
+
+def sent_times(runs, latency_s, t_first_s=100.0):
+    """
+    When play() sends each goal, if each result comes latency_s after the run's last sample.
+
+    The loop of play() without ROS: wait until goal_time_s, send, wait for the result.
+    """
+    t0_s, previous, now_s, sent = None, None, t_first_s - runs[0].gap_before_s, []
+    for run in runs:
+        due_s, on_timeline = pd.goal_time_s(run, previous, t0_s, now_s, DT_S)
+        sent_s = max(now_s, due_s)
+        if not on_timeline:
+            t0_s = sent_s - run.start_sample * DT_S
+        sent.append(sent_s)
+        now_s = sent_s + len(run.values_m) * DT_S + latency_s
+        previous = run
+    return sent
+
+
+def test_goals_follow_the_file_not_the_last_result():
+    """50 ms late results: each goal still goes at its time in the file, nothing adds up."""
+    x, _ = three_runs()
+    runs = pd.split_runs(x, DT_S, upright_m=0.0)
+    sent = sent_times(runs, latency_s=0.05)
+    for run, t_s in zip(runs, sent):
+        assert t_s - sent[0] == pytest.approx((run.start_sample - runs[0].start_sample) * DT_S,
+                                              abs=1e-9)
+
+
+def test_gap_before_after_a_skipped_run():
+    """--runs 0,2: run 2 doesn't follow run 0 in the file, so its gap is played from the result."""
+    x, _ = three_runs()
+    runs = pd.split_runs(x, DT_S, upright_m=0.0)
+    selected = [runs[0], runs[2]]
+    sent = sent_times(selected, latency_s=0.05)
+    end_0 = sent[0] + len(runs[0].values_m) * DT_S + 0.05
+    assert sent[1] == pytest.approx(end_0 + runs[2].gap_before_s, abs=1e-9)
+
+
+def test_result_after_the_next_start_sends_at_once():
+    """A result later than the next run's time in the file: the goal goes at once."""
+    x, _ = three_runs()
+    runs = pd.split_runs(x, DT_S, upright_m=0.0)
+    sent = sent_times(runs, latency_s=10.0)            # longer than any gap
+    for i in (1, 2):
+        assert sent[i] == pytest.approx(sent[i - 1] + len(runs[i - 1].values_m) * DT_S + 10.0)
 
 
 # ---------------------------------------------------------------- split_runs

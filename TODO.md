@@ -73,7 +73,7 @@ the items kept there, and finished items, which are removed (see the git history
      done
      ```
 
-     Use the measured depth in `--depth-m`, and `--probe-scale 0.001` if WP1 is exported in mm. Run 0 is the irregular run: its rows are the gain across the band. Runs 1-5 are the regular check: H/target = the measured `gain` / the table's value in the same row. Pass: within ~6 % (the table's scatter); `drive` about 1.0 and `chain` a few %. If run 0 refuses the offset, run it once with `--offset-s` from runs 1-5's summary line.
+     Use the measured depth in `--depth-m`, and `--probe-scale 0.001` if WP1 is exported in mm. Run 0 is the irregular run: its rows are the gain across the band. Runs 1-5 are the regular check: H/target = the measured `gain` / the table's value in the same row. Pass: within ~6 % (the table's scatter); `drive` about 1.0 and `chain` a few %. No `--offset-s` needed: each run is found by itself (`run_timeline_sketch.md`). On 2026-11-17 this gave drift +255 ppm and late starts 0 62 102 142 202 243 ms.
 
   5. **The 0.8 s entry,** if step 4 confirms about 0.92 there: in `wavemaker_bringup/config/wavemakers.yaml`, `wavemaker_transfer_gain_values`' second value (0.8 s) from 1.08 to about 1.00, or to the irregular run's value at 0.8 s if its ± is small. Then, on the PC:
 
@@ -93,7 +93,9 @@ the items kept there, and finished items, which are removed (see the git history
 
      Note the result and the date in COMMISSIONING.md, *Actuator conversion calibration*.
 
-  6. (Claude, if wanted) `offset_from_stroke` with regular runs only: the sign check refused `check.ASC` (negative peak -0.882 against +0.868). Refuse only when the negative peak is clearly larger (> 1.2 ×). Not needed for a file that starts with an irregular run.
+  6. **`play_dat` on the Pi** (goals on the file's timeline, since 2026-11-17): `git pull` and `colcon build --packages-select rig_controller` there. The next session's `late` line should then be within ±20 ms of 0, with the drift unchanged; `chronyc tracking` on the Pi says whether it is synced (`run_timeline_sketch.md`, *Open* 1).
+
+  7. (Claude, if wanted) `anchor_from_stroke` with a regular first run: the sign check refused `check.ASC` (negative peak -0.882 against +0.868). Refuse only when the negative peak is clearly larger (> 1.2 ×). Not needed for a file that starts with an irregular run.
 
   Still open from October and 2026-11-05: long runs at 1.5 s and above see the beach reflection after about 21 s; measure before it arrives, or separate incident and reflected waves (3 probes, *Transfer function from every run*).
 

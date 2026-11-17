@@ -1,13 +1,16 @@
 """
 Tests for src/transfer_function.py, on a synthetic record with a known drive and water.
 
-The motion file comes from generate_waves (a regular run, a rest, an irregular run). The record
-is made from it as catman would see it: 30 s of still water, then the file, at 200 Hz, with
+The motion file comes from generate_waves (a regular run, an irregular run, a regular run, with
+rests). The record is made from it as catman would see it: 30 s of still water, then the file,
+at 200 Hz, with
   - the flap's stroke: the command through a known drive (gain 0.9, a first-order lag of 77 ms
     and a 100 ms delay, as the oscillator measured), at a sensor 1.20 m above the floor, in mm,
     with an arbitrary zero;
   - the probe: that stroke at the waterline through a known water (0.83 x linear theory and the
     travel phase to 3 m), plus the probe's noise, in mm.
+  - optionally, each run k starting k x late_s after the file says (play_dat's goal latency)
+    and catman's clock running clock_ppm fast against the Pi's (run_timeline_sketch.md).
 The tool must give those back. If it doesn't, the error is in the code, not in the tank.
 
     cd ~/ros_ws/src/hydrolab_rigs
@@ -51,7 +54,10 @@ MATRIX = [
      'pause_s': 60},
     {'kind': 'irregular', 'hs_m': 0.03, 'tp_s': 1.2, 'gamma': 3.3, 'duration_s': 300,
      'seed': 7, 'n_ramp': 5, 'pause_s': 60},
+    {'kind': 'regular', 'period_s': 0.9, 'steepness': '1/60', 'n_periods': 40, 'n_ramp': 3,
+     'pause_s': 60},
 ]
+CLOCK_PPM, LATE_S = 250.0, 0.06    # 2026-11-17: +253 ppm, ~49 ms a goal (0.06: 3 file samples)
 
 
 # ---------------------------------------------------------------- the synthetic session
@@ -86,10 +92,27 @@ def waterline(wm, height_m):
     return (DEPTH_M - wm.hinge_height) / (height_m - wm.hinge_height)
 
 
+def late_samples(table, dt, late_s):
+    """[(file sample of run k's start, rest samples inserted before it)], k >= 1."""
+    return [(round(float(r['start_s']) / dt),
+             round(k * late_s / dt) - round((k - 1) * late_s / dt))
+            for k, r in enumerate(table) if k >= 1]
+
+
 def write_record(path, x_file, dt, wm, *, stroke_sign=1.0, reflection=None, seed=0,
-                 cut_end_s=0.0):
-    """Write the catman CSV for the whole file: Time [s], WP1 [mm], Stroke [mm]."""
+                 cut_end_s=0.0, stop_s=None, clock_ppm=0.0, late_s=0.0, table=None):
+    """
+    Write the catman CSV for the whole file: Time [s], WP1 [mm], Stroke [mm].
+
+    late_s: run k starts k * late_s after the file says (rest samples inserted before it, so
+    rounded to the file's samples). clock_ppm: catman's sample j is at Pi time
+    j / RATE_HZ / (1 + clock_ppm * 1e-6). stop_s: the record stops at this file time
+    (before the late starts and the drift); cut_end_s: this much before its end.
+    """
     rng = np.random.default_rng(seed)
+    if late_s:
+        for i, n in reversed(late_samples(table, dt, late_s)):
+            x_file = np.insert(x_file, i, np.full(n, x_file[i]))
     x = np.concatenate([np.zeros(round(STILL_BEFORE_S / dt)), x_file,
                         np.zeros(round(30.0 / dt))])
     x_wl = x * waterline(wm, wm.attachment_height)
@@ -99,9 +122,15 @@ def write_record(path, x_file, dt, wm, *, stroke_sign=1.0, reflection=None, seed
         lag = round(reflection[0] / dt)
         eta[lag:] += reflection[1] * eta[:-lag]
     q = round(RATE_HZ * dt)                             # 4: 200 Hz against 0.02 s
-    eta = signal.resample_poly(eta, q, 1) + rng.normal(0, PROBE_NOISE_M, len(x) * q)
+    eta = signal.resample_poly(eta, q, 1)
     stroke = signal.resample_poly(s_wl / waterline(wm, SENSOR_M), q, 1)
+    if clock_ppm:                                       # catman's samples on the Pi's clock
+        i_pi = np.arange(len(eta)) / (1 + clock_ppm * 1e-6)
+        eta, stroke = (np.interp(i_pi, np.arange(len(eta)), y) for y in (eta, stroke))
+    eta = eta + rng.normal(0, PROBE_NOISE_M, len(eta))
     n = len(eta) - round(cut_end_s * RATE_HZ)
+    if stop_s is not None:
+        n = round((STILL_BEFORE_S + stop_s) * RATE_HZ)
     t = np.arange(n) / RATE_HZ
     with open(path, 'w', newline='') as f:
         w = csv.writer(f)
@@ -111,25 +140,34 @@ def write_record(path, x_file, dt, wm, *, stroke_sign=1.0, reflection=None, seed
     return str(path)
 
 
-@pytest.fixture(scope='module')
-def session(tmp_path_factory):
-    """Make the motion file, its run table and a record, once for all tests."""
-    d = tmp_path_factory.mktemp('session')
+def make_session(d, matrix_rows):
+    """Write a matrix, generate its motion file; return the session dict (no record yet)."""
     matrix = d / 'matrix.csv'
     with open(matrix, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=HEADER, restval='')
         writer.writeheader()
-        writer.writerows(MATRIX)
+        writer.writerows(matrix_rows)
     out = str(d / 'item')
     assert gw.main(['ladertanken', str(matrix), '-o', out, '--config', CONFIG,
                     '--no-plot']) == 0
     motion = play_dat.read_motion(out + '.dat')
-    x_file = play_dat.select_channel(motion, 'position')
-    dt = motion.sample_interval_s
-    wm = gw.load_wavemaker('ladertanken', CONFIG)
-    record = write_record(d / 'record.csv', x_file, dt, wm)
-    return {'dir': d, 'dat': out + '.dat', 'record': record, 'x_file': x_file, 'dt': dt,
-            'wm': wm}
+    return {'dir': d, 'dat': out + '.dat', 'x_file': play_dat.select_channel(motion, 'position'),
+            'dt': motion.sample_interval_s, 'wm': gw.load_wavemaker('ladertanken', CONFIG),
+            'table': play_dat.read_run_table(out + '.dat')}
+
+
+@pytest.fixture(scope='module')
+def session(tmp_path_factory):
+    """Make the motion file, its run table and a record, once for all tests."""
+    ses = make_session(tmp_path_factory.mktemp('session'), MATRIX)
+    ses['record'] = write_record(ses['dir'] / 'record.csv', ses['x_file'], ses['dt'], ses['wm'])
+    return ses
+
+
+def drifted(session, name, **kw):
+    """A record of the session's file with late goals and/or a drifting clock."""
+    return write_record(session['dir'] / f'record_{name}.csv', session['x_file'], session['dt'],
+                        session['wm'], table=session['table'], **kw)
 
 
 def run_tool(session, *extra, run=1, record=None, stroke=True, name='tf'):
@@ -162,6 +200,35 @@ def printed_offset(out):
     return float(re.search(r'offset\s+(-?[\d.]+) s', out).group(1))
 
 
+def printed_runs(out):
+    """{run: a_k} from the runs line (the runs walked, in order from 0)."""
+    values = re.search(r'runs\s+at each start \[s\]: (.*)', out).group(1).split()
+    return {k: float(v) for k, v in enumerate(values)}
+
+
+def printed_late_ms(out):
+    return [float(v) for v in re.search(r'late\s+.*\[ms\]: (.*)', out).group(1).split()]
+
+
+def printed_drift_ppm(out):
+    m = re.search(r'drift\s+([+-]\d+) ppm', out)
+    return None if m is None else float(m.group(1))
+
+
+def expected_shift(session, k, clock_ppm, late_s):
+    """a_k(late, drift) - a_k(clean): the late start, and the clock on it (sketch, decision 1)."""
+    late = sum(n for _, n in late_samples(session['table'], session['dt'], late_s)[:k])
+    late *= session['dt']
+    start = float(session['table'][k]['start_s'])
+    return late + clock_ppm * 1e-6 * (STILL_BEFORE_S + start + late)
+
+
+def drive_delay(period_s):
+    """The stroke's lag on the command at this period: the delay and the lag's phase."""
+    w = 2 * np.pi / period_s
+    return DRIVE_DELAY_S + np.arctan(w * DRIVE_LAG_S) / w
+
+
 # ---------------------------------------------------------------- the offset
 
 def test_offset_from_the_stroke(capsys, session):
@@ -183,6 +250,98 @@ def test_offset_given(capsys, session):
     code, out, err, _ = call(capsys, session, '--offset-s', str(STILL_BEFORE_S), name='given')
     assert code == 0, err
     assert '--offset-s' in out
+
+
+def test_clean_record_unchanged(capsys, session):
+    """Every run at the stroke's lag (30 s plus the drive's), and no drift."""
+    code, out, err, _ = call(capsys, session)
+    assert code == 0, err
+    a = printed_runs(out)
+    assert sorted(a) == [0, 1, 2]
+    for k, period in ((0, 1.3), (1, 1.2), (2, 0.9)):
+        assert a[k] == pytest.approx(STILL_BEFORE_S + drive_delay(period), abs=0.02), k
+    assert abs(printed_drift_ppm(out)) <= 5
+    assert printed_offset(out) == pytest.approx(a[1], abs=0.001)
+
+
+def test_drift_and_late_goals(capsys, session):
+    record = drifted(session, 'drift_late', clock_ppm=CLOCK_PPM, late_s=LATE_S)
+    _, out_clean, _, _ = call(capsys, session, name='clean_ref')
+    code, out, err, _ = call(capsys, session, record=record, name='drift_late')
+    assert code == 0, err
+    a, a_clean = printed_runs(out), printed_runs(out_clean)
+    for k in a_clean:
+        assert a[k] - a_clean[k] == pytest.approx(
+            expected_shift(session, k, CLOCK_PPM, LATE_S), abs=0.005), k
+    assert printed_drift_ppm(out) == pytest.approx(CLOCK_PPM, abs=5)
+    late, late_clean = printed_late_ms(out), printed_late_ms(out_clean)
+    for k, (v, v0) in enumerate(zip(late, late_clean)):     # the drive's lag by period cancels
+        assert v - v0 == pytest.approx(1000 * k * LATE_S, abs=5), k
+
+
+def test_drift_does_not_bias_the_gain(capsys, session):
+    """
+    600 ppm over the irregular run's 288 s window: +-86 ms, +-0.54 rad at 1 Hz.
+
+    Read on one offset, the segments' phases spread and H1 comes out ~5 % low there (sin(x)/x);
+    with the drift fitted, the gain is the clean record's.
+    """
+    record = drifted(session, 'drift600', clock_ppm=600.0)
+    _, _, _, clean = call(capsys, session, name='clean_gain')
+    code, out, err, cols = call(capsys, session, record=record, name='drift600')
+    assert code == 0, err
+    assert printed_drift_ppm(out) == pytest.approx(600, abs=10)
+    assert cols['gain'] == pytest.approx(clean['gain'], rel=0.005)
+    assert cols['drive'] == pytest.approx(clean['drive'], rel=0.005)
+    code, _, err, fixed = call(capsys, session, '--offset-s', str(printed_runs(out)[1]),
+                               '--drift-ppm', '0', record=record, name='drift600_fixed')
+    assert code == 0, err
+    i = int(np.argmin(np.abs(fixed['period_s'] - 1.0)))
+    assert fixed['gain'][i] < 0.98 * clean['gain'][i]
+
+
+def test_drift_from_the_probe(capsys, session):
+    record = drifted(session, 'drift_probe', clock_ppm=CLOCK_PPM, late_s=LATE_S)
+    code, out, err, _ = call(capsys, session, record=record, stroke=False, name='drift_probe')
+    assert code == 0, err
+    assert 'from the envelopes' in out
+    assert printed_drift_ppm(out) == pytest.approx(CLOCK_PPM, abs=20)
+
+
+def test_offset_given_measures_the_runs_own_drift(capsys, session):
+    record = drifted(session, 'drift_own', clock_ppm=CLOCK_PPM)
+    _, out_walk, _, _ = call(capsys, session, record=record, name='own_walk')
+    code, out, err, _ = call(capsys, session, '--offset-s', str(printed_runs(out_walk)[1]),
+                             record=record, name='own')
+    assert code == 0, err
+    assert printed_drift_ppm(out) == pytest.approx(CLOCK_PPM, abs=10)
+    assert 'runs ' not in out                           # nothing walked but this run
+
+
+def test_offset_and_drift_given_cut_at_whole_samples(capsys, session):
+    """--offset-s X --drift-ppm 0 is the old single offset: a quarter sample changes nothing."""
+    code, out, err, cols = call(capsys, session, '--offset-s', '30.18', '--drift-ppm', '0',
+                                name='fixed_a')
+    assert code == 0, err
+    assert re.search(r'drift\s+\+0 ppm \(--drift-ppm\)', out)
+    _, _, _, cols_b = call(capsys, session, '--offset-s', '30.185', '--drift-ppm', '0',
+                           name='fixed_b')
+    for name in cols:
+        assert np.array_equal(cols[name], cols_b[name]), name
+
+
+def test_regular_only_file(capsys, tmp_path):
+    """Two short regular runs: one piece each, so no drift is measured; no error."""
+    ses = make_session(tmp_path, [
+        {'kind': 'regular', 'period_s': 1.3, 'steepness': '1/60', 'n_periods': 30, 'n_ramp': 3,
+         'pause_s': 60},
+        {'kind': 'regular', 'period_s': 0.9, 'steepness': '1/60', 'n_periods': 30, 'n_ramp': 3,
+         'pause_s': 60}])
+    ses['record'] = write_record(tmp_path / 'record.csv', ses['x_file'], ses['dt'], ses['wm'])
+    code, out, err, _ = call(capsys, ses, run=1, name='regular_only')
+    assert code == 0, err
+    assert 'not measured' in out
+    assert sorted(printed_runs(out)) == [0, 1]
 
 
 # ---------------------------------------------------------------- the irregular run
@@ -267,6 +426,38 @@ def test_flipped_stroke_is_refused(capsys, session):
     assert 'upside down' in err
 
 
+def test_flipped_stroke_with_drift_is_refused(capsys, session):
+    record = drifted(session, 'flipped_drift', stroke_sign=-1.0, clock_ppm=CLOCK_PPM,
+                     late_s=LATE_S)
+    code, _, err, _ = call(capsys, session, record=record, name='flipped_drift')
+    assert code == 1
+    assert 'upside down' in err
+
+
+def test_late_goal_beyond_the_window_is_refused(capsys, session):
+    """
+    0.66 s late (0.55 Tp): outside the +-0.4 Tp window of run 1, with --offset-s it passes.
+
+    Not 0.6 Tp: the window's far edge would then sit on the side lobe one period away.
+    """
+    late_s = 0.66
+    record = drifted(session, 'too_late', late_s=late_s)
+    code, _, err, _ = call(capsys, session, record=record, name='too_late')
+    assert code == 1
+    assert 'run 1, piece' in err and '--offset-s' in err
+    a_1 = STILL_BEFORE_S + drive_delay(1.2) + expected_shift(session, 1, 0.0, late_s)
+    code, out, err, _ = call(capsys, session, '--offset-s', f'{a_1:.3f}', record=record,
+                             name='too_late_given')
+    assert code == 0, err
+
+
+def test_drift_above_the_limit_is_refused(capsys, session):
+    record = drifted(session, 'drift2000', clock_ppm=2000.0)
+    code, _, err, _ = call(capsys, session, record=record, name='drift2000')
+    assert code == 1
+    assert 'above 1000' in err
+
+
 def test_depth_is_required(session):
     argv, _ = run_tool(session)
     i = argv.index('--depth-m')
@@ -339,12 +530,20 @@ def test_rate_not_a_whole_multiple(capsys, session, tmp_path):
     assert 'not a whole multiple' in err
 
 
-def test_record_shorter_than_the_file(capsys, session):
+def test_record_that_stops_inside_the_run(capsys, session):
     record = write_record(session['dir'] / 'short.csv', session['x_file'], session['dt'],
-                          session['wm'], cut_end_s=30.0 + 60.0 + 100.0)    # inside run 1
+                          session['wm'], stop_s=300.0)    # inside run 1 (140-440 s)
     code, _, err, _ = call(capsys, session, record=record, name='short')
     assert code == 1
-    assert 'shorter than the file' in err and '--offset-s' in err
+    assert 'not inside the record' in err
+
+
+def test_run_after_the_record_stops(capsys, session):
+    record = write_record(session['dir'] / 'short2.csv', session['x_file'], session['dt'],
+                          session['wm'], stop_s=300.0)
+    code, _, err, _ = call(capsys, session, run=2, record=record, name='short2')
+    assert code == 1
+    assert 'run 2 is not inside the record' in err
 
 
 def test_record_that_stops_after_the_last_run(capsys, session):

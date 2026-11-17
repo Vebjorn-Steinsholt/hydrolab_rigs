@@ -28,6 +28,12 @@ STILL_S = 10.0           # probe checked over this long before the run
 STILL_RATIO = 0.1        # warn if the probe's std before the run is above this x the run's
 STILL_FLOOR_M = 0.001    # but never below this: ~3x the probe's noise (check on a still record)
 MATCH_MIN = 2.0          # offset match: peak / next-best peak below this is refused
+COARSE_S = 120.0         # the anchor matches at most this much of the first run
+CHUNK_S = 60.0           # the walk: pieces of the run at most this long
+SEARCH_TP = 0.4          # each piece is searched within +/- this many periods of the last
+DRIFT_MIN_S = 180.0      # fit the clock drift only from at least this much of long runs
+DRIFT_MAX_PPM = 1000.0   # refuse a drift above this
+DRIFT_RES_MAX_S = 0.01   # warn when the pieces scatter more than this about the fit
 F_TOP_FP = 1.5           # irregular: trust up to this x fp; second-order waves sit at 2 fp
 ENVELOPE_SMOOTH_TP = 3   # smooth the envelope over this many wave periods
 
@@ -151,14 +157,41 @@ def to_waterline(y: float | np.ndarray, height_m: float, wm: gw.Wavemaker,
 
 # ---------------------------------------------------------------- where the file is in the record
 
-def offset_from_stroke(x_file, s_all, dt, min_sep) -> tuple[float, float]:
+def local_lag(x_file, y_all, a, n, guess_s, w, dt) -> tuple[float, float, bool]:
     """
-    Return (offset_s, match quality) by cross-correlating command and stroke.
+    Return (lag_s, r, at_edge) of y_all against x_file[a:a + n], within guess_s +- w samples.
 
-    Refuse a negative peak (stroke and command point opposite ways).
+    r is the normalised correlation at the peak; at_edge says the peak is on the window's
+    edge (the prediction was off by more than the window).
     """
-    lags = signal.correlation_lags(len(s_all), len(x_file), mode='valid')
-    corr = signal.correlate(s_all - s_all.mean(), x_file - x_file.mean(), mode='valid')
+    xs = x_file[a:a + n]
+    lo = max(0, a + round(guess_s / dt) - w)
+    hi = min(len(y_all) - n, a + round(guess_s / dt) + w)
+    if hi < lo:
+        raise ValueError('the run is not inside the record at this offset')
+    seg = y_all[lo:hi + n]
+    c = signal.correlate(seg - seg.mean(), xs - xs.mean(), mode='valid')
+    i = int(np.argmax(c))
+    at_edge = i in (0, len(c) - 1)
+    d = 0.0
+    if not at_edge:                                   # parabola through the peak
+        y0, y1, y2 = c[i - 1], c[i], c[i + 1]
+        d = 0.5 * (y0 - y2) / (y0 - 2 * y1 + y2)
+    r = c[i] / (n * xs.std() * y_all[lo + i:lo + i + n].std())
+    return (lo + i + d - a) * dt, r, at_edge
+
+
+def first_part(x_file, dt, first, coarse_s=COARSE_S) -> np.ndarray:
+    """Return the file from sample 0 to the first run's end, or its start + coarse_s if sooner."""
+    end_s = min(float(first['end_s']), float(first['start_s']) + coarse_s)
+    return x_file[:round(end_s / dt) + 1]
+
+
+def anchor_from_stroke(x_file, s_all, dt, first, min_sep) -> tuple[float, float]:
+    """(lag_s, match quality) of the first run: the whole-record match, on <= COARSE_S of it."""
+    x0 = first_part(x_file, dt, first)
+    lags = signal.correlation_lags(len(s_all), len(x0), mode='valid')
+    corr = signal.correlate(s_all - s_all.mean(), x0 - x0.mean(), mode='valid')
     i_peak = int(np.argmax(np.abs(corr)))
     if corr[i_peak] < 0:
         raise ValueError("the stroke matches the command upside down: the command's + is "
@@ -172,14 +205,136 @@ def envelope(y, dt, smooth_s) -> np.ndarray:
     return ndimage.uniform_filter1d(np.abs(analytic), max(1, round(smooth_s / dt)))
 
 
-def offset_from_envelopes(x_file, eta_all, dt, tp_s, travel_s, min_sep) -> tuple[float, float]:
-    """(offset_s, match quality) from the envelopes, minus the travel time."""
-    env_x = envelope(x_file, dt, ENVELOPE_SMOOTH_TP * tp_s)
-    env_eta = envelope(eta_all, dt, ENVELOPE_SMOOTH_TP * tp_s)
+def anchor_from_envelopes(x_file, eta_travel, dt, first, tp_s, min_sep) -> tuple[float, float]:
+    """
+    Return (lag_s, match quality) of the first run from the envelopes, refined on their slopes.
+
+    eta_travel has the travel undone, so no travel time is subtracted. The envelopes find the
+    run and give the quality; a regular run's plateau makes their peak a few per mille high
+    over a second either side, and any tilt moves it by about T/2 (the test's 1.3 s run). The
+    slopes (the ramps) then fix it to within a smoothing length, but alone they can't tell one
+    regular run's ramps from another's. The command's envelope is of the whole file, then cut,
+    so the cut leaves no step in it. The whole first run, not COARSE_S of it: 120 s inside an
+    irregular run is too flat to find (2026-11-17: 1.0x), and drift doesn't matter at this
+    smoothing.
+    """
+    smooth_s = ENVELOPE_SMOOTH_TP * tp_s
+    env_x = envelope(x_file, dt, smooth_s)[:len(first_part(x_file, dt, first, np.inf))]
+    env_eta = envelope(eta_travel, dt, smooth_s)
     lags = signal.correlation_lags(len(env_eta), len(env_x), mode='valid')
     corr = signal.correlate(env_eta - env_eta.mean(), env_x - env_x.mean(), mode='valid')
     i_peak = int(np.argmax(corr))
-    return lags[i_peak] * dt - travel_s, match_quality(corr, i_peak, min_sep)
+    quality = match_quality(corr, i_peak, min_sep)
+    w = round(smooth_s / dt)
+    lo = max(0, i_peak - w)
+    d_eta = np.diff(env_eta[lo:i_peak + w + len(env_x)])
+    i_fine = lo + int(np.argmax(signal.correlate(d_eta, np.diff(env_x), mode='valid')))
+    return lags[i_fine] * dt, quality
+
+
+def lag_90(eta) -> np.ndarray:
+    """
+    Return the probe turned back by the water's 90 deg lead (theory; see residual_delay).
+
+    So the walk on the probe (no stroke) finds about the lag the stroke would give, not a
+    quarter period off it, and the walk's window holds across runs of different periods.
+    """
+    n = len(eta)
+    return np.fft.irfft(np.fft.rfft(eta - eta.mean()) * -1j, n)
+
+
+@dataclass
+class Timeline:
+    """Where each run is in the record (decision 1 of run_timeline_sketch.md)."""
+
+    a: dict[int, float]        # run number -> lag at its start [s]
+    eps: float                 # drift; 0 if not measured
+    eps_pieces: int            # pieces in runs of >= 2 pieces (0: not measured)
+    eps_runs: int              # those runs
+    rms_s: float
+
+
+def pieces(row, dt) -> list[tuple[int, int]]:
+    """(first sample, length) of each piece of the run's inner part (ramps off), <= CHUNK_S."""
+    ramp = round(float(row['ramp_s']) / dt)
+    a, b = round(float(row['start_s']) / dt) + ramp, round(float(row['end_s']) / dt) - ramp
+    n = max(1, int(np.ceil((b - a) * dt / CHUNK_S - 1e-9)))
+    edges = np.linspace(a, b, n + 1).round().astype(int)
+    return [(int(p), int(q - p)) for p, q in zip(edges, edges[1:])]
+
+
+def run_period(row) -> float:
+    """Return the run's period: the peak period of an irregular run."""
+    return float(row['peak_period_s'] or row['period_s'])
+
+
+def walk(x_file, y_all, dt, rows, start_s) -> list[tuple[int, float, float, float]]:
+    """
+    Return (run, t_mid - start_k, lag, piece length [s]) of every piece, from start_s on.
+
+    Each piece is searched within SEARCH_TP periods of the last; play_dat starts each run
+    as a goal of its own, ~50 ms later than the file says (2026-11-17), and catman's clock
+    drifts against the Pi's (+253 ppm), so one offset for the whole file doesn't hold. The
+    walk stops where the record does.
+    """
+    out, lag = [], start_s
+    for r in rows:
+        w = round(SEARCH_TP * run_period(r) / dt)
+        for p, n in pieces(r, dt):
+            if p + round(lag / dt) + w + n > len(y_all):
+                return out                              # the record stops before this piece
+            lag, _, edge = local_lag(x_file, y_all, p, n, lag, w, dt)
+            if edge:
+                raise ValueError(f"run {r['run']}, piece at {p * dt:.0f} s in the file: the "
+                                 f'lag left the +-{SEARCH_TP} T window; give --offset-s')
+            out.append((int(r['run']), (p + n / 2) * dt - float(r['start_s']), lag, n * dt))
+    return out
+
+
+def fit_timeline(rows) -> Timeline:
+    """lag = a_k + eps * (t - start_k): one intercept per run, one slope (decision 4)."""
+    runs = sorted({k for k, _, _, _ in rows})
+    count = {k: sum(1 for kk, _, _, _ in rows if kk == k) for k in runs}
+    long_s = sum(n_s for k, _, _, n_s in rows if count[k] >= 2)
+    measured = long_s >= DRIFT_MIN_S
+    A = np.zeros((len(rows), len(runs) + 1))
+    y = np.array([lag for _, _, lag, _ in rows])
+    for i, (k, t, _, _) in enumerate(rows):
+        A[i, runs.index(k)] = 1.0
+        A[i, -1] = t
+    if not measured:
+        A = A[:, :-1]                                   # eps not measured: 0
+    sol, *_ = np.linalg.lstsq(A, y, rcond=None)
+    eps = float(sol[-1]) if measured else 0.0
+    res = y - A @ sol
+    if abs(eps) * 1e6 > DRIFT_MAX_PPM:
+        raise ValueError(f'drift {eps * 1e6:+.0f} ppm, above {DRIFT_MAX_PPM:.0f}: '
+                         'the wrong record, or a gap in it; give --offset-s and --drift-ppm')
+    long_runs = [k for k in runs if count[k] >= 2]
+    return Timeline(a={k: float(sol[j]) for j, k in enumerate(runs)}, eps=eps,
+                    eps_pieces=sum(count[k] for k in long_runs) if measured else 0,
+                    eps_runs=len(long_runs) if measured else 0,
+                    rms_s=float(np.sqrt(np.mean(res ** 2))))
+
+
+def on_file_time(y_all, dt, a_s, eps, start_s, i_from, i_to) -> np.ndarray:
+    """
+    Return y_all at the record times of file samples i_from..i_to of a run starting at start_s.
+
+    eps = 0 cuts at whole samples, as an offset alone always did; else linear interpolation
+    (< 0.05 % amplitude lost at 1.8 s, 50 Hz).
+    """
+    if eps == 0:
+        i0 = round((a_s + start_s) / dt) - round(start_s / dt)
+        if i_from + i0 < 0 or i_to + i0 > len(y_all):
+            raise ValueError('the run is not inside the record at this offset')
+        return y_all[i_from + i0:i_to + i0]
+    t = np.arange(i_from, i_to) * dt
+    t_rec = a_s + t + eps * (t - start_s)
+    y = np.interp(t_rec / dt, np.arange(len(y_all)), y_all, left=np.nan, right=np.nan)
+    if np.isnan(y).any():
+        raise ValueError('the run is not inside the record at this offset')
+    return y
 
 
 def match_quality(c: np.ndarray, i_peak: int, min_sep: int) -> float:
@@ -417,42 +572,71 @@ def analyse(args, argv, config) -> None:
                          f'of the file at {1 / dt:g} Hz')
     eta_all = record_channel(channels, args.probe, args.probe_scale, q)
     s_all = record_channel(channels, args.stroke, args.stroke_scale, q) if args.stroke else None
-    # the record may stop after the last run, before the file's final rest
-    x_match = x_file[:round(max(float(r['end_s']) for r in table if r['end_s']) / dt) + 1]
+    eta_travel = undo_travel(eta_all, dt, args.depth_m, args.probe_distance_m)
 
-    # 4. offset: --offset-s, else offset_from_stroke, else offset_from_envelopes
-    tp_s = float(row['peak_period_s'] or row['period_s'])
-    travel_s = args.probe_distance_m / group_velocity(1 / tp_s, args.depth_m)
+    # 4. timeline: anchor on the first run, walk the runs, fit the drift; or --offset-s
+    played = [r for r in table if r['end_s']]
+    first = played[0]
+    y_walk = s_all if s_all is not None else lag_90(eta_travel)    # the probe: decision 6
     rests = [float(b['start_s']) - float(a['end_s']) for a, b in zip(table, table[1:])]
-    min_sep = round(min(rests, default=10 * tp_s) / dt)
+    min_sep = round(min(rests, default=10 * run_period(first)) / dt)
+    walked: Timeline | None = None
     if args.offset_s is not None:
-        offset_s, how = args.offset_s, '--offset-s'
+        a_k, how = args.offset_s, '--offset-s'
+        own = None
+        if args.drift_ppm is None:                  # the drift from this run's own pieces
+            try:
+                own_pieces = walk(x_file, y_walk, dt, [row], a_k)
+                own = fit_timeline(own_pieces) if own_pieces else None
+            except ValueError as e:
+                print(f'warning: no drift from run {args.run} at --offset-s ({e}); '
+                      'taking 0')
+        eps_fit = own
     else:
-        if len(eta_all) < len(x_match):
-            raise ValueError(f'the record ({len(eta_all) * dt:.1f} s) is shorter than the file '
-                             f'({len(x_match) * dt:.1f} s); give --offset-s')
         if s_all is not None:
-            offset_s, quality = offset_from_stroke(x_match, s_all, dt, min_sep)
+            anchor_s, quality = anchor_from_stroke(x_file, s_all, dt, first, min_sep)
             how = 'from the stroke'
         else:
-            offset_s, quality = offset_from_envelopes(x_match, eta_all, dt, tp_s, travel_s,
-                                                      min_sep)
+            anchor_s, quality = anchor_from_envelopes(x_file, eta_travel, dt, first,
+                                                      run_period(first), min_sep)
             how = 'from the envelopes'
-        how += (', the only match' if np.isinf(quality)
-                else f', match {quality:.1f}x the next')
+        how += (f"; anchor the only match, run {first['run']}" if np.isinf(quality)
+                else f"; anchor {quality:.1f}x the next, run {first['run']}")
         if quality < MATCH_MIN:
-            raise ValueError(f'offset {offset_s:.1f} s ({how}): an unclear match, below '
+            raise ValueError(f'anchor {anchor_s:.1f} s ({how}): an unclear match, below '
                              f'{MATCH_MIN}x; give --offset-s')
+        pieces_walked = walk(x_file, y_walk, dt, played, anchor_s)
+        if not any(k == args.run for k, _, _, _ in pieces_walked):
+            raise ValueError(f'run {args.run} is not inside the record (it stops at '
+                             f'{len(eta_all) * dt:.1f} s)')
+        walked = fit_timeline(pieces_walked)
+        a_k = walked.a[args.run]
+        eps_fit = walked
+    if args.drift_ppm is not None:
+        eps, drift = args.drift_ppm * 1e-6, f'{args.drift_ppm:+.0f} ppm (--drift-ppm)'
+    elif eps_fit is not None and eps_fit.eps_pieces:
+        eps = eps_fit.eps
+        drift = (f"{eps * 1e6:+.0f} ppm (catman's clock against the Pi's), "
+                 f'{eps_fit.eps_pieces} pieces in {eps_fit.eps_runs} '
+                 f"run{'s' if eps_fit.eps_runs > 1 else ''}, rms {eps_fit.rms_s * 1000:.1f} ms")
+        if eps_fit.rms_s > DRIFT_RES_MAX_S:
+            print(f'warning: the pieces scatter {eps_fit.rms_s * 1000:.0f} ms (rms) about the '
+                  'drift fit; something moved the timeline inside a run')
+    else:
+        eps, drift = 0.0, f'not measured (less than {DRIFT_MIN_S:.0f} s in runs of 2+ pieces)'
 
-    # 5. window
-    i0 = round((offset_s + float(row['start_s'])) / dt)
+    # 5. window, read on the file's time base
+    start_s = float(row['start_s'])
+    i_a, i_b = round(start_s / dt), round(float(row['end_s']) / dt)
+    n_before = max(0, min(round(STILL_S / dt), int((a_k + start_s) / dt) - 1))
     skip = round(float(row['ramp_s']) / dt)
-    eta_all = undo_travel(eta_all, dt, args.depth_m, args.probe_distance_m)
-
-    eta, s = cut_window(i0, len(x), skip, eta_all, s_all)
+    eta_run = on_file_time(eta_travel, dt, a_k, eps, start_s, i_a - n_before, i_b)
+    s_run = (on_file_time(s_all, dt, a_k, eps, start_s, i_a - n_before, i_b)
+             if s_all is not None else None)
+    eta, s = cut_window(n_before, len(x), skip, eta_run, s_run)
     assert eta is not None                  # the probe is never None, only the stroke
     x = x[skip:len(x) - skip]
-    check_still(eta_all, i0, dt, eta.std())
+    check_still(eta_run, n_before, dt, eta.std())
 
     # 6. estimate (Changes 6, 8); regular: a whole number of periods per segment
     if row['kind'] == 'regular':   # whole periods, at most half the window: >= 3 averages
@@ -512,7 +696,18 @@ def analyse(args, argv, config) -> None:
         info.append(f'stroke       {args.stroke} x {args.stroke_scale}, sensor at '
                     f'{args.stroke_height_m} m')
     info += [
-        f"offset       {offset_s:.2f} s from the record's first sample ({how})",
+        f"offset       {a_k:.3f} s at the run's start ({how})",
+    ]
+    if walked is not None:
+        runs = sorted(walked.a)
+        a0, s0 = walked.a[runs[0]], {int(r['run']): float(r['start_s']) for r in table}
+        info += [
+            'runs         at each start [s]: ' + ' '.join(f'{walked.a[k]:.3f}' for k in runs),
+            'late         goal start after the file, drift removed [ms]: ' + ' '.join(
+                f'{(walked.a[k] - a0 - eps * (s0[k] - s0[runs[0]])) * 1000:.0f}' for k in runs),
+        ]
+    info += [
+        f'drift        {drift}',
         f'window       {len(x) * dt:.1f} s, {skip * dt:.1f} s skipped at each end',
         f'estimate     H1, {nperseg * dt:.1f} s Hann segments, {cmd.n_avg} averages, '
         f'df {df:.4f} Hz',
@@ -543,7 +738,10 @@ def main(argv=None):
     parser.add_argument('--stroke-scale', type=float, default=1.0)
     parser.add_argument('--depth-m', type=float, required=True, help='measured; no yaml default')
     parser.add_argument('--config', help='another wavemakers.yaml')
-    parser.add_argument('--offset-s', type=float, help='file start in the record; skips the match')
+    parser.add_argument('--offset-s', type=float,
+                        help="this run's start in the record less its file time; skips the walk")
+    parser.add_argument('--drift-ppm', type=float,
+                        help="catman's clock against the Pi's; skips its fit (0: none)")
     parser.add_argument('--segment-s', type=float, default=40.0)
     parser.add_argument('--smooth-hz', type=float, default=0.05, help='0: raw gain')
     parser.add_argument('-o', '--output', required=True, help='base name for .csv, .txt, .png')
