@@ -9,6 +9,15 @@ Item numbers are shared with [COMMISSIONING.md](COMMISSIONING.md) (numbering res
 2026-10-06), so references such as "item 33" stay valid in both files; gaps in the numbering are
 the items kept there, and finished items, which are removed (see the git history).
 
+Designs for open items are in sketches, each linked from its items:
+
+- [controller_fixes_sketch.md](controller_fixes_sketch.md): 29, 30, 31, 32, 36.
+- [remaining_items_sketch.md](remaining_items_sketch.md): 19, 45, 49, 52, 55, 56, 58–65, with
+  the order to do them in, and why 43, 46, 50, 51 and 53 have no sketch.
+- [oscillator_centre_sketch.md](oscillator_centre_sketch.md): 54.
+- [gain_estimation_sketch.md](gain_estimation_sketch.md): the long-term follow-up to 43
+  (*Transfer function from every run*).
+
 - **(rig)** needs the real wavemaker; the unit tests use fakes for the drive and the controller.
 - Paths are relative to the repository root.
 
@@ -28,7 +37,7 @@ the items kept there, and finished items, which are removed (see the git history
   `generate_waves` and `transfer_function` write `source_commit()`, but `play_dat` and the controller don't, so a session can't show which code ran on the Pi (the ~49 ms late-start `play_dat` of 2026-11-17 is an example). `play_dat` writes the Pi's `git describe --dirty` into its session record, and `run.sh` logs it at startup. Decide whether `run.sh` refuses a `-dirty` tree. Sketch: [remaining_items_sketch.md](remaining_items_sketch.md).
 
 - [ ] **43. Confirm the gain table with probes, and the per-run timeline. (rig)** (the gain table in `wavemakers.yaml`, `transfer_function`, `play_dat`)
-  The yaml has the 2026-11-13 geometry (attachment 1.39 m, lead 0.000413 m/deg) and gain table, with 0.8 s at 0.99 since 2026-11-17. The 2026-11-17 check (`~/wave_sessions/2026-11-17_check`, `check2.dat`, 1.0 m) reproduced 2026-11-13 within 2 %. It also found that catman's clock runs +255 ppm against the Pi's, and that `play_dat` started each goal ~49 ms late, adding up. Both are handled since `88363ba` (design and checks: `git show 88363ba:run_timeline_sketch.md`): `transfer_function` finds each run by itself and fits the drift, and `play_dat` sends each goal at its time in the file. On 2026-11-17 that gave late starts of 0 62 102 142 202 243 ms; irregular gain 1.019 (0.8 s) and 1.106 (1.0 s); regular 0.986 (0.8 s, a 7.2 s window only), then 1.107, 1.108, 1.126, 1.128 (1.0–1.6 s). Left: the old records without `--offset-s`, the new `play_dat` on the Pi, and a 0.8 s run long enough to trust.
+  The yaml has the 2026-11-13 geometry (attachment 1.39 m, lead 0.000413 m/deg) and gain table, with 0.8 s at 0.99 since 2026-11-17. The 2026-11-17 check (`~/wave_sessions/2026-11-17_check`, `check2.dat`, 1.0 m) reproduced 2026-11-13 within 2 %. It also found that catman's clock runs +255 ppm against the Pi's, and that `play_dat` started each goal ~49 ms late, adding up. Both are handled since `88363ba` (design and checks: `git show 88363ba:run_timeline_sketch.md`): `transfer_function` finds each run by itself and fits the drift, and `play_dat` sends each goal at its time in the file. On 2026-11-17 that gave late starts of 0 62 102 142 202 243 ms; irregular gain 1.019 (0.8 s) and 1.106 (1.0 s); regular 0.986 (0.8 s, a 7.2 s window only), then 1.107, 1.108, 1.126, 1.128 (1.0–1.6 s). Left: the old records without `--offset-s`, the new `play_dat` on the Pi, and a 0.8 s run long enough to trust. Pooling this session's runs with earlier ones into one gain model, later: [gain_estimation_sketch.md](gain_estimation_sketch.md).
 
   **2026-11-18, with the stick and the rig, in this order:**
 
