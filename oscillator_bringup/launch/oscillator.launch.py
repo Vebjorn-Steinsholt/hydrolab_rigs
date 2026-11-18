@@ -9,6 +9,10 @@ oscillator service (see rpi/README.md):
 
     ros2 launch oscillator_bringup oscillator.launch.py port:=8080                       # sloshing
     ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical port:=8080
+    ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical upright_position_m:=0.05
+
+upright_position_m:= sets the centre of oscillation in m for this run (+ = up on the vertical);
+empty, the default, uses oscillator.yaml. The controller refuses a centre outside the travel.
 
 The lifecycle manager configures and activates the controller at start, which switches the
 drive on. The LinMot also homes if it is not homed (about 20 s, the slide moves to its home
@@ -17,15 +21,27 @@ stop). Ctrl-C (SIGINT) stops everything and the controller switches the drive of
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.parameter_descriptions import ParameterValue
 
+
 OSCILLATORS = ['sloshing', 'vertical']
 
+def _controller(context, config_file, bond_timeout):
+    overrides = {}
+    upright = context.launch_configurations['upright_position_m']
+    if upright:
+        overrides['upright_position_m'] = float(upright)
+    return [LifecycleNode(
+        package='rig_controller',
+        executable='controller_node',
+        namespace=['oscillators/', LaunchConfiguration('oscillator')], name='controller',
+        parameters=[config_file, {'bond_timeout': bond_timeout}, overrides],
+        output='screen')]
 
 def generate_launch_description():
     namespace = ['oscillators/', LaunchConfiguration('oscillator')]
@@ -52,15 +68,16 @@ def generate_launch_description():
             'bond_timeout', default_value='4.0',
             description='Seconds without a bond heartbeat before the lifecycle manager brings '
                         'the nodes down'),
+             
+        DeclareLaunchArgument(
+            'upright_position_m', default_value='',
+            description='Overrides the yaml upright_position_m; empty keeps the yaml value'),
 
-        LifecycleNode(
-            package='rig_controller',
-            executable='controller_node',
-            namespace=namespace,
-            name='controller',
-            parameters=[config_file, {'bond_timeout': bond_timeout}],
-            output='screen',
-        ),
+        OpaqueFunction(function=_controller,
+                       kwargs={'config_file': config_file, 'bond_timeout': bond_timeout}),
+
+
+
         LifecycleNode(
             package='rig_controller',
             executable='bridge_node',

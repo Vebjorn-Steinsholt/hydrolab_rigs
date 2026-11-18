@@ -14,88 +14,112 @@ the items kept there, and finished items, which are removed (see the git history
 
 ## High
 
-- [ ] **43. Confirm the new gain table with probes. (rig)** (the gain table in `wavemakers.yaml`, `transfer_function`)
-  Since 2026-11-13 the yaml has the recalibrated geometry (attachment 1.39 m, lead 0.000413 m/deg) and a gain table measured with it from item38 run 3 (COMMISSIONING.md, *Actuator conversion calibration*). The check run that day (`~/wave_sessions/2026-11-13_check`, depth 1.0 m) gave H/target 0.92 (0.8 s), 1.01 (1.0 s), 0.99 (1.1 s), 0.98 (1.3 s), 0.99 (1.6 s), but only after correcting WP1, whose catman channel was scaled 0.03981 m/V instead of the database's 0.0229 (`--probe-scale 0.5752`, `--offset-s 16.04`). Planned 2026-11-17, in this order. The irregular run goes first in the same file as the regular check, so one catman record and one bag cover the session, and the draw wire finds the offset without `--offset-s` (with regular runs only, a flipped sine looks like a shifted one).
+- [ ] **43. Confirm the gain table with probes, and the per-run timeline. (rig)** (the gain table in `wavemakers.yaml`, `transfer_function`, `play_dat`)
+  The yaml has the 2026-11-13 geometry (attachment 1.39 m, lead 0.000413 m/deg) and gain table, with 0.8 s at 0.99 since 2026-11-17. The 2026-11-17 check (`~/wave_sessions/2026-11-17_check`, `check2.dat`, 1.0 m) reproduced 2026-11-13 within 2 %. It also found that catman's clock runs +255 ppm against the Pi's, and that `play_dat` started each goal ~49 ms late, adding up. Both are handled since `88363ba` (design and checks: `git show 88363ba:run_timeline_sketch.md`): `transfer_function` finds each run by itself and fits the drift, and `play_dat` sends each goal at its time in the file. On 2026-11-17 that gave late starts of 0 62 102 142 202 243 ms; irregular gain 1.019 (0.8 s) and 1.106 (1.0 s); regular 0.986 (0.8 s, a 7.2 s window only), then 1.107, 1.108, 1.126, 1.128 (1.0–1.6 s). Left: the old records without `--offset-s`, the new `play_dat` on the Pi, and a 0.8 s run long enough to trust.
 
-  1. **WP1 in catman.** Assign WP1 from the sensor database to its channel again and check the channel's scaling reads 0.0229 m/V. Zero it in still water, then move the probe -5, 0, +5 cm on its stand: it must read -50, 0, +50 mm (±1 mm). Also check `WM_Position` is recorded. Note the depth with a ruler.
+  **2026-11-18, with the stick and the rig, in this order:**
 
-  2. **The session file, on the Pi.** Depth 1.0 m means `WATER_DEPTH` empty; another depth goes there (README, *Water depth*).
+  1. **The 2026-11-13 check without `--offset-s` (lab PC, stick in).** Rebuild first if the laptop install is older than `88363ba` (`cd ~/ros_ws && colcon build --packages-select rig_controller wavemaker_bringup`). The loop reruns each run's original command, from its `.txt`, without `--offset-s`:
+
+     ```bash
+     cd ~/wave_sessions/2026-11-13_check
+     cp /media/hydrolab-linux/LADERSCHTIC/check.ASC .
+     source ~/ros_ws/install/setup.bash
+     for run in 0 1 2 3 4; do
+       cmd=$(sed -n 's/^command      transfer_function //p' run$run.txt \
+             | sed 's/ --offset-s [-0-9.]*//; s/ -o run\([0-9]\)/ -o new_run\1/; s|/media/hydrolab-linux/LADERSCHTIC/check.ASC|check.ASC|')
+       eval ros2 run rig_controller transfer_function $cmd | grep -E '^(offset|runs|late|drift|error)'
+     done
+     for run in 0 1 2 3 4; do
+       python3 -c "import csv; a, b = (next(csv.DictReader(open(f))) for f in ('run$run.csv', 'new_run$run.csv')); print($run, a['period_s'], f\"{float(b['gain']) / float(a['gain']) - 1:+.2%}\")"
+     done
+     ```
+
+     Pass:
+     - every run analyses;
+     - `offset` about 16.0–16.3 s;
+     - `late` rises ~50 ms a run (the old `play_dat`);
+     - `drift` is *not measured* (regular runs only, one piece each);
+     - each gain is within 0.5 % of before.
+
+     The WP1 scaling is wrong in these records (×1.74), but that cancels in the comparison. If run 0 is refused *upside down*, that's step 7 below: note it and go on. If item38's `.dat` and `.ASC` are on the stick, also run README's item38 run 3 command and compare with `item38_run3_tf.csv` the same way.
+
+  2. **The Pi: the new `play_dat` and its clock.**
 
      ```bash
      ssh ladertanken@ladertanken-rpi.local
-     grep WATER_DEPTH /etc/default/wavemaker          # empty for 1.0 m
-     sudo systemctl start wavemaker@ladertanken
+     cd ~/ros_ws/src/hydrolab_rigs && git pull && git log --oneline -1    # 88363ba or later
+     cd ~/ros_ws && colcon build --packages-select rig_controller wavemaker_bringup
+     sudo systemctl restart wavemaker@ladertanken
+     chronyc tracking; timedatectl
+     ```
+
+     From `chronyc tracking`, note `Leap status` (synced or not), `Frequency` (the correction in ppm) and `System time`. On the catman PC, run `w32tm /query /status` in a command prompt. Together they say which clock the +255 ppm belongs to: if the Pi is synced and corrects by much less than 255 ppm, it's catman's.
+
+  3. **WP1 in catman.** Check the channel's scaling reads the sensor database's 0.0229 m/V. Zero it in still water, then move the probe -5, 0, +5 cm on its stand: it must read -50, 0, +50 mm (±1 mm). Check `WM_Position` is recorded. Measure the depth with a ruler. For 1.0 m, `WATER_DEPTH` in `/etc/default/wavemaker` stays empty; any other depth goes there (README, *Water depth*).
+
+  4. **The session file, on the Pi.** As `check2`, but with the 0.8 s run at 30 periods (a 19 s window, not 7 s):
+
+     ```bash
      source ~/ros_ws/install/setup.bash && export ROS_DOMAIN_ID=1
-     mkdir -p ~/wave_sessions/2026-11-17_check && cd ~/wave_sessions/2026-11-17_check
+     mkdir -p ~/wave_sessions/2026-11-18_check && cd ~/wave_sessions/2026-11-18_check
      cat > matrix.csv <<'END'
      kind,period_s,height_m,steepness,n_periods,hs_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
      irregular,,,,,0.03,1.2,3.3,600,1,5,60
-     regular,0.8,,1/60,15,,,,,,3,60
+     regular,0.8,,1/60,30,,,,,,3,60
      regular,1.0,,1/60,15,,,,,,3,60
      regular,1.1,,1/60,15,,,,,,3,60
      regular,1.3,,1/60,15,,,,,,3,60
      regular,1.6,,1/60,15,,,,,,3,60
      END
-     ros2 run rig_controller generate_waves ladertanken matrix.csv -o check2
-     ros2 run rig_controller play_dat check2.dat ladertanken --dry-run
+     ros2 run rig_controller generate_waves ladertanken matrix.csv -o check3
+     ros2 run rig_controller play_dat check3.dat ladertanken --dry-run
      ```
 
      Pass: the dry run lists runs 0-5 without errors; the file is about 17 min long.
 
-  3. **Record and play.** Start catman (WP1, `WM_Position`) with at least 30 s of still water before the file. In a second Pi terminal, the bag (the drive against its setpoint):
+  5. **Record and play.** Start catman (WP1, `WM_Position`) with at least 30 s of still water before the file. In a second Pi terminal, start the bag:
 
      ```bash
      source ~/ros_ws/install/setup.bash && export ROS_DOMAIN_ID=1
-     cd ~/wave_sessions/2026-11-17_check
-     ros2 bag record -o check2_bag /wavemakers/ladertanken/wavemaker_setpoint /wavemakers/ladertanken/wavemaker_position
+     cd ~/wave_sessions/2026-11-18_check
+     ros2 bag record -o check3_bag /wavemakers/ladertanken/wavemaker_setpoint /wavemakers/ladertanken/wavemaker_position
      ```
 
-     Then, in the first terminal:
+     Then, in the first terminal, `ros2 run rig_controller play_dat check3.dat ladertanken`. No `late on the file` warning should show. Stop catman about 30 s after the last run, then the bag (Ctrl-C). Export the record as catman ASCII to the stick as `check3.ASC`.
+
+  6. **Analyse, on the lab PC.**
 
      ```bash
-     ros2 run rig_controller play_dat check2.dat ladertanken
-     ```
-
-     Stop catman about 30 s after the last run, then the bag (Ctrl-C). Export the record as catman ASCII to the stick as `check2.ASC`.
-
-  4. **Analyse, on the lab PC.** Stick in:
-
-     ```bash
-     mkdir -p ~/wave_sessions/2026-11-17_check && cd ~/wave_sessions/2026-11-17_check
-     scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-17_check/{matrix.csv,check2.dat,check2.csv,check2.txt,check2_bag} .
-     cp /media/hydrolab-linux/LADERSCHTIC/check2.ASC .
+     mkdir -p ~/wave_sessions/2026-11-18_check && cd ~/wave_sessions/2026-11-18_check
+     scp -r ladertanken@ladertanken-rpi.local:wave_sessions/2026-11-18_check/{matrix.csv,check3.dat,check3.csv,check3.txt,check3_bag} .
+     cp /media/hydrolab-linux/LADERSCHTIC/check3.ASC .
      source ~/ros_ws/install/setup.bash
      for run in 0 1 2 3 4 5; do
-       ros2 run rig_controller transfer_function check2.dat ladertanken --run $run \
-           --record check2.ASC --probe WP1 --probe-distance-m 3.0 \
+       ros2 run rig_controller transfer_function check3.dat ladertanken --run $run \
+           --record check3.ASC --probe WP1 --probe-distance-m 3.0 \
            --stroke WM_Position --stroke-scale -1.342 --stroke-height-m 1.375 \
            --depth-m 1.0 -o run$run --plot
      done
      ```
 
-     Use the measured depth in `--depth-m`, and `--probe-scale 0.001` if WP1 is exported in mm. Run 0 is the irregular run: its rows are the gain across the band. Runs 1-5 are the regular check: H/target = the measured `gain` / the table's value in the same row. Pass: within ~6 % (the table's scatter); `drive` about 1.0 and `chain` a few %. No `--offset-s` needed: each run is found by itself (`run_timeline_sketch.md`). On 2026-11-17 this gave drift +255 ppm and late starts 0 62 102 142 202 243 ms.
+     Use the measured depth, and `--probe-scale 0.001` if WP1 is exported in mm. Pass:
+     - **`late` within ±20 ms of 0** for every run (2026-11-17: up to 243 ms); what's left is the drive's lag changing with period. If it still rises ~50 ms a run, the Pi didn't get the new `play_dat` (step 2).
+     - **`drift`** near +255 ppm, with rms below a few ms. A clearly different value means one clock changes between boots. That's fine for `transfer_function`, which fits it every time, but note it with step 2's numbers.
+     - **Gains:**
+       - run 0 within 0.5 % of 2026-11-17's run 0 (1.106 at 1.0 s);
+       - runs 2–5 within 1 % of 2026-11-17 (1.107, 1.108, 1.126, 1.128);
+       - `drive` 0.98–1.00 and `chain` a few %.
+     - **0.8 s (run 1):** H/target = `gain` / 0.99. If the 19 s window and run 0 agree on a value more than 2 % from 0.99, update the yaml:
+       1. Set the 0.8 s entry (the second value of `wavemaker_transfer_gain_values`) to that value.
+       2. Run `python3 -m pytest -q rig_controller/test/`, then commit.
+       3. On the Pi: `git pull`, build `wavemaker_bringup` and restart the service.
 
-  5. **The 0.8 s entry,** if step 4 confirms about 0.92 there: in `wavemaker_bringup/config/wavemakers.yaml`, `wavemaker_transfer_gain_values`' second value (0.8 s) from 1.08 to about 1.00, or to the irregular run's value at 0.8 s if its ± is small. Then, on the PC:
-
-     ```bash
-     cd ~/ros_ws/src/hydrolab_rigs
-     python3 -m pytest -q rig_controller/test/   # no test uses the 0.8 s entry; all should still pass
-     git add wavemaker_bringup/config/wavemakers.yaml
-     git commit -m "ladertanken: 0.8 s gain from the 2026-11-17 check" && git push
-     ```
-
-     and on the Pi:
-
-     ```bash
-     cd ~/ros_ws/src/hydrolab_rigs && git pull && cd ~/ros_ws && colcon build --packages-select wavemaker_bringup
-     sudo systemctl restart wavemaker@ladertanken
-     ```
-
-     Note the result and the date in COMMISSIONING.md, *Actuator conversion calibration*.
-
-  6. **`play_dat` on the Pi** (goals on the file's timeline, since 2026-11-17): `git pull` and `colcon build --packages-select rig_controller` there. The next session's `late` line should then be within ±20 ms of 0, with the drift unchanged; `chronyc tracking` on the Pi says whether it is synced (`run_timeline_sketch.md`, *Open* 1).
+     Note the results and the date in COMMISSIONING.md, *Actuator conversion calibration*: the gains, the drift, the late starts and step 2's clock numbers.
 
   7. (Claude, if wanted) `anchor_from_stroke` with a regular first run: the sign check refused `check.ASC` (negative peak -0.882 against +0.868). Refuse only when the negative peak is clearly larger (> 1.2 ×). Not needed for a file that starts with an irregular run.
+
+  Later, if a long session shows it: the drift per run instead of per file (the pieces' rms would grow first), and the drive's lag by period from the `runs` line once the late starts are gone.
 
   Still open from October and 2026-11-05: long runs at 1.5 s and above see the beach reflection after about 21 s; measure before it arrives, or separate incident and reflected waves (3 probes, *Transfer function from every run*).
 
@@ -150,7 +174,7 @@ the items kept there, and finished items, which are removed (see the git history
   Not needed now: Test 2's slow cycles came from the Pi's 200 ms minimum resend time, fixed by `rto_min` 20 ms at every rig start (T18, 2026-11-11; COMMISSIONING.md, *Vertical oscillator*, *Done*). Do it if the gateway's own resends (about 200 ms, not adjustable) become a problem. Remedies, in this order: (1) one process owns the gateway, both drives on one `MGateDriver` (3 requests per cycle for both rigs instead of 6); `set_cycle_callback` then needs more than one subscriber (`IndraDrive` takes the only slot); tests: two `IndraDriveActuator`s on one `FakeMGate` (it plays only one drive today); (2) read the status area only every Nth cycle; (3) FC23 (probably not usable, the inputs are FC4); (4) a slower oscillator poll. Still to check either way: the MGate's maximum number of Modbus TCP clients (3 worked on 2026-11-10). Background: *If Test 2 fails* in `git show c6bba03:oscillator_sketch.md`.
 
 - [ ] **54. Oscillator: the centre of oscillation from `/etc/default/oscillator`.** (`oscillator_bringup/launch/oscillator.launch.py`, `rpi/run.sh`)
-  `VERTICAL_UPRIGHT_M` / `SLOSHING_UPRIGHT_M` override `upright_position_m` at launch, as `WATER_DEPTH` does for the wavemaker, so another centre needs no edit of the tracked yaml on the Pi. Sketch: [oscillator_centre_sketch.md](oscillator_centre_sketch.md).
+  `VERTICAL_UPRIGHT_M` / `SLOSHING_UPRIGHT_M` override `upright_position_m` at launch, as `WATER_DEPTH` does for the wavemaker, so another centre needs no edit of the tracked yaml on the Pi. Sketch: [oscillator_centre_sketch.md](oscillator_centre_sketch.md). 2026-11-18: code, tests (`test_oscillator_centre.py`) and docs done; left: the sketch's *Check on the rig*.
 
 ## Planned features (all rigs)
 

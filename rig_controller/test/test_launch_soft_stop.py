@@ -16,7 +16,7 @@ import pytest
 
 launch = pytest.importorskip('launch')
 from ament_index_python.packages import PackageNotFoundError  # noqa: E402, I100
-from launch.actions import DeclareLaunchArgument  # noqa: E402
+from launch.actions import DeclareLaunchArgument, OpaqueFunction  # noqa: E402
 from launch_ros.actions import Node  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -50,10 +50,18 @@ def context(ld, **overrides):
     return ctx
 
 
+def entities(ld, ctx):
+    """Return the top-level entities, with each OpaqueFunction replaced by what it returns."""
+    out = []
+    for e in ld.entities:
+        out.extend((e.execute(ctx) or []) if isinstance(e, OpaqueFunction) else [e])
+    return out
+
+
 def started(ld, ctx):
     """Return {executable name: whether the node starts}."""
     return {n.node_executable: (n.condition.evaluate(ctx) if n.condition else True)
-            for n in ld.entities if isinstance(n, Node)}
+            for n in entities(ld, ctx) if isinstance(n, Node)}
 
 
 @pytest.mark.parametrize('rig', LAUNCH_FILES)

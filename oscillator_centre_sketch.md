@@ -4,7 +4,10 @@ What to code so an experiment can oscillate around another centre without editin
 `oscillator.yaml` on the Pi, and why. Was T19 in the vertical oscillator's
 sketch (done; `git show c6bba03:oscillator_sketch.md`).
 
-**Status (2026-11-16): not started.**
+**Status (2026-11-18): code, tests and docs done.** Launch argument checked by hand
+(`ros2 param get` shows the override, and the yaml value without it). Tests:
+`rig_controller/test/test_oscillator_centre.py`. Left: *Check on the rig* below; then retire this
+sketch and TODO 54.
 
 ## Problem
 

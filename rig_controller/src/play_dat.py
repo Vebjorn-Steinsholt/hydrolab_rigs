@@ -293,8 +293,8 @@ def goal_time_s(run: Run, previous: Run | None, t0_s: float | None, now_s: float
     On the timeline: the run follows previous in the file and t0_s (the file's time 0 on the
     monotonic clock) is known, so the goal goes at t0_s + the run's start in the file. Waiting
     gap_before_s after the previous result instead adds each goal's latency to the next start
-    (~49 ms a goal on 2026-11-17; run_timeline_sketch.md). Otherwise (the first run, or runs
-    skipped by --runs in between): gap_before_s from now.
+    (~49 ms a goal on 2026-11-17; git show 88363ba:run_timeline_sketch.md). Otherwise (the
+    first run, or runs skipped by --runs in between): gap_before_s from now.
     """
     if previous is not None and t0_s is not None and run.index == previous.index + 1:
         return t0_s + run.start_sample * sample_interval_s, True

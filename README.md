@@ -355,7 +355,11 @@ sudo systemctl stop oscillator@ladertanken      # stops the motion, drive off, b
 ```
 
 By hand: `ros2 launch oscillator_bringup oscillator.launch.py oscillator:=vertical` (default
-`sloshing`). The nodes run in `/oscillators/vertical`.
+`sloshing`). The nodes run in `/oscillators/vertical`. Add `upright_position_m:=0.05` to oscillate
+around another centre (m, + = up) without editing `oscillator.yaml`; empty or left out, the yaml's
+value is used. Press *Return to upright* before the first wave, and check files with
+`play_dat --upright-m 0.05`. Through the service, set `VERTICAL_UPRIGHT_M` in
+`/etc/default/oscillator` instead ([rpi/README.md](rpi/README.md#use-1)).
 
 **Running it next to the wavemaker:** start both services, in either order
 ([rpi/README.md](rpi/README.md#oscillator)). Both drives stay connected; each yaml addresses
@@ -700,8 +704,8 @@ skipped with another, and the run table gives the paddle's peak for each.
 transfer gain from one run of a motion file and a catman record of it: across the whole band
 from one irregular run, or at its one period from a regular run. It prints the gain next to the
 yaml's table; it doesn't change the yaml. The design and its decisions are in the git history
-(`git show c6bba03:transfer_function_sketch.md`); finding each run in the record is in
-`run_timeline_sketch.md`.
+(`git show c6bba03:transfer_function_sketch.md`); finding each run in the record in
+`git show 88363ba:run_timeline_sketch.md`.
 
 **What it needs:**
 

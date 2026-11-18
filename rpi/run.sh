@@ -20,9 +20,15 @@ case "${RIG:-wavemaker}" in
     [[ -n "$WATER_DEPTH" ]] && args+=(water_depth:="$WATER_DEPTH")
     ;;
   oscillator)
-    launch=(oscillator_bringup oscillator.launch.py)
-    args=(port:="${PORT:-8081}" oscillator:="${OSCILLATOR:-sloshing}" soft_stop:=false)
-    ;;
+  osc="${OSCILLATOR:-sloshing}"
+  launch=(oscillator_bringup oscillator.launch.py)
+  args=(port:="${PORT:-8081}" oscillator:="$osc" soft_stop:=false)
+  upright_var="${osc^^}_UPRIGHT_M"           # VERTICAL_UPRIGHT_M or SLOSHING_UPRIGHT_M
+  if [[ -n "${!upright_var}" ]]; then
+    args+=(upright_position_m:="${!upright_var}")
+    echo "$upright_var=${!upright_var}: centre from /etc/default/oscillator, not oscillator.yaml"
+  fi
+  ;;
   *) echo "RIG must be wavemaker or oscillator, not '$RIG'" >&2; exit 1 ;;
 esac
 

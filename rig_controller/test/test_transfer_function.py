@@ -10,7 +10,8 @@ at 200 Hz, with
   - the probe: that stroke at the waterline through a known water (0.83 x linear theory and the
     travel phase to 3 m), plus the probe's noise, in mm.
   - optionally, each run k starting k x late_s after the file says (play_dat's goal latency)
-    and catman's clock running clock_ppm fast against the Pi's (run_timeline_sketch.md).
+    and catman's clock running clock_ppm fast against the Pi's
+    (git show 88363ba:run_timeline_sketch.md).
 The tool must give those back. If it doesn't, the error is in the code, not in the tank.
 
     cd ~/ros_ws/src/hydrolab_rigs

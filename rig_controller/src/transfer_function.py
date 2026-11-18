@@ -245,7 +245,7 @@ def lag_90(eta) -> np.ndarray:
 
 @dataclass
 class Timeline:
-    """Where each run is in the record (decision 1 of run_timeline_sketch.md)."""
+    """Where each run is in the record (decision 1, git show 88363ba:run_timeline_sketch.md)."""
 
     a: dict[int, float]        # run number -> lag at its start [s]
     eps: float                 # drift; 0 if not measured

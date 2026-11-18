@@ -272,6 +272,9 @@ PORT=8081
 OSCILLATOR=vertical
 # The same MGate as in /etc/default/wavemaker. Required.
 MGATE_HOST=192.168.1.70
+# Centre of oscillation in m, + = up for vertical. Empty uses oscillator.yaml.
+VERTICAL_UPRIGHT_M=
+SLOSHING_UPRIGHT_M=
 ```
 
 Extend the sudoers rule (`sudo visudo -f /etc/sudoers.d/wavemaker`) to one line:
@@ -296,6 +299,20 @@ The page is at `http://ladertanken-rpi.local:8081/`. The height field is the str
 peak, in metres: `0.01` moves the sloshing slide between 95 and 105 mm, the vertical slide ±5 mm
 around mid-travel. On the vertical oscillator, Stop holds the slide where it is; *Return to
 upright* brings it to mid-travel.
+
+**Another centre of oscillation.** Set `VERTICAL_UPRIGHT_M` or `SLOSHING_UPRIGHT_M` in
+`/etc/default/oscillator` (m; only the one that matches `OSCILLATOR=` is used), then stop and
+start the unit. Nothing in the repository changes, so `git pull` keeps working. Then:
+- The journal shows `VERTICAL_UPRIGHT_M=0.050: centre from /etc/default/oscillator, not
+  oscillator.yaml`. Without that line, the yaml's centre is used.
+- Press *Return to upright* before the first wave: the slide moves to the new centre.
+- The stroke must fit around the centre. On the vertical, its travel is −0.2…0.2 m, so a stroke
+  must be at most 2 × (0.2 m − |centre|): 0.3 m at a centre of 0.05 m.
+- Check motion files against the same centre: `play_dat <file> vertical --rig oscillator
+  --upright-m 0.050`. Without `--upright-m` it warns that the controller's centre differs from
+  the yaml's.
+- A centre outside the travel fails the start at configure, and the journal names the travel.
+- Empty the line again when the experiment is done; the next user otherwise inherits the centre.
 
 After the unit file changes (`git pull`), copy it again and `sudo systemctl daemon-reload`;
 `run.sh` and `stop.sh` run from the repository.
