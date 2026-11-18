@@ -17,6 +17,8 @@ Designs for open items are in sketches, each linked from its items:
 - [oscillator_centre_sketch.md](oscillator_centre_sketch.md): 54.
 - [gain_estimation_sketch.md](gain_estimation_sketch.md): the long-term follow-up to 43
   (*Transfer function from every run*).
+- [drive_correction_sketch.md](drive_correction_sketch.md): correcting one irregular run's drive
+  signal from its recording, by iteration (no item yet).
 
 - **(rig)** needs the real wavemaker; the unit tests use fakes for the drive and the controller.
 - Paths are relative to the repository root.
