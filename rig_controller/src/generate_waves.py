@@ -262,7 +262,7 @@ def target_height(wm: Wavemaker, spec: RegularSpec) -> float:
 # ---------------------------------------------------------------- signals
 # ---------------------------------------------------------------- irregular waves
 # JONSWAP spectrum, random phases, ramps.
-F_MIN_FACTOR = 0.5   # band: F_MIN_FACTOR * fp .. F_MAX_FACTOR * fp (README, Irregular waves)
+F_MIN_FACTOR = 0.5   # band: F_MIN_FACTOR * fp .. F_MAX_FACTOR * fp (LAB_PERSONNEL.md)
 F_MAX_FACTOR = 3.0
 
 

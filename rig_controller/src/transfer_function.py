@@ -3,7 +3,7 @@
 Transfer function of a wavemaker from one run of a motion file and a catman record.
 
 G_cmd (command -> wave, the gain table's number), and with the flap's stroke G_drive
-(command -> flap) and G_water (flap -> wave). Use: README.md, *Transfer gain from a run*;
+(command -> flap) and G_water (flap -> wave). Use: LAB_PERSONNEL.md, *Transfer gain from a run*;
 the design: git show c6bba03:transfer_function_sketch.md.
 """
 

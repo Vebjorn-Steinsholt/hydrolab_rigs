@@ -294,6 +294,19 @@ E-stop within reach for every step that can move the slide.
 - The MGate configuration of 2026-11-11 (both rigs working, wavemaker fault value `0x0002`) is in
   the repository: [`MGATE_config_backup/`](MGATE_config_backup/README.md).
 
+## Recommended test order on the rig
+
+1. Complete the physical checks above.
+2. Run `poll_rate_probe` and set `poll_interval_ms`; configure the MGate output fault timeout.
+3. Launch one wavemaker with the lifecycle manager off, and check communication without motion
+   (`mgate_example` in monitor mode, or configure only).
+4. Test the lifecycle transitions by hand and confirm that activation causes no motion.
+5. Call `return_to_upright`, then send a very small, low-frequency goal.
+6. Test cancel, then a second goal, deactivation while moving, communication loss and the
+   emergency stop.
+7. Plot `wavemaker_setpoint` against `wavemaker_position` and tune `positioning_velocity_margin`.
+8. Enable the lifecycle manager only after manual testing succeeds.
+
 ## Verified so far
 
 Kept as a record of physical checks already done.
