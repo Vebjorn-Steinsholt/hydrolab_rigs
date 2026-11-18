@@ -3,8 +3,12 @@
 The previous sketch (controller and driver fixes, items 20, 21, 22, 24, 25) is done and in the
 git history (`git show ca87b35:sketch.md`).
 
-Line numbers are as of commit `05e2994`. Each change names the function or block it goes in, so
-it can be found again once earlier edits shift the lines.
+**Status (2026-11-18): not started.** Checked against `9ac7b46`. The code each section changes
+is unchanged, and `options` is still not passed to the soft stop subscription. The line numbers
+below are as of commit `05e2994` (2026-11-05) and are now a few lines off, for example 607-608
+is 611-612. Each change names the function or block it goes in, so find it by that. Item 56
+(log when soft stop messages resume) builds on section 1: see
+[remaining_items_sketch.md](remaining_items_sketch.md).
 
 ## Problem
 
