@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
 from pathlib import Path
+from urllib.parse import urlsplit
 import re
 import socket
 import threading
@@ -461,6 +462,10 @@ def make_handler(node, html_dir):
             except ValueError:
                 length = 0
             raw = self.rfile.read(length) if length > 0 else b''
+            refused = self._refuse_reason()
+            if refused:
+                self._send(HTTPStatus.FORBIDDEN, refused.encode(), 'text/plain')
+                return
             if self.path == '/api/ack':
                 node.acknowledge(self.client_address[0])
                 self._send(HTTPStatus.NO_CONTENT, b'', 'text/plain')
@@ -485,6 +490,21 @@ def make_handler(node, html_dir):
                 self._json(*node.return_to_upright())
             else:
                 self._send(HTTPStatus.NOT_FOUND, b'Not found', 'text/plain')
+
+        def _refuse_reason(self):
+            # Another site open in a lab browser must not move the rig (TODO 57). A cross-origin
+            # page can send a text/plain POST without asking first, but not an application/json
+            # one: the browser asks with OPTIONS, which this server does not answer. The Origin
+            # check refuses one that gets through anyway (a browser sends Origin with every
+            # POST). Clients that send no Origin, such as curl, only need the Content-Type.
+            content_type = (self.headers.get('Content-Type') or '').split(';')[0].strip().lower()
+            if content_type != 'application/json':
+                return 'Send Content-Type: application/json.'
+            origin = self.headers.get('Origin')
+            if origin is not None and urlsplit(origin).netloc.lower() != \
+                    (self.headers.get('Host') or '').lower():
+                return f'Refused: request from {origin}, not from this page.'
+            return ''
 
         def _events(self):
             # A stream with no length: this connection ends with it.

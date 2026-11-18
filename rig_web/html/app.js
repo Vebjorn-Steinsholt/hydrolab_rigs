@@ -122,7 +122,12 @@ function connect() {
   events.onopen = () => $('log').replaceChildren();
   events.onmessage = (event) => {
     // Every acknowledged event keeps the bridge heartbeat going.
-    fetch('api/ack', { method: 'POST' }).catch(() => {});
+    // application/json, or the server refuses it (TODO 57).
+    fetch('api/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }).catch(() => {});
     onUpdate(JSON.parse(event.data));
   };
   events.onerror = () => render();

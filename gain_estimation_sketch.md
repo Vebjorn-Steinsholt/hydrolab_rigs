@@ -4,11 +4,12 @@ What to code so the wavemaker's transfer gain is estimated from all the runs it 
 from occasional calibrations, and why. This is a long-term plan. Stage 0 works with what exists
 today. Stages 1 and 2 need a wave probe that publishes on a ROS topic.
 
-**Status (2026-11-14): not started.** Builds on
+**Status (2026-11-18): not started.** None of the changes below are in the code. The run's
+`.txt` already records depth, kind and probe distance, as free text (change 1). Builds on
 `transfer_function` (done; its sketch: `git show c6bba03:transfer_function_sketch.md`) and on
 [TODO.md](TODO.md) item 43.
 
-Line numbers are as of `master` on 2026-11-14 (`62ab4de`).
+Line numbers are as of `master` on 2026-11-18 (`9ac7b46`).
 
 ## Problem
 
@@ -16,10 +17,13 @@ The gain table in `wavemakers.yaml` (`wavemaker_transfer_gain_periods/values`, l
 gives one value per period, each from a single run:
 
 - The 2026-11-13 values come from item38 run 3 alone, with ±0.05-0.10 at 1.4, 1.5 and 1.8 s.
-- At 1.5 s, two runs disagreed (0.75 against 0.78) and there was no way to combine them.
+  The one exception is 0.8 s. It was set to 0.99 by hand on 2026-11-17, from the regular checks,
+  because item38 run 3 gave 1.08.
+- Before the 2026-11-13 recalibration, two runs at 1.5 s disagreed (0.75 against 0.78), and
+  there was no way to combine them.
 - Each new measurement replaces the old value, by hand, instead of adding to it.
 - Nothing notices when the tank drifts away from the table. The WP1 channel scaled 0.03981
-  instead of 0.0229 m/V was only found by checking by hand (COMMISSIONING.md line 870).
+  instead of 0.0229 m/V was only found by checking by hand (COMMISSIONING.md line 327).
 
 Every run played with a probe in the tank is a measurement of the same function. Pooling them
 gives one smooth curve with an error bar at each period, which tightens with every run and flags
@@ -81,7 +85,7 @@ print the same table.
    (a P-spline) keeps the curve smooth between knots.
 5. **Use the raw bins, with honest errors.**
    - From irregular runs, use `gain_raw` with σ = g · ε (Bendat & Piersol, `frf` at
-     `transfer_function.py:255`), not the smoothed `gain`. Smoothed bins are correlated, so their
+     `transfer_function.py:399`), not the smoothed `gain`. Smoothed bins are correlated, so their
      errors would be counted several times.
    - Hann-windowed Welch bins also leak into their neighbours. Take every second bin, or inflate
      σ by √1.5.
@@ -106,9 +110,10 @@ print the same table.
 
 ## Changes
 
-1. **`rig_controller/src/transfer_function.py`.** In `gain_cols` (line 475), also write the
+1. **`rig_controller/src/transfer_function.py`.** In `gain_cols` (line 659), also write the
    raw error, and the run's facts that the model needs into the CSV, or into the `.txt` that
-   goes with it:
+   goes with it. Take the error from `frf_.eps`, the Bendat & Piersol error, and not from the
+   timeline's `eps` (clock drift), which shares the name:
 
    ```python
    return {f'{name}_raw': g[ok], name: g_s[ok],
@@ -116,8 +121,11 @@ print the same table.
            f'{name}_err': (g_s * smooth(frf_.eps, ok, n_smooth) / np.sqrt(n_smooth))[ok]}
    ```
 
-   The `.txt` from `write_record` gets `depth_m`, `kind`, `probe_distance_m` and the geometry
-   hash. `gain_model` reads them from there, so `--depth-m` above is only a fallback.
+   The `.txt` from `write_record` (line 495) already has the depth, kind and probe distance, as
+   free-text lines (`water depth`, `motion file`, `record`, lines 688-692). Add the geometry
+   hash. Then either give these facts fixed `key value` lines that `gain_model` can parse, or
+   write them as columns in the CSV. `gain_model` reads them from there, so `--depth-m` above is
+   only a fallback.
 
 2. **`rig_controller/src/gain_model.py` (new).** The model file is
    `~/wave_sessions/gain_model_<wavemaker>.csv`, one row per measurement:
@@ -174,8 +182,8 @@ print the same table.
    `offset_from_envelopes` does, and refuses a goal when the offset jumps between goals.
 
    **The window** is the same as `transfer_function` uses: after the ramp and the front's travel
-   `x / c_g`, and before the beach reflection `(2 L − x) / c_g` (COMMISSIONING.md line 990). That
-   needs `beach_distance_m` as a parameter. Reuse `group_velocity` (`transfer_function.py:123`),
+   `x / c_g`, and before the beach reflection `(2 L − x) / c_g` (COMMISSIONING.md line 447). That
+   needs `beach_distance_m` as a parameter. Reuse `group_velocity` (`transfer_function.py:130`),
    moved to `motion_files.py` so a node doesn't import an analysis script.
 
    **Rejects** follow `transfer_function`: `check_still` before the goal, coherence below
@@ -216,15 +224,19 @@ print the same table.
 
 ## Check on the data / rig
 
-1. **Stage 0 on what exists.** Add item38 run 3 (2026-11-05) and the 2026-11-13 regular checks
-   at 1.0 m. Expected:
-   - The model agrees with the 2026-11-13 table to its scatter at 0.8–1.3 s and 1.6 s.
+1. **Stage 0 on what exists.** Add item38 run 3 (2026-11-05), then the 2026-11-17 check
+   (`check2`), then 2026-11-18 (`check3`, TODO 43), all at 1.0 m. Analyse each one with the
+   timeline from `88363ba`. Leave out 2026-11-13: it needed `--offset-s` and a hand-corrected WP1.
+   Expected:
+   - The model agrees with the table to its scatter at 0.9–1.3 s and 1.6 s.
    - It narrows the ±0.05–0.10 at 1.4, 1.5 and 1.8 s.
-   - It flags 0.8 s (the regular check was 8 % low).
+   - At 0.8 s, item38 run 3 (1.08) and the checks (about 0.99-1.02) disagree. Decide by hand
+     which goes in the table. Expect the 3σ flag from decision 7 when the regular runs are
+     added after item38 run 3.
 
    Item38 run 3 must carry the new geometry's hash, because it was analysed with it. Analyse it
    once more with the old geometry and check that those rows are ignored.
-2. **Repeatability.** After item 43's next session, add the runs one at a time. Each table
+2. **Repeatability.** With the sessions from check 1, add the runs one at a time. Each table
    value's ± should shrink about as 1/√runs until it reaches the 1 % floor, and not below.
 3. **Stage 1 against catman.** Record the probe topic and WP1 side by side. Pass if
    `probe_gain`'s rows agree with `transfer_function`'s on the same run within their ±.
@@ -248,8 +260,9 @@ print the same table.
   inputs, gives the complex G and the nonlinear terms (2ω) in one model. Worth it only if the
   frequency-domain model leaves systematic residuals.
 - **Amplitude dependence.** Add steepness H/L as a second variable, g(f, H/L), once there are
-  runs across steepness at the same period. Item 43's next session (1.5 s at 0.074, 0.0835 and
-  0.112 m) is the first such data.
+  runs across steepness at the same period. No session has planned these yet. TODO 43's
+  2026-11-18 check runs everything at 1/60. A series at one period (for example 1.5 s at 1/60,
+  1/40 and 1/28) would be the first such data.
 - **Incident and reflected waves** separated with 2–3 probes (Goda–Suzuki or Mansard–Funke).
   This lifts the reflection window and gives longer, cleaner rows.
 - **Using the model to correct goals,** with a bounded factor between goals. The first version
