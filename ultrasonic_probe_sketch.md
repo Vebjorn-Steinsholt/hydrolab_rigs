@@ -1,0 +1,233 @@
+# Sketch: an ultrasonic wave probe on a ROS topic (HC-SR04, Arduino, RPi4)
+
+What to build so a wave probe publishes on a ROS topic that the wavemaker's Pi can subscribe
+to, and why. This is the probe that stages 1 and 2 of
+[gain_estimation_sketch.md](gain_estimation_sketch.md) need.
+
+**Status (2026-11-19): not started.** Nothing below exists yet: no firmware, no node, no rule,
+no service.
+
+Line numbers are as of `master` on 2026-11-19 (`bb73ba1`).
+
+## Problem
+
+The probes today (WP1 and the others) only reach catman. A run's gain is known only after the
+record is exported and `transfer_function` is run on the lab PC. The gain sketch's live stages
+need η on a topic, stamped, at a steady rate.
+
+The chain:
+
+```text
+HC-SR04 ── Arduino ── USB ── RPi4: ultrasonic_probe ── Ethernet ── RPi5: probe_gain (gain sketch)
+          echo time         sensor_msgs/Range                     η = −(range − still-water mean)
+```
+
+- **Why ultrasonic first:** it is cheap and needs no analogue electronics. It measures a time,
+  so there is no m/V scale to calibrate each day. Its scale comes from the speed of sound in air.
+- **Fallback if it fails the check against WP1:** the probe amplifier's ±10 V output through an
+  ADC (*Open*).
+
+**What changes for the user.**
+
+```bash
+# on the RPi4, once: the rule and the service (decisions 4, 5)
+ros2 topic echo /wavemakers/ladertanken/probe_range --once
+ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
+```
+
+```text
+[ultrasonic_probe] /dev/wave_probe: first line at seq 3; clock fit 1.000214 (+214 ppm), rms 0.4 ms
+[ultrasonic_probe] seq gap 18512 -> 18515: 2 lines lost (3 in 25 min)
+```
+
+### Decisions
+
+1. **The Arduino only measures.** It sends `seq,t_us,echo_us` lines (the firmware below).
+   - The conversion to metres, the limits and the timestamps are on the RPi4, so they change
+     without reflashing.
+   - The speed of sound changes 0.17 % per °C. A scale error goes straight into the gain, so
+     the air temperature is a node parameter, not a constant in the firmware.
+2. **Timestamps come from the Arduino's clock, mapped onto the RPi4's.**
+   - The node fits `t_pi = a + (1 + ε) · t_arduino` to the lower edge of the arrival times. USB
+     latency only ever delays a line, so the lower edge is the true time plus a constant.
+   - Each message is stamped with the mapped time, never with the arrival time.
+   - `micros()` wraps every 71.6 min. Add 2³² when `t_us` goes backwards while `seq` goes
+     forwards.
+   - An Uno's ceramic resonator can be off by a few tenths of a percent. The fit takes that
+     out, as `transfer_function` does for catman's +255 ppm.
+3. **`sensor_msgs/Range`, with REP 117's conventions.**
+   - `range` in metres; `+inf` for no echo (`echo_us` 0). Readings outside min/max are
+     published as they are, and the subscriber treats them as dropouts.
+   - `radiation_type` `ULTRASOUND`, `field_of_view` 0.26 rad (15°), `min_range` 0.02 m and
+     `max_range` 4.0 m.
+   - **QoS reliable, depth 100,** not the best-effort sensor default. The gain analysis needs
+     every sample, and a lost sample is a gap in the FRF.
+4. **A fixed device name for the port, as on the oscillator Pi.** A udev rule gives
+   `/dev/wave_probe` and keeps ModemManager away from the port, as
+   [rpi/99-linmot-bridge.rules](rpi/99-linmot-bridge.rules) does for the LinMot bridge. That
+   rule matches any Uno R3. If the probe's board is an Uno R3 too, match by its serial number,
+   in case both boards ever end up on one Pi.
+5. **The RPi4 is a pure publisher.**
+   - A systemd unit starts the node at boot. It is like `soft_stop@.service`, with
+     `ROS_DOMAIN_ID=1` from an env file.
+   - Nothing on the RPi4 talks to the controller. If the RPi4 is off, the waves run as before,
+     and `probe_gain` only logs that it has no probe.
+6. **Clocks between the Pis: chrony, with the RPi4 following the RPi5.**
+   - A constant offset doesn't change |gain| (gain sketch, stage 1, *Clocks*), so a few ms is
+     fine for stage 1.
+   - Phase (the gain sketch's *Later*) needs better than 1 ms. Check `chronyc tracking` on the
+     RPi4.
+   - Connect the Pis by wired Ethernet, not WiFi: WiFi gives latency spikes and lost DDS
+     packets.
+7. **η is formed on the RPi5, from the still water before each run.**
+   - η = −(range − mean range over the still-water window), the window `check_still` already
+     uses (`STILL_S`, 10 s).
+   - No mount height is needed, and slow changes in water level between runs drop out.
+   - This is done in `probe_gain`, not in this node, so the topic stays a plain distance.
+
+## Changes
+
+1. **`firmware/hcsr04_probe/hcsr04_probe.ino` (new).**
+   - 20 Hz on a `micros()` schedule; a period skipped in full restarts the schedule instead of
+     catching up.
+   - A trigger pulse of 10 µs, and `t_us` taken just before it.
+   - `pulseIn(ECHO_PIN, HIGH, 30000)`: 0 on timeout, so no 1 s stall.
+   - 115200 baud; one line per ping: `seq,t_us,echo_us`.
+
+   ```cpp
+   const int TRIG_PIN = 9;
+   const int ECHO_PIN = 10;
+   const unsigned long SERIAL_BAUD = 115200;
+   const unsigned long PERIOD_US = 50000;    // 20 Hz; the datasheet recommends at least 60 ms
+   const unsigned long TIMEOUT_US = 30000;   // longest echo waited for: about 5 m round trip
+   unsigned long next_us = 0;
+   unsigned long seq = 0;
+
+   void setup() {
+     pinMode(TRIG_PIN, OUTPUT);
+     digitalWrite(TRIG_PIN, LOW);
+     pinMode(ECHO_PIN, INPUT);
+     Serial.begin(SERIAL_BAUD);
+     next_us = micros();
+   }
+
+   void loop() {
+     unsigned long now = micros();
+     if ((long)(now - next_us) < 0) return;
+     next_us += PERIOD_US;
+     if ((long)(now - next_us) >= 0) next_us = now + PERIOD_US;   // a whole period behind
+     digitalWrite(TRIG_PIN, LOW);
+     delayMicroseconds(2);
+     unsigned long t_us = micros();
+     digitalWrite(TRIG_PIN, HIGH);
+     delayMicroseconds(10);
+     digitalWrite(TRIG_PIN, LOW);
+     unsigned long echo_us = pulseIn(ECHO_PIN, HIGH, TIMEOUT_US);   // 0 on timeout
+     Serial.print(seq++); Serial.print(',');
+     Serial.print(t_us);  Serial.print(',');
+     Serial.println(echo_us);
+   }
+   ```
+
+   The header comment gives the line format, the range formula and "the reader skips lines
+   until one parses" (opening the port resets the board).
+
+2. **`rig_controller/src/ultrasonic_probe.py` (new).** An rclpy node with pyserial, and pure
+   functions so the tests need no hardware:
+
+   ```python
+   def parse_line(text) -> tuple[int, int, int] | None:            # seq, t_us, echo_us; None if bad
+   def range_m(echo_us, air_temp_c) -> float:                      # +inf for 0
+   class Unwrap:                                                   # micros() 2**32 wraps (decision 2)
+       def __call__(self, seq, t_us) -> int:
+   class ClockFit:                                                 # decision 2
+       def add(self, t_arduino_s, t_arrival_s) -> None:            # lower edge, sliding window
+       def to_pi(self, t_arduino_s) -> float:
+   ```
+
+   - **Parameters:** `port` (`/dev/wave_probe`), `baud` (115200), `air_temp_c` (20.0),
+     `frame_id` (`wp_us1`), `min_range_m`, `max_range_m`, `field_of_view_rad`,
+     `fit_window_s` (300).
+   - **Topic:** `probe_range`, in the rig's namespace (`/wavemakers/<pi>/probe_range`) through
+     `__ns`, as `soft_stop.sh` does.
+   - **Logging:**
+     - the first line that parses;
+     - each `seq` gap, with a running count;
+     - the clock fit every 5 min (ε in ppm, rms);
+     - a warning when more than 10 % of the last 60 s are `+inf`.
+   - **Install:** add it to `install(PROGRAMS …)` in `rig_controller/CMakeLists.txt`, next to
+     `soft_stop.py`. Add `python3-serial` to `rig_controller/package.xml`.
+
+3. **`rpi/99-wave-probe.rules` (new).** As `99-linmot-bridge.rules`: `ID_MM_DEVICE_IGNORE`,
+   and the symlink `wave_probe`. Match by `ATTRS{serial}` when the board is an Uno R3
+   (decision 4).
+
+4. **`rpi/probe@.service` and `rpi/probe.sh` (new).** As `soft_stop@.service` and
+   `soft_stop.sh`:
+   - `EnvironmentFile=/etc/default/probe`, with `ROS_DOMAIN_ID`, `RIG_PI` (the RPi5 the probe
+     belongs to, for the namespace) and `AIR_TEMP_C`.
+   - `ExecStart` runs `ros2 run rig_controller ultrasonic_probe --ros-args -r __ns:=/wavemakers/$RIG_PI -p air_temp_c:=$AIR_TEMP_C`.
+   - `Restart=on-failure`, because a USB unplug should not need a person to fix it. This
+     differs from the rig units, which use `Restart=no`, but the probe moves nothing.
+
+5. **RPi4 setup, in `rpi/README.md`.**
+   - A section *The probe Pi* with these steps: ROS 2 Jazzy, the workspace with
+     `rig_controller` only (`colcon build --packages-select rig_interfaces rig_controller`),
+     the rule, the service, chrony following the RPi5, and wired Ethernet.
+
+## Tests and docs
+
+- `test_ultrasonic_probe.py`, no hardware:
+  - `parse_line`: good lines, a partial first line, text and empty lines give `None`.
+  - `range_m`: 5824 µs at 20 °C (c = 343.42 m/s) gives 1.000 m ± 0.1 mm; 0 gives `+inf`;
+    the same echo at 30 °C is 1.8 % longer.
+  - `Unwrap`: a `t_us` sequence across 2³² stays monotonic.
+  - `ClockFit`: arrivals = true time × (1 + 300 ppm) + 2 ms + random latency 0–15 ms. The
+    mapped times are within 0.5 ms of the truth, and ε within 20 ppm.
+  - A fake serial port (a pipe) through the node publishes one Range per line, with the
+    stamps from the fit, and logs a gap.
+- README: in *Lab computers*, the RPi4 and what it runs. [TODO.md](TODO.md): list this sketch
+  with the others, and add it to *Order of the sketches* before gain model stage 1.
+
+## Check on the rig
+
+1. **On the bench.** The HC-SR04 over a still tray of water at 0.3, 0.5 and 1.0 m, measured
+   with a ruler:
+   - Range within 3 mm of the ruler, with the air temperature set.
+   - Noise (std over 60 s) of a few mm.
+   - No `+inf` on still water.
+   - 20 Hz in `ros2 topic hz`.
+2. **Clocks.**
+   - `chronyc tracking` on the RPi4 shows below 1 ms.
+   - The node's ε is steady over 30 min, and its rms is below 1 ms.
+3. **Against WP1.** The HC-SR04 at WP1's distance from the wavemaker, a few cm to the side, at
+   least 0.3 m above the water.
+   - Record catman and the topic (`ros2 bag record`) on the same file as TODO 43's check: one
+     irregular and the regular runs.
+   - `transfer_function` on both, the topic's bag exported as CSV.
+   - Pass:
+     - the gains agree within their ±;
+     - coherence at or above `COHERENCE_MIN` in the band;
+     - dropouts below 10 %.
+4. **Where it stops working.** Increase steepness at one period, for example 1.5 s at 1/60,
+   1/40 and 1/28 (the series the gain sketch's *Later* wants). Note the steepness at which
+   dropouts pass 10 %. Above that, use WP1 or the ADC.
+
+## Open
+
+- **The board:** an Uno R3, a Nano, or an Adalogger (a crystal clock, so decision 2's ε is
+  smaller).
+- **The mount:** height above the water and a rigid fixing; at 0.5 m the beam covers about
+  13 cm of water.
+- **The 20 Hz rate:** if false short readings (wall echoes) show at 20 Hz, use 16.7 Hz
+  (`PERIOD_US` 60000).
+- **The fallback:** the probe amplifier's ±10 V output through an ADC, if check 3 or 4 fails:
+  - an Adalogger's own 12-bit ADC behind a resistor level shift;
+  - an ADS1115;
+  - on the RPi5 itself, which needs no RPi4.
+
+## Later, not in the first pass
+
+- **Air temperature measured, not set.** A DS18B20 on the same Arduino, sent as a fourth field.
+- **Several probes.** One Arduino triggers them in turn; `frame_id` per probe. Needed for
+  incident and reflected waves (gain sketch, *Later*).

@@ -19,6 +19,23 @@ Designs for open items are in sketches, each linked from its items:
   (*Transfer function from every run*).
 - [drive_correction_sketch.md](drive_correction_sketch.md): correcting one irregular run's drive
   signal from its recording, by iteration (no item yet).
+- [ultrasonic_probe_sketch.md](ultrasonic_probe_sketch.md): an HC-SR04 wave probe on a ROS
+  topic, through an Arduino and an RPi4, for gain model stage 1 (no item yet).
+
+**Order of the sketches:**
+
+1. **36**, then **59** and **58** (before the next rig session).
+2. The rest of [remaining_items_sketch.md](remaining_items_sketch.md) in its own *Order*, with
+   the other controller_fixes sections (29, 30, 31, 32) before 61.
+3. **54**'s *Check on the rig*, when the rig is free.
+4. After **43**: [gain_estimation_sketch.md](gain_estimation_sketch.md) stage 0. Begin with
+   [drive_correction_sketch.md](drive_correction_sketch.md) change 1 (`analyse` split into
+   `measured_run`), because gain-model change 1 edits `analyse` too.
+5. The rest of [drive_correction_sketch.md](drive_correction_sketch.md). It uses the gain model
+   as Ĥ once stage 0 exists.
+6. [ultrasonic_probe_sketch.md](ultrasonic_probe_sketch.md): the probe on a topic, and its
+   check against WP1. Can start any time; it needs only the RPi4 and the bench.
+7. Gain model stages 1 and 2, once the probe passes that check.
 
 - **(rig)** needs the real wavemaker; the unit tests use fakes for the drive and the controller.
 - Paths are relative to the repository root.

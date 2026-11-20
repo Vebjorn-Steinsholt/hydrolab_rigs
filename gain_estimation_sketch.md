@@ -2,7 +2,8 @@
 
 What to code so the wavemaker's transfer gain is estimated from all the runs it plays, not just
 from occasional calibrations, and why. This is a long-term plan. Stage 0 works with what exists
-today. Stages 1 and 2 need a wave probe that publishes on a ROS topic.
+today. Stage 1 needs a wave probe that publishes on a ROS topic:
+[ultrasonic_probe_sketch.md](ultrasonic_probe_sketch.md).
 
 **Status (2026-11-18): not started.** None of the changes below are in the code. The run's
 `.txt` already records depth, kind and probe distance, as free text (change 1). Builds on
@@ -176,7 +177,12 @@ print the same table.
    - **File goals (irregular):** at the end of the clean window, the node calls
      `transfer_function.frf` on the setpoint and η, resampled onto one time base.
 
-   **Clocks.** The probe's stamps and the Pi's need not agree. A constant offset only rotates
+   **The probe** is the HC-SR04 on the RPi4, published as `sensor_msgs/Range` on
+   `/wavemakers/<pi>/probe_range` ([ultrasonic_probe_sketch.md](ultrasonic_probe_sketch.md)).
+   η = −(range − the mean over the still water before the goal) (its decision 7).
+
+   **Clocks.** The probe's stamps come from the RPi4, kept to the RPi5 by chrony (the probe
+   sketch's decision 6), and need not agree exactly. A constant offset only rotates
    the phase of S_uy, so |H1| and the gain are unchanged, as long as the offset is small against
    a segment (`segment_s`). The node still logs the offset it finds by cross-correlation, as
    `offset_from_envelopes` does, and refuses a goal when the offset jumps between goals.
@@ -245,8 +251,8 @@ print the same table.
 
 ## Open
 
-- Which probe goes on a topic, and its message, rate and mount height
-  (`sensor_msgs/Range` is assumed).
+- Whether the HC-SR04 passes the probe sketch's check 3 against WP1. If not, its fallback is
+  the probe amplifier's ±10 V output through an ADC.
 - `beach_distance_m`: from the drawings, or from the 21 s arrival at 1.5 s.
 - Knot spacing and λ: start at 0.1 Hz and 0.97, and revisit after stage 0 on real data.
 - Whether the yaml table should later be generated from the model, as the model's values at the

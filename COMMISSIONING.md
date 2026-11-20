@@ -154,6 +154,20 @@ Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
   stroke stayed at 97.3 % (2 s) and 98.8 % (3 s), lag 160-180 ms, no drive error. 0.3 m/s
   (`max_velocity_rpm` 1800) is safe to use; the axis allows about 1.0 m/s (ball nut), not
   tested above 0.3 m/s. TODO 51.
+- Endurance (passed 2026-11-20, naked load, no water; `~/oscillator_sessions/2026-11-20_endurance`
+  on the Pi, `Endurance.ASC` on the stick): one `generate_oscillations` file of 30 regular runs,
+  each 600 s with 10 s pauses (2.0 s 20 mm, 1.5 s 15 mm, 3.0 s 30 mm, 2.5 s 25 mm, 1.2 s 10 mm,
+  six times; at most 0.031 m/s and 0.78 m/s³), 5 h 5 min played with `play_dat` in tmux.
+  - All 30 runs succeeded; no `late on the file`; run 29 started 7 ms off its time in the file.
+    The journal's one `No Soft stop message received` was at the service start, before the file
+    (item 36).
+  - `oscillator_position` (bag): 900 036 messages, a steady 50 Hz (median 20.00 ms, p99 20.2 ms);
+    the only gaps over 100 ms are the 29 pauses.
+  - Pi: used memory 691 MiB at the start, 461 MiB at the end; 52.1 °C both times.
+  - Slide (catman `6047 Position`, 200 Hz; a sine fit per 20 periods, ramps and 5 s skipped):
+    the stroke is the same in all six repeats and from the start to the end of each run, within
+    0.01 mm: 99.3 % (3.0 s), 98.8 % (2.5 s), 98.3 % (2.0 s), 95.9 % (1.5 s), 92.8 % (1.2 s).
+    Run 25 against run 0 (2.0 s): 19.65 against 19.66 mm.
 - Wavemaker fault value `0x0002` (2026-11-11, was all `00`): after a stop or a `kill -9` the drive
   goes straight to A0012 (operating mode, no torque) instead of parameter mode, so a start after
   the flap fell to its rest no longer trips F2074 (checked from 0° to 211°).
