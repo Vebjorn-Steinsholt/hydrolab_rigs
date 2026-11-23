@@ -18,7 +18,7 @@ need η on a topic, stamped, at a steady rate.
 The chain:
 
 ```text
-HC-SR04 ── Arduino ── USB ── RPi4: ultrasonic_probe ── Ethernet ── RPi5: probe_gain (gain sketch)
+HC-SR04 ── Arduino ── USB ── RPi4: wave_probe_node ── Ethernet ── RPi5: probe_gain (gain sketch)
           echo time         sensor_msgs/Range                     η = −(range − still-water mean)
 ```
 
@@ -36,8 +36,8 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
 ```
 
 ```text
-[ultrasonic_probe] /dev/wave_probe: first line at seq 3; clock fit 1.000214 (+214 ppm), rms 0.4 ms
-[ultrasonic_probe] seq gap 18512 -> 18515: 2 lines lost (3 in 25 min)
+[wave_probe_node] /dev/wave_probe: first line at seq 3; clock fit 1.000214 (+214 ppm), rms 0.4 ms
+[wave_probe_node] seq gap 18512 -> 18515: 2 lines lost (3 in 25 min)
 ```
 
 ### Decisions
@@ -132,31 +132,15 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
    The header comment gives the line format, the range formula and "the reader skips lines
    until one parses" (opening the port resets the board).
 
-2. **`rig_controller/src/ultrasonic_probe.py` (new).** An rclpy node with pyserial, and pure
-   functions so the tests need no hardware:
-
-   ```python
-   def parse_line(text) -> tuple[int, int, int] | None:            # seq, t_us, echo_us; None if bad
-   def range_m(echo_us, air_temp_c) -> float:                      # +inf for 0
-   class Unwrap:                                                   # micros() 2**32 wraps (decision 2)
-       def __call__(self, seq, t_us) -> int:
-   class ClockFit:                                                 # decision 2
-       def add(self, t_arduino_s, t_arrival_s) -> None:            # lower edge, sliding window
-       def to_pi(self, t_arduino_s) -> float:
-   ```
-
-   - **Parameters:** `port` (`/dev/wave_probe`), `baud` (115200), `air_temp_c` (20.0),
-     `frame_id` (`wp_us1`), `min_range_m`, `max_range_m`, `field_of_view_rad`,
-     `fit_window_s` (300).
+2. **The node: `wave_probe/src/wave_probe_node.py` (new), in its own package `wave_probe`.**
+   Worked out in [wave_probe_node_sketch.md](wave_probe_node_sketch.md).
+   - The package is separate so the RPi4 doesn't have to build the drivers that `rig_controller`
+     depends on.
+   - The sketch covers the serial thread, the clock fit to the lower edge of the arrivals with
+     its latency floor, the stamp at `t_trigger + echo / 2`, wraps, resets and reconnects, and
+     the parameters.
    - **Topic:** `probe_range`, in the rig's namespace (`/wavemakers/<pi>/probe_range`) through
      `__ns`, as `soft_stop.sh` does.
-   - **Logging:**
-     - the first line that parses;
-     - each `seq` gap, with a running count;
-     - the clock fit every 5 min (ε in ppm, rms);
-     - a warning when more than 10 % of the last 60 s are `+inf`.
-   - **Install:** add it to `install(PROGRAMS …)` in `rig_controller/CMakeLists.txt`, next to
-     `soft_stop.py`. Add `python3-serial` to `rig_controller/package.xml`.
 
 3. **`rpi/99-wave-probe.rules` (new).** As `99-linmot-bridge.rules`: `ID_MM_DEVICE_IGNORE`,
    and the symlink `wave_probe`. Match by `ATTRS{serial}` when the board is an Uno R3
@@ -166,26 +150,23 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
    `soft_stop.sh`:
    - `EnvironmentFile=/etc/default/probe`, with `ROS_DOMAIN_ID`, `RIG_PI` (the RPi5 the probe
      belongs to, for the namespace) and `AIR_TEMP_C`.
-   - `ExecStart` runs `ros2 run rig_controller ultrasonic_probe --ros-args -r __ns:=/wavemakers/$RIG_PI -p air_temp_c:=$AIR_TEMP_C`.
+   - `ExecStart` runs `ros2 run wave_probe wave_probe_node` with the namespace, the package's
+     params file and `air_temp_c:=$AIR_TEMP_C` (the node sketch, change 5).
    - `Restart=on-failure`, because a USB unplug should not need a person to fix it. This
      differs from the rig units, which use `Restart=no`, but the probe moves nothing.
 
 5. **RPi4 setup, in `rpi/README.md`.**
-   - A section *The probe Pi* with these steps: ROS 2 Jazzy, the workspace with
-     `rig_controller` only (`colcon build --packages-select rig_interfaces rig_controller`),
-     the rule, the service, chrony following the RPi5, and wired Ethernet.
+   - A section *The probe Pi* with these steps: Ubuntu Server 24.04 (as the RPi5), ROS 2 Jazzy,
+     the workspace with `wave_probe` only (`colcon build --packages-select wave_probe`), the
+     rule, the service, and wired Ethernet.
+   - **Chrony on the RPi5 first.** It has `systemd-timesyncd`, which can't serve time. Install
+     chrony there with `allow 192.168.1.0/24` and `local stratum 10`, then point the RPi4 at
+     it. The commands are in the node sketch, *Before the node*.
 
 ## Tests and docs
 
-- `test_ultrasonic_probe.py`, no hardware:
-  - `parse_line`: good lines, a partial first line, text and empty lines give `None`.
-  - `range_m`: 5824 µs at 20 °C (c = 343.42 m/s) gives 1.000 m ± 0.1 mm; 0 gives `+inf`;
-    the same echo at 30 °C is 1.8 % longer.
-  - `Unwrap`: a `t_us` sequence across 2³² stays monotonic.
-  - `ClockFit`: arrivals = true time × (1 + 300 ppm) + 2 ms + random latency 0–15 ms. The
-    mapped times are within 0.5 ms of the truth, and ε within 20 ppm.
-  - A fake serial port (a pipe) through the node publishes one Range per line, with the
-    stamps from the fit, and logs a gap.
+- The node's tests are in [wave_probe_node_sketch.md](wave_probe_node_sketch.md), *Tests*.
+- `udevadm test` on the rule with the board plugged in shows the symlink `wave_probe`.
 - README: in *Lab computers*, the RPi4 and what it runs. [TODO.md](TODO.md): list this sketch
   with the others, and add it to *Order of the sketches* before gain model stage 1.
 

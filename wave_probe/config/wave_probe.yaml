@@ -1,0 +1,14 @@
+/**/wave_probe_node:
+  ros__parameters:
+    port: /dev/wave_probe
+    baud: 115200
+    frame_id: wp_us1
+    air_temp_c: 20.3
+    min_range_m: 0.02
+    max_range_m: 4.0
+    field_of_view_rad: 0.26
+    fit_window_s: 300.0
+    fit_block_s: 10.0
+    latency_floor_s: 0.002
+    reopen_s: 2.0
+    dropout_warn: 0.10

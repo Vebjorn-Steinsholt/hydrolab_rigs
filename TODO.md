@@ -20,7 +20,8 @@ Designs for open items are in sketches, each linked from its items:
 - [drive_correction_sketch.md](drive_correction_sketch.md): correcting one irregular run's drive
   signal from its recording, by iteration (no item yet).
 - [ultrasonic_probe_sketch.md](ultrasonic_probe_sketch.md): an HC-SR04 wave probe on a ROS
-  topic, through an Arduino and an RPi4, for gain model stage 1 (no item yet).
+  topic, through an Arduino and an RPi4, for gain model stage 1 (no item yet). Its node, in
+  detail: [wave_probe_node_sketch.md](wave_probe_node_sketch.md).
 
 **Order of the sketches:**
 
