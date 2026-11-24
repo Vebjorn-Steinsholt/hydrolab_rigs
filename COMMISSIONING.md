@@ -96,6 +96,7 @@ behind the wavemaker's drive since 2026-11-10). What to code, and why:
 - [Starting the rigs](STARTUP.md#oscillator-ladertanken), [Done](#done), [Open](#open)
 - [The oscillator drive](#the-oscillator-drive-read-2026-11-06): the parameters
 - [Procedures](#procedures): monitor, brake, test move, dry run, fault timeout, recorded runs
+- [Test 4: speed above 0.3 m/s](#test-4-speed-above-03-ms-passed-2026-11-24)
 - [Backups](#backups-usb-stick-laderschtic)
 
 Tests 1-3, the log of 2026-11-09/10 and the PROFIBUS diagnosis (2026-11-06/09) are done; their
@@ -152,8 +153,15 @@ Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
   `rto_min` 20 ms on the Pi's route to the gateway, set at every rig start (T18).
 - Test 3, the speed limit (passed 2026-11-12, naked load): up to 0.257 m/s and ±122.5 mm the
   stroke stayed at 97.3 % (2 s) and 98.8 % (3 s), lag 160-180 ms, no drive error. 0.3 m/s
-  (`max_velocity_rpm` 1800) is safe to use; the axis allows about 1.0 m/s (ball nut), not
-  tested above 0.3 m/s. TODO 51.
+  (`max_velocity_rpm` 1800) is safe to use; the axis allows about 1.0 m/s (ball nut). Raised to
+  0.45 m/s by Test 4. TODO 51.
+- Test 4, speed above 0.3 m/s (passed 2026-11-24, naked load, checked visually with the
+  mechanic, no bags): every run of levels 1-3 (`max_velocity_rpm` 1800, 2400, 2700; up to
+  0.36 m at 2.7 s, 0.42 m/s, 2.3 m/s³) without a drive error, new vibration or noise; the
+  rejection check at 2700 (0.36 m at 2.4 s, 0.47 m/s) was rejected. The yaml now has 2700
+  (0.45 m/s). Faster goals within ±0.2 m are above the 3 m/s³ jerk limit (S-0-0193), so a
+  higher speed limit gains nothing until the jerk is raised (*Open*). Details:
+  [Test 4](#test-4-speed-above-03-ms-passed-2026-11-24).
 - Endurance (passed 2026-11-20, naked load, no water; `~/oscillator_sessions/2026-11-20_endurance`
   on the Pi, `Endurance.ASC` on the stick): one `generate_oscillations` file of 30 regular runs,
   each 600 s with 10 s pauses (2.0 s 20 mm, 1.5 s 15 mm, 3.0 s 30 mm, 2.5 s 25 mm, 1.2 s 10 mm,
@@ -180,11 +188,31 @@ Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
   All runs so far were unloaded: a baseline, don't tune or compensate from them.
 - [ ] Drive tuning with the drive's owner (Robert, from about 2026-11-23): Kv (S-0-0104 = 1.0),
   acceleration feedforward, jerk S-0-0193 (3 m/s³) for faster strokes. TODO item 46.
+- [ ] Where the lag comes from, before tuning: in the IndraWorks oscilloscope during 10 mm at 1 s,
+  plot S-0-0258 (target from the bus), S-0-0047 (position command) and S-0-0051 (actual). If
+  S-0-0047 already lags S-0-0258, the drive's move planning is the cause (speed cap, S-0-0193); if
+  S-0-0051 lags S-0-0047, the loop is (Kv, feedforward, velocity loop). Then the same run with
+  `positioning_velocity_margin` 1.2, 1.5 and 2.0. The cap is also clipped to `max_velocity_rpm`,
+  so goals near 0.45 m/s get almost no margin (0.42 m/s: 1.07 ×).
+- [ ] With the load: re-run the drive optimisation (P-0-0165…0172) for the velocity loop
+  (Kp 0.6 Nm/(rad/s), Tn 3.0 ms today).
+- [ ] Why were the jerk limits set? S-0-0193 = 3 m/s³ and S-0-0349 = 0.1 m/s³ differ from
+  Rexroth's default 0 (off), and nothing records who set them or why (mechanics: AT5 belt, ball
+  nut, coupling to the load; or vibration). Ask Robert and whoever commissioned the rig; failing
+  that, check the belt, nut and coupling datasheets. Don't raise either before this is known
+  (2026-11-24).
+- [ ] Drive Halt jerk S-0-0349 = 0.1 m/s³ (the wavemaker has 0, off): check whether
+  `IndraDrive::disable()` (Drive Halt, `indradrive.cpp:279`) can start while the slide moves,
+  for example a service stop during a run. Measure the stopping distance with one service stop
+  during 10 mm at 2 s. Until then, don't stop the service during fast runs. Set S-0-0349 to 0 or
+  a higher value with the drive's owner?
 - [ ] P-0-4088 = 0x002A makes a bus failure only a warning (the last command is kept); 0x0028
   would make it an error. The wavemaker has the default 00 (a bus failure is an F4xxx error),
   which the controller's fault path relies on. Proposal: 0x0028. Decide with the drive's owner.
 - [ ] Brake under load: does the stop reaction (P-0-0119 = 0, "best possible deceleration")
-  brake the slide before the brake engages, and where does the slide rest when disabled?
+  brake the slide before the brake engages, and where does the slide rest when disabled? On
+  paper yes: velocity command reset at the torque limit, brake at standstill (Reference Book
+  p. 447, 2026-11-24).
 - [ ] Is the axis counterbalanced, or does the motor hold the load? The brake is 5 Nm (about
   1.5 kN at 20 mm/rev).
 - [ ] Set up slave 3 from `RX060107.gsd` instead of RX03 with edited user parameters, so the MGate
@@ -217,7 +245,7 @@ wavemaker's `WMDefault.par`:
 |---|---|---|---|
 | Hardware | FWA MPB-**05**V20, HCS02.1E-W0028, MSK050C-0300 (`-UG1`, brake), CSB01.1**N**-PB | MPB-04V24, HCS03.1E-W0070, MSK071E-0450 (`-UG0`), CSB01.1C-PB | **MPx-05 needs `RX060107.gsd`** (Fail_Safe): the repo's GSD files only cover up to MPB-04. See *PROFIBUS diagnosis log* |
 | P-0-4084 profile | 0xFFFE | 0xFFFE | ✓ |
-| S-0-0032 operating mode | 0x001B | 0x001B | ✓ |
+| S-0-0032 operating mode | 0x001B | 0x001B | ✓ "Drive controlled interpolation, lagless, encoder 1" (S-0-0292 table, Reference Book p. 218): the drive plans its own move to each cyclic target (S-0-0258), limited by S-0-0259, S-0-0260 and S-0-0193. Lagless: velocity feedforward (P-0-0040) cancels the position loop's lag error |
 | P-0-4080 inputs | P-0-4078, **S-0-0051**, S-0-0040, S-0-0390 (14 bytes) | P-0-4078, S-0-0386, S-0-0040, S-0-0390 | ✓ length. S-0-0051 is the motor encoder position, the same as S-0-0386 with one encoder |
 | P-0-4081 outputs | P-0-4077, S-0-0258, S-0-0259, S-0-0108 (12 bytes) | the same | ✓ |
 | P-0-4088 master communication config | 0x002A | not in the file (default 0) | Bits 15/14 = 00: commands from PROFIBUS. **Bits 2/1 = 01: a bus failure is only a warning (E4xxx) and the last command is kept** (Reference Book R911297317-08, p. 1335). See *Side findings* |
@@ -232,12 +260,19 @@ wavemaker's `WMDefault.par`:
 | S-0-0055 position polarities | 0x1F (all inverted) | 0x10 | Result: + = down. Left unchanged; the sign is flipped in the controller (`drive_direction: -1`) |
 | S-0-0091 velocity limit | 96 000 mm/min (1.6 m/s) | | — |
 | S-0-0260 positioning acceleration | 20 000 mm/s² (20 m/s²) | 1000 rad/s² | — |
-| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | Expected to limit the oscillation; below 3 m/s³ it did not |
+| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | Expected to limit the oscillation; below 3 m/s³ it did not. Rexroth's default is 0 (filter off, Reference Book p. 189), so 3 m/s³ was set on purpose; why is not known (*Open*). Allows only 6 of the 21 KC runs of 2026-11-24 |
 | P-0-0525 / P-0-0540 holding brake | 0x0004 / **5 Nm** | 0x0000 / 0 Nm | Brake configured; about 1.5 kN at 20 mm/rev |
-| P-0-0119 best possible deceleration | 0 | 0 | Check its meaning for a vertical axis |
+| P-0-0119 best possible deceleration | 0 | 0 | On F2/F3/F4 errors: velocity command reset, braking at the torque limit (P-0-0109); the holding brake engages at standstill or after S-0-0273 (Reference Book p. 447). Not yet seen under load (*Open*) |
 | S-0-0273 max drive-off delay | 10 000 ms | | — |
+| S-0-0372 Drive Halt acceleration | 10 000 mm/s² (10 m/s²) | 10 000 rad/s² | Deceleration of a Drive Halt; `IndraDrive::disable()` uses one (`indradrive.cpp:279`) |
+| S-0-0349 bipolar jerk limit | **100 mm/s³ (0.1 m/s³)** | 0 (off) | Jerk filter of Drive Halt and of the quick stop (P-0-0119 = 2); not used by P-0-0119 = 0 (Reference Book p. 240). A jerk-limited stop from v takes about 2√(v/j): from 0.03 m/s about 1.1 s and 17 mm, from 0.3 m/s about 3.5 s and 0.5 m, beyond the ±211 mm limits. Not measured (*Open*). Default 0 (off), so also set on purpose; why is not known |
+| S-0-0100 / S-0-0101 velocity loop Kp / Tn | 0.600 Nm/(rad/s) / 3.0 ms | 2.500 / 5.0 ms | From the drive optimisation (P-0-0165…0172: travel −35.6…64.4 mm), probably run without the load |
+| S-0-0348 / P-0-1126 acceleration feedforward | 0 / 0 | 0 / 0 | Off |
+| P-0-0004 velocity loop smoothing, P-0-1120 velocity loop filters | 250 µs, all four filters off | 500 µs, off | No added lag |
+| S-0-0092, S-0-0082/83, P-0-0109 torque limits | 300 %, ±400 %, 400 % | 400 %, 400 %, 400 % | Not limiting unloaded |
+| P-0-0187 position command processing | 1 (cubic approximation) | 1 | Only used in cyclic position control (e.g. 0x000B, "position mode lagless"), not in 0x001B (Reference Book p. 492) |
 | S-0-0108 feedrate override (stored) | 0 % | | `enable()` writes 100 % (`indradrive.cpp:197`) |
-| S-0-0104 Kv, P-0-0040 velocity feedforward, P-0-0099 command smoothing, P-0-0041 average filter | 1.00 (1000/min), 100 %, 0, 0 | | The tracking lag (*Done*: five waves from the page) |
+| S-0-0104 Kv, P-0-0040 velocity feedforward, P-0-0099 command smoothing, P-0-0041 average filter | 1.00 (1000/min), 100 %, 0, 0 | Kv 1.00, P-0-0040 100 % | The tracking lag (*Done*: five waves from the page). In the lagless mode the feedforward cancels Kv's lag error, so the drive's planning of each 20 ms move (speed cap `positioning_velocity_margin` × peak, S-0-0193) is the more likely cause (2026-11-24, not measured) |
 
 ### Procedures
 
@@ -297,6 +332,69 @@ E-stop within reach for every step that can move the slide.
    Ctrl-C cancels the current run and stops the program. Increase stroke and frequency step by
    step, watching the stroke and lag. Keep files under 3 m/s³ jerk (`generate_oscillations`
    warns above it).
+
+### Test 4: speed above 0.3 m/s (passed 2026-11-24)
+
+**Question:** can `max_velocity_rpm` go above 1800 (0.3 m/s, Test 3)? With S-0-0193 = 3 m/s³
+the slide cannot pass about 0.49 m/s inside ±0.2 m (too little travel to accelerate and brake),
+so the test stops at 0.45 m/s. Raising the speed alone adds none of the KC runs of 2026-11-24:
+the five rejected for speed are also above the jerk limit. Checked visually with the mechanic;
+no bags.
+
+**Result (2026-11-24):** levels 1-3 passed without issue and the rejection check at 2700 was
+rejected; the yaml has `max_velocity_rpm: 2700` (0.45 m/s). See *Done*. The steps below are
+kept for a repeat with the load.
+
+**Before the test:**
+- [ ] The ball nut's maximum speed from its datasheet (about 1.0 m/s assumed).
+- [ ] Ask Robert whether the slide and its mounting are fine at 0.45 m/s and ±180 mm.
+- [ ] Brake test (*Procedures*, step 2), E-stop within reach, the wavemaker stopped.
+- [ ] Don't stop or restart the service while the slide moves: Drive Halt has jerk
+  S-0-0349 = 0.1 m/s³ (*Open*).
+
+The installed `oscillator.yaml` is a symlink to `src` since 2026-11-24
+(`colcon build --packages-select oscillator_bringup --symlink-install`, after removing
+`build/oscillator_bringup` and `install/oscillator_bringup`), so a level needs no build.
+
+**Between levels** (on the Pi, the slide at rest):
+
+```bash
+nano ~/ros_ws/src/hydrolab_rigs/oscillator_bringup/config/oscillator.yaml   # vertical: max_velocity_rpm
+sudo systemctl restart oscillator@ladertanken
+```
+
+Reload the page and press *Return to upright*. **Between runs** of a level: *Stop*, then
+*Return to upright*, on the page. Enter the height (= stroke, m) and period; at least 10 periods
+per run.
+
+| Level | `max_velocity_rpm` | Runs, in order (stroke at period) | Peak speed | Peak jerk |
+|---|---|---|---|---|
+| 1 | 1800 (no change) | 0.36 m at 4.0 s (full travel at a tested speed) | 0.28 m/s | 0.7 m/s³ |
+| 2 | 2400 (0.40 m/s) | 0.30 m at 3.0 s, then 0.34 m at 3.0 s | 0.31, 0.36 m/s | 1.4, 1.6 m/s³ |
+| | | Rejection check: 0.36 m at 2.7 s | 0.42 m/s | — |
+| 3 | 2700 (0.45 m/s) | 0.36 m at 2.7 s | 0.42 m/s | 2.3 m/s³ |
+| | | Rejection check: 0.36 m at 2.4 s | 0.47 m/s | — |
+
+Go on to the next run only if the last one passed. A rejection check must show `Goal rejected by
+controller` on the page, nothing moves, and the journal's `rejecting` line names the level's
+limit.
+
+**Pass, for each run:** the drive stays in `AF` (no F-error in IndraWorks or the journal); the
+mechanic sees and hears no new vibration or noise; the slide stops and returns to upright as it
+should.
+
+**If a run fails:** *Stop* (the E-stop for anything mechanical), note what was seen, and go no
+higher. The level before is the result.
+
+**Afterwards:**
+
+```bash
+cd ~/ros_ws/src/hydrolab_rigs && git checkout -- oscillator_bringup/config/oscillator.yaml
+sudo systemctl restart oscillator@ladertanken
+```
+
+Commit the chosen value from the PC, no higher than the highest level that passed, and note
+the result here and in TODO 51.
 
 ### Backups (USB stick `LADERSCHTIC`)
 

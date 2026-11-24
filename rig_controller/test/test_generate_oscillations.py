@@ -79,9 +79,9 @@ def generate(tmp_path, oscillator='vertical', rows=(REGULAR_ROW,), *options):
 # ---------------------------------------------------------------- the oscillators
 
 def test_vertical_limits(vertical):
-    """T8: the speed limit from max_velocity_rpm in the drive's units (1800 x 10 mm/min)."""
+    """T8: the speed limit from max_velocity_rpm in the drive's units (2700 x 10 mm/min)."""
     assert (vertical.min_m, vertical.max_m, vertical.upright_m) == (-0.2, 0.2, 0.0)
-    assert vertical.max_velocity_mps == pytest.approx(0.3)
+    assert vertical.max_velocity_mps == pytest.approx(0.45)
     assert vertical.namespace == '/oscillators/vertical'
 
 
@@ -223,7 +223,7 @@ def test_no_jerk_warning_for_a_skipped_run(tmp_path, capsys):
 # ---------------------------------------------------------------- assemble and files
 
 def test_assemble_skips_a_run_too_fast(vertical):
-    fast = regular(period_s=1.0, stroke_m=0.2)              # peak speed 0.63 m/s > 0.3
+    fast = regular(period_s=1.0, stroke_m=0.2)              # peak speed 0.63 m/s > 0.45
     frames, rows = go.assemble(vertical, [regular(), fast], DT_S, vertical.max_velocity_mps)
     assert [r['status'] for r in rows] == ['', 'skipped']
     assert rows[1]['start_s'] == ''
@@ -271,7 +271,7 @@ def test_record_next_to_the_file(tmp_path):
     assert f'command      generate_oscillations vertical {tmp_path}/m.csv -o {out}' in record
     assert 'oscillator   vertical\n' in record
     assert 'max jerk     3.0 m/s^3 (warning only)' in record
-    assert 'max speed    0.3000 m/s\n' in record
+    assert 'max speed    0.4500 m/s\n' in record
     assert 'water depth' not in record
     assert record.endswith(f'test matrix {tmp_path}/m.csv:\n' + ','.join(HEADER) + '\n'
                            'regular,2.0,0.02,10,,,,,,2,5\n')

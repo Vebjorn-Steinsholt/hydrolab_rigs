@@ -46,7 +46,7 @@ def test_linear_indradrive_placeholder_speed(name):
 def test_vertical():
     limits = rig_limits.load_limits('oscillator', 'vertical', OSCILLATOR)
     assert (limits.min_m, limits.max_m, limits.upright_m) == (-0.2, 0.2, 0.0)
-    assert limits.max_velocity_mps == pytest.approx(0.3)  # 1800 / 6 x 0.001
+    assert limits.max_velocity_mps == pytest.approx(0.45)  # 2700 / 6 x 0.001
     assert limits.max_acceleration_mps2 is None
     assert limits.namespace == '/oscillators/vertical'
 
