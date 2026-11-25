@@ -19,7 +19,8 @@ The chain:
 
 ```text
 HC-SR04 ── Arduino ── USB ── RPi4: wave_probe_node ── Ethernet ── RPi5: probe_gain (gain sketch)
-          echo time         sensor_msgs/Range                     η = −(range − still-water mean)
+          echo time         probe_range, and probe_elevation      zeroes first, then reads η
+                            (η = zero − range, after a zero)
 ```
 
 - **Why ultrasonic first:** it is cheap and needs no analogue electronics. It measures a time,
@@ -79,60 +80,32 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
      RPi4.
    - Connect the Pis by wired Ethernet, not WiFi: WiFi gives latency spikes and lost DDS
      packets.
-7. **η is formed on the RPi5, from the still water before each run.**
-   - η = −(range − mean range over the still-water window), the window `check_still` already
-     uses (`STILL_S`, 10 s).
+7. **η comes from the node's zero service, called before each run** (2026-11-25; until then η
+   was formed in `probe_gain`).
+   - Before each run, `probe_gain` calls `zero_measurement` with `duration_s` = `STILL_S`
+     (10 s), the window `check_still` already uses. The node takes the mean range over still
+     water as the zero, and publishes η = zero − range on `probe_elevation`
+     ([wave_probe_node_sketch.md](wave_probe_node_sketch.md), decision 9).
+   - One zero, taken one way, whether a person zeroes by hand or `probe_gain` does it before a
+     run. That is how the ordinary wave probes are zeroed too.
    - No mount height is needed, and slow changes in water level between runs drop out.
-   - This is done in `probe_gain`, not in this node, so the topic stays a plain distance.
+   - `probe_range` stays a plain distance. The zero lives only in the running node: no yaml,
+     no parameter.
 
 ## Changes
 
-1. **`firmware/hcsr04_probe/hcsr04_probe.ino` (new).**
+1. **`firmware/hcsr04_probe/hcsr04_probe.ino`: done,** flashed to the UNO R4 WiFi (board
+   `arduino:renesas_uno:unor4wifi`, not the AVR core).
    - 20 Hz on a `micros()` schedule; a period skipped in full restarts the schedule instead of
      catching up.
    - A trigger pulse of 10 µs, and `t_us` taken just before it.
    - `pulseIn(ECHO_PIN, HIGH, 30000)`: 0 on timeout, so no 1 s stall.
    - 115200 baud; one line per ping: `seq,t_us,echo_us`.
+   - The header comment says opening the port resets the board. On the R4 WiFi, USB serial
+     goes through its ESP32-S3, so it may not. The node copes either way (it skips the first
+     line); check which `seq` the first line has.
 
-   ```cpp
-   const int TRIG_PIN = 9;
-   const int ECHO_PIN = 10;
-   const unsigned long SERIAL_BAUD = 115200;
-   const unsigned long PERIOD_US = 50000;    // 20 Hz; the datasheet recommends at least 60 ms
-   const unsigned long TIMEOUT_US = 30000;   // longest echo waited for: about 5 m round trip
-   unsigned long next_us = 0;
-   unsigned long seq = 0;
-
-   void setup() {
-     pinMode(TRIG_PIN, OUTPUT);
-     digitalWrite(TRIG_PIN, LOW);
-     pinMode(ECHO_PIN, INPUT);
-     Serial.begin(SERIAL_BAUD);
-     next_us = micros();
-   }
-
-   void loop() {
-     unsigned long now = micros();
-     if ((long)(now - next_us) < 0) return;
-     next_us += PERIOD_US;
-     if ((long)(now - next_us) >= 0) next_us = now + PERIOD_US;   // a whole period behind
-     digitalWrite(TRIG_PIN, LOW);
-     delayMicroseconds(2);
-     unsigned long t_us = micros();
-     digitalWrite(TRIG_PIN, HIGH);
-     delayMicroseconds(10);
-     digitalWrite(TRIG_PIN, LOW);
-     unsigned long echo_us = pulseIn(ECHO_PIN, HIGH, TIMEOUT_US);   // 0 on timeout
-     Serial.print(seq++); Serial.print(',');
-     Serial.print(t_us);  Serial.print(',');
-     Serial.println(echo_us);
-   }
-   ```
-
-   The header comment gives the line format, the range formula and "the reader skips lines
-   until one parses" (opening the port resets the board).
-
-2. **The node: `wave_probe/src/wave_probe_node.py` (new), in its own package `wave_probe`.**
+2. **The node: `wave_probe/src/wave_probe_node.py`, in its own package `wave_probe`: done.**
    Worked out in [wave_probe_node_sketch.md](wave_probe_node_sketch.md).
    - The package is separate so the RPi4 doesn't have to build the drivers that `rig_controller`
      depends on.
@@ -142,9 +115,8 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
    - **Topic:** `probe_range`, in the rig's namespace (`/wavemakers/<pi>/probe_range`) through
      `__ns`, as `soft_stop.sh` does.
 
-3. **`rpi/99-wave-probe.rules` (new).** As `99-linmot-bridge.rules`: `ID_MM_DEVICE_IGNORE`,
-   and the symlink `wave_probe`. Match by `ATTRS{serial}` when the board is an Uno R3
-   (decision 4).
+3. **`rpi/99-wave-probe.rules`: done.** It matches the UNO R4 WiFi (`2341:1002`, serial
+   `F412FA6BF3BC`), as installed on the RPi4 on 2026-11-25.
 
 4. **`rpi/probe@.service` and `rpi/probe.sh` (new).** As `soft_stop@.service` and
    `soft_stop.sh`:

@@ -1,15 +1,16 @@
-# HC-SR04 wave probe: Arduino Uno R3, USB ID 2341:0043, on the probe Pi (RPi4).
+# HC-SR04 wave probe: Arduino UNO R4 WiFi, USB ID 2341:1002, on the probe Pi (RPi4).
+# (Until 2026-11-25 an Uno R3, 2341:0043, serial 55730303137351D031E2.)
 #
-# - ModemManager must not probe it: its AT commands and DTR toggling reset the Uno.
-# - Matched by serial number, not only by USB ID: the LinMot bridge is an Uno R3 too
-#   (99-linmot-bridge.rules), and the two must not take each other's name if they ever end up
-#   on one Pi. A replacement board needs its serial here:
-#     udevadm info -a -n /dev/ttyACM0 | grep -m1 'ATTRS{serial}'
+# - ModemManager must not probe it: its AT commands get in the way of the node and of uploads.
+# - Matched by serial number, not only by USB ID, so it can't take the name of another Arduino
+#   that ends up on the same Pi (the LinMot bridge's rule is 99-linmot-bridge.rules). A
+#   replacement board needs its serial here:
+#     udevadm info -a -n /dev/ttyACM0 | grep -m3 -E 'ATTRS\{(idVendor|idProduct|serial)\}'
 #
 # Install (see ultrasonic_probe_sketch.md, change 3):
 #   sudo cp 99-wave-probe.rules /etc/udev/rules.d/
-#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   sudo udevadm control --reload-rules && sudo udevadm trigger && sudo udevadm settle
 #   ls -l /dev/wave_probe
-ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0043", ATTRS{serial}=="55730303137351D031E2", ENV{ID_MM_DEVICE_IGNORE}="1"
-# The symlink only for the serial port, not for the board's USB device node.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0043", ATTRS{serial}=="55730303137351D031E2", SYMLINK+="wave_probe"
+ATTRS{idVendor}=="2341", ATTRS{idProduct}=="1002", ATTRS{serial}=="F412FA6BF3BC", ENV{ID_MM_DEVICE_IGNORE}="1"
+# The symlink only for the serial port, not for the board's USB or HID (CMSIS-DAP) nodes.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="1002", ATTRS{serial}=="F412FA6BF3BC", SYMLINK+="wave_probe"

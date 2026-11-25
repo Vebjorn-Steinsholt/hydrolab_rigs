@@ -11,6 +11,8 @@ and `probe.sh` do not, so it builds only with `-DBUILD_TESTING=OFF`. The RPi4 (U
 24.04, 192.168.1.170) has ROS 2 Jazzy and runs the node. Both Pis are on ROS domain 1, and the RPi4 follows the RPi5 with chrony
 (2026-11-23). Results so far are under *Check on the bench and the rig*.
 
+**2026-11-25: a zero service is planned, not written** (decision 9, changes 6 and 7, check 7).
+
 Line numbers are as of `master` on 2026-11-23 (`0b8919e`).
 
 ## Problem
@@ -22,7 +24,9 @@ sketch, change 1). Something on the RPi4 has to:
 - turn the Arduino's `micros()` into ROS time, so the RPi5 can line each sample up with its
   setpoint;
 - turn the echo time into metres;
-- survive an unplugged cable or a reset board without a person.
+- survive an unplugged cable or a reset board without a person;
+- on request, take the still-water range as the zero, and publish the surface elevation
+  against it.
 
 **What changes for the user.**
 
@@ -39,6 +43,16 @@ ros2 run wave_probe wave_probe_node --ros-args -r __ns:=/wavemakers/ladertanken 
 [wave_probe_node] 14 % no echo in the last 60 s
 [wave_probe_node] restart at seq 0 (board reset, or 3 lines that did not fit); clock fit restarted
 [wave_probe_node] /dev/wave_probe: device disconnected; retrying every 2 s
+```
+
+```bash
+ros2 service call /wavemakers/ladertanken/zero_measurement \
+    wave_probe_interfaces/srv/ZeroMeasurement "{duration_s: 10.0}"
+```
+
+```text
+[wave_probe_node] zero: 0.2874 m, std 0.5 mm, 200 used, 0 rejected (10 s)
+[wave_probe_node] zero refused: std 6.1 mm > 2.0 mm; water not still? zero stays 0.2874 m
 ```
 
 ### Decisions
@@ -115,9 +129,43 @@ ros2 run wave_probe wave_probe_node --ros-args -r __ns:=/wavemakers/ladertanken 
      dropout.
 
    The QoS is reliable with depth 100 (`KEEP_LAST`, `VOLATILE`).
-8. **The node knows nothing about the rig.** No setpoints, no η, no zero. The namespace puts it
-   under `/wavemakers/<pi>` through `-r __ns:=`, as `soft_stop.sh` does. η is formed on the RPi5
-   (the probe sketch, decision 7).
+8. **The node knows nothing about the rig.** No setpoints. The namespace puts it under
+   `/wavemakers/<pi>` through `-r __ns:=`, as `soft_stop.sh` does. Until 2026-11-25 this also
+   said "no η, no zero", with η formed on the RPi5. Decision 9 replaces that part, and
+   `probe_gain` calls the zero service before each run (the probe sketch's decision 7, changed
+   to match on 2026-11-25).
+9. **A zero service: the mean range over still water is the zero.**
+   - **The interfaces get a package of their own, `wave_probe_interfaces`.** ROS package names
+     can't contain spaces, so the folder `wave_probe/wave_probe interfaces/` has to be renamed
+     before colcon will build it. As its own package, the laptop and `rig_web` can call the
+     service without building the node.
+   - **The zero is a range in metres:** `zero_m`, the mean of the valid ranges over
+     `duration_s`. The elevation is then `elevation = zero_m − range`, positive upwards. That
+     is the probe sketch's `η = −(range − still-water mean)`.
+   - **It is kept in metres, not as an echo time.** The distance to the water is what's fixed,
+     and metres is right as long as `air_temp_c` was correct during the zero. **Set the
+     temperature first, then zero.** A later change of `air_temp_c` changes the ranges but not
+     `zero_m`, so it moves the elevation by `zero_m · Δc/c`: 0.5 mm per °C at 0.29 m.
+   - **Only real echoes go into the mean.** Lines with `echo_us == 0`, or outside
+     `min_range_m`..`max_range_m`, are left out and counted as rejected. If more than
+     `dropout_warn` (10 %) of the lines are rejected, the zero fails.
+   - **A noisy zero is refused.** If the std is above `zero_max_std_m` (default 2 mm, against
+     0.5 mm noise on still water), the water wasn't still. The zero fails and the old one stays.
+   - **Only the service sets the zero.** It is not a parameter and not in the yaml. Zero before
+     each set of waves, as with the ordinary wave probes. A zero carried over from an earlier
+     day, or from a yaml, would hide a change in water level. The node starts with no zero
+     (`zero_m` 0.0) and publishes no elevation until the first successful call. A restart
+     loses the zero. The value is in the service's response and in the log line.
+   - **The elevation goes on a topic of its own, `probe_elevation`, as
+     `wave_probe_interfaces/msg/Elevation`.** `probe_range` stays a plain `Range`, which can't
+     hold a negative value. The elevation has the same stamp as its `probe_range` sample, and is
+     published only while `zero_m` is set. A line with no echo, or out of range, gives `nan`,
+     so the topic keeps its 20 Hz and the subscriber sees the dropout.
+   - **The service waits out `duration_s` in its callback.** The reader thread keeps filling
+     the samples meanwhile. The service has a callback group of its own, and `main` spins a
+     `MultiThreadedExecutor`, so the status timer keeps running during a zero. A second request
+     while one runs is refused, not queued. `duration_s` must be 1–120 s. At 20 Hz, 10 s is
+     200 samples.
 
 ## Before the node
 
@@ -154,473 +202,180 @@ These are setup steps, not code, but the node's stamps need them:
 
 ## Changes
 
-1. **`wave_probe/package.xml` and `wave_probe/CMakeLists.txt` (new).**
-   - Depends on `rclpy`, `sensor_msgs`, `python3-serial`, `python3-numpy`.
-   - Installs `src/wave_probe_node.py` as `wave_probe_node`, and `src/probe_serial.py` next to
-     it (imported).
-   - Installs `config/wave_probe.yaml` to `share/wave_probe/config`.
+**Changes 1–4 are written** (`wave_probe/`, branch `wave-probe`, 5bdbe2b). Their code is in the
+files, not here. What's below is only what the code doesn't say: why it is that way.
 
-2. **`wave_probe/src/probe_serial.py` (new): the pure part.** No ROS, so the tests need nothing
-   else. Four pieces: the line format, the range, the sequence check, and the clock fit.
+1. **`wave_probe/package.xml` and `wave_probe/CMakeLists.txt`: done.**
 
-   **The line and the range.** The regex works on bytes, so line noise that isn't UTF-8 gives
-   `None` and not an exception. `fullmatch` rejects a minus sign, a fourth field, leading text
-   and an empty line. The digit limits and the `WRAP` check reject numbers an `unsigned long`
-   can't hold.
+2. **`wave_probe/src/probe_serial.py`: done.** The pure part: no ROS, so the tests need nothing
+   else. It has the line format, the range, the sequence check (decision 5) and the clock fit
+   (decision 4).
+   - **`parse_line`** matches on bytes, so line noise that isn't UTF-8 gives `None`, not an
+     exception. `fullmatch` rejects a minus sign, a fourth field, leading text and an empty
+     line. The digit limits and the `WRAP` check reject numbers an `unsigned long` can't hold.
+   - **`Sequence`:** only lines that fit become the reference, so one corrupt line costs one
+     line, not two. `t_s` restarts near 0 at each `'first'` and `'reset'`, and the clock fit
+     restarts with it, so the jump doesn't matter.
+   - **`ClockFit`** works on `d = arrival − t_send`, minus the first `d` seen (`d_ref`).
+     `arrival` is ROS time, about 1.8·10⁹ s. Float64 resolves that to 0.24 µs, which is enough,
+     but subtracting `d_ref` keeps the numbers in `polyfit` in ms.
+     - `to_ros` takes any Arduino time, not only a send time. The node passes the time the
+       sound reached the water (decision 3).
+     - No outlier rejection on the minima: a block holds 200 lines, and its lowest delay is
+       close to d₀ unless all 200 were delayed. With 3 ms mean exponential latency the expected
+       minimum is 15 µs above d₀. The `rms` in the status shows it if that ever fails.
+     - A gap in the data (a block with no lines) only skips a block index. The fit is over the
+       blocks there are.
+     - `t_first` sets where blocks start, so the blocks are aligned the same way for a whole
+       run.
 
-   ```python
-   import math
-   import re
-   from collections import deque
-   from dataclasses import dataclass
-
-   import numpy as np
-
-   WRAP = 2**32              # micros() and seq are unsigned long on the Arduino
-   PERIOD_US = 50_000        # the firmware's PERIOD_US (20 Hz)
-   _LINE = re.compile(rb'(\d{1,10}),(\d{1,10}),(\d{1,6})')
-
-
-   @dataclass(frozen=True)
-   class Line:
-       seq: int
-       t_us: int             # micros() just before the trigger
-       echo_us: int          # echo pin high time; 0 = no echo within 30 ms
-
-
-   def parse_line(raw: bytes) -> Line | None:
-       m = _LINE.fullmatch(raw.rstrip(b'\r\n'))
-       if m is None:
-           return None
-       seq, t_us, echo_us = (int(g) for g in m.groups())
-       if seq >= WRAP or t_us >= WRAP:
-           return None
-       return Line(seq, t_us, echo_us)
-
-
-   def speed_of_sound(air_temp_c: float) -> float:
-       return 331.3 + 0.606 * air_temp_c          # m/s, dry air
-
-
-   def range_m(echo_us: int, air_temp_c: float) -> float:
-       if echo_us == 0:
-           return math.inf                        # REP 117: no return
-       return echo_us * 1e-6 * speed_of_sound(air_temp_c) / 2
-   ```
-
-   **The sequence check** (decision 5). `push` gives a `Step` per line, and the node acts on
-   its `kind`. `t_s` is the unwrapped `t_us` in seconds, the Arduino's time of the trigger.
-
-   ```python
-   @dataclass(frozen=True)
-   class Step:
-       kind: str             # 'first' | 'ok' | 'gap' | 'reset' | 'bad'
-       t_s: float            # unwrapped t_us in s; nan for 'bad'
-       lost: int = 0         # lines lost just before this one ('gap' only)
-
-
-   class Sequence:
-       def __init__(self, period_us=PERIOD_US, tol_us=1_000, max_bad=3):
-           self.period_us, self.tol_us, self.max_bad = period_us, tol_us, max_bad
-           self.reset()
-
-       def reset(self):
-           self.prev: Line | None = None    # the last line that fitted: the reference
-           self.wraps = 0                   # times 2**32 has been added to t_us
-           self.bad_run = 0                 # lines in a row that did not fit the reference
-
-       def push(self, line: Line) -> Step:
-           if self.prev is None:
-               return self._start(line, 'first')
-           dseq = line.seq - self.prev.seq
-           if dseq <= 0:
-               return self._start(line, 'reset')           # the board restarted from seq 0
-           dt_us = (line.t_us - self.prev.t_us) % WRAP    # the forward step, across a wrap too
-           if abs(dt_us - dseq * self.period_us) > self.tol_us:
-               self.bad_run += 1
-               if self.bad_run >= self.max_bad:            # the reference was the bad one,
-                   return self._start(line, 'reset')       # or the schedule restarted
-               return Step('bad', math.nan)
-           if line.t_us < self.prev.t_us:
-               self.wraps += 1
-           self.prev, self.bad_run = line, 0
-           t_s = (self.wraps * WRAP + line.t_us) * 1e-6
-           return Step('gap', t_s, dseq - 1) if dseq > 1 else Step('ok', t_s)
-
-       def _start(self, line: Line, kind: str) -> Step:
-           self.reset()
-           self.prev = line
-           return Step(kind, line.t_us * 1e-6)
-   ```
-
-   - Only lines that fit become the reference, so one corrupt line costs one line, not two.
-   - `t_s` restarts near 0 at each `'first'` and `'reset'`. The clock fit restarts with it,
-     so the jump doesn't matter.
-
-   **The clock fit** (decision 4). It works on `d = arrival − t_send`, minus the first `d` seen
-   (`d_ref`). `arrival` is ROS time, about 1.8·10⁹ s. Float64 resolves that to 0.24 µs, which is
-   enough, but subtracting `d_ref` keeps the numbers in `polyfit` in ms.
-
-   ```python
-   class ClockFit:
-       def __init__(self, window_s=300.0, block_s=10.0, latency_floor_s=0.002,
-                    jump_warn_s=0.001):
-           self.block_s = block_s
-           self.latency_floor_s = latency_floor_s
-           self.jump_warn_s = jump_warn_s
-           self.minima = deque(maxlen=max(2, round(window_s / block_s)))
-           self.reset()
-
-       def reset(self):
-           self.minima.clear()       # (t_send, d − d_ref) of each closed block's lowest line
-           self.block = None         # index of the open block, counted from t_first
-           self.low = None           # (t_send, d − d_ref) of the open block's lowest line so far
-           self.t_first = None
-           self.d_ref = None
-           self.eps, self.c = 0.0, 0.0   # lower edge: d − d_ref = c + eps · t_send
-           self.rms = math.nan           # of the block minima about the fitted line
-
-       @property
-       def ready(self) -> bool:
-           return len(self.minima) >= 2
-
-       def add(self, t_send: float, arrival: float) -> float | None:
-           # Returns the shift of the mapped time at t_send if a refit moved it > jump_warn_s.
-           if self.d_ref is None:
-               self.t_first, self.d_ref = t_send, arrival - t_send
-           d = arrival - t_send - self.d_ref
-           k = int((t_send - self.t_first) // self.block_s)
-           jump = None
-           if self.block is not None and k != self.block:   # the open block has closed
-               was_ready = self.ready
-               before = self.to_ros(t_send)
-               self.minima.append(self.low)
-               self.low = None
-               if self.ready:
-                   self._fit()
-                   shift = self.to_ros(t_send) - before
-                   if was_ready and abs(shift) > self.jump_warn_s:
-                       jump = shift
-           self.block = k
-           if self.low is None or d < self.low[1]:
-               self.low = (t_send, d)
-           if not self.ready:                               # warm-up: lowest so far, no slope
-               self.c = min([m[1] for m in self.minima] + [self.low[1]])
-           return jump
-
-       def _fit(self):
-           t, d = np.array(self.minima).T
-           eps, c = np.polyfit(t, d, 1)
-           self.eps, self.c = float(eps), float(c)
-           self.rms = float(np.sqrt(np.mean((d - (c + eps * t)) ** 2)))
-
-       def to_ros(self, t_arduino: float) -> float:
-           return t_arduino + self.d_ref + self.c + self.eps * t_arduino - self.latency_floor_s
-
-       def status(self) -> dict:
-           return dict(ready=self.ready, blocks=len(self.minima),
-                       span_s=len(self.minima) * self.block_s,
-                       eps_ppm=self.eps * 1e6, rms_s=self.rms,
-                       floor_s=self.latency_floor_s)
-   ```
-
-   - `to_ros` takes any Arduino time, not only a send time. The node passes the time the sound
-     reached the water (change 3, `publish`).
-   - Why no outlier rejection on the minima: a block holds 200 lines, and its lowest delay is
-     close to d₀ unless all 200 were delayed. With 3 ms mean exponential latency the expected
-     minimum is 15 µs above d₀. The `rms` in the status shows it if that ever fails.
-   - A gap in the data (a block with no lines) only skips a block index. The fit is over the
-     blocks there are.
-   - `t_first` sets where blocks start, so the blocks are aligned the same way for a whole run.
-
-3. **`wave_probe/src/wave_probe_node.py` (new): the node.**
-
-   **Setup.** The parameters are read once at start, except `air_temp_c` (the callback
-   below). The counters are written only by the reader thread and read by the status timer.
-   They are plain ints, so no lock is needed. The no-echo share keeps a running count next to
-   its deque, because summing a deque while the other thread appends to it can raise
-   `RuntimeError: deque mutated during iteration`.
-
-   ```python
-   import threading
-   import time
-   from collections import deque
-
-   import rclpy
-   import serial
-   from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
-   from rclpy.executors import ExternalShutdownException
-   from rclpy.node import Node
-   from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
-   from rclpy.time import Time
-   from sensor_msgs.msg import Range
-
-   from probe_serial import ClockFit, Sequence, parse_line, range_m
-
-   READ_TIMEOUT_S = 0.5
-   CLOCK_LOG_S = 300.0
-   DROPOUT_LINES = 1200          # 60 s at 20 Hz
-   OPEN_RESET_S = 3.0            # a restart this soon after opening is the Uno's reset
-   AIR_TEMP_RANGE = (-10.0, 50.0)
-
-
-   class WaveProbeNode(Node):
-       def __init__(self):
-           super().__init__('wave_probe_node')
-           p = lambda name, default: self.declare_parameter(name, default).value
-           self.port_name = p('port', '/dev/wave_probe')
-           self.baud = p('baud', 115200)
-           self.frame_id = p('frame_id', 'wp_us1')
-           self.min_range = p('min_range_m', 0.02)
-           self.max_range = p('max_range_m', 4.0)
-           self.fov = p('field_of_view_rad', 0.26)
-           self.reopen_s = p('reopen_s', 2.0)
-           self.dropout_warn = p('dropout_warn', 0.10)
-           # dynamic_typing: `-p air_temp_c:=21` arrives as an int and would otherwise refuse
-           # to start against the float default
-           self.air_temp_c = float(self.declare_parameter(
-               'air_temp_c', 20.0, ParameterDescriptor(dynamic_typing=True)).value)
-           self.clock = ClockFit(p('fit_window_s', 300.0), p('fit_block_s', 10.0),
-                                 p('latency_floor_s', 0.002))
-           self.sequence = Sequence()
-           self.add_on_set_parameters_callback(self.on_set)
-
-           qos = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                            history=HistoryPolicy.KEEP_LAST, depth=100,
-                            durability=DurabilityPolicy.VOLATILE)
-           self.pub = self.create_publisher(Range, 'probe_range', qos)
-
-           self.started = time.monotonic()
-           self.opened = time.monotonic()  # when the port was last opened
-           self.lost_total = 0       # lines lost to seq gaps, since start
-           self.bad_total = 0        # lines that didn't parse or didn't fit
-           self.inf = deque(maxlen=DROPOUT_LINES)
-           self.n_inf = 0            # True values in self.inf
-           self.fit_logged = False
-           self.last_clock_log = time.monotonic()
-           self.create_timer(1.0, self.log_status)
-
-           self.stopping = threading.Event()
-           self.reader = threading.Thread(target=self.read_loop, daemon=True)
-           self.reader.start()
-   ```
-
-   **The reader thread** (decisions 2, 5, 6). The arrival time is taken right after
-   `readline` returns, before anything else. pyserial's `readline` returns what it has when the
-   0.5 s timeout runs out, so a line without `\n` is a timeout. If it had bytes, the rest of
-   that line comes in the next read, and that one is dropped too.
-
-   ```python
-       def read_loop(self):
-           announce = True                   # log the first failed open, not every retry
-           while not self.stopping.is_set():
-               port = self.open_or_wait(announce)
-               if port is None:
-                   return                    # stopping
-               self.opened = time.monotonic()
-               self.sequence.reset()
-               self.clock.reset()
-               self.fit_logged = False
-               skip = True                   # the first line may start mid-line (decision 5)
-               try:
-                   port.reset_input_buffer()
-                   while not self.stopping.is_set():
-                       raw = port.readline()
-                       arrival = self.get_clock().now().nanoseconds * 1e-9
-                       if not raw.endswith(b'\n'):
-                           skip = skip or bool(raw)     # half a line: drop its tail too
-                           continue
-                       if skip:
-                           skip = False
-                           continue
-                       line = parse_line(raw)
-                       if line is None:
-                           self.bad_total += 1
-                           continue
-                       self.on_line(line, arrival)
-               except (serial.SerialException, OSError) as e:
-                   self.get_logger().warning(
-                       f'{self.port_name}: {e}; retrying every {self.reopen_s:g} s')
-                   announce = False
-               finally:
-                   port.close()
-
-       def open_or_wait(self, announce: bool) -> serial.Serial | None:
-           while not self.stopping.is_set():
-               try:
-                   # exclusive: a miniterm left open can't steal lines from the node
-                   return serial.Serial(self.port_name, self.baud,
-                                        timeout=READ_TIMEOUT_S, exclusive=True)
-               except serial.SerialException as e:
-                   if announce:
-                       self.get_logger().warning(
-                           f'{self.port_name}: {e}; retrying every {self.reopen_s:g} s')
-                       announce = False
-               self.stopping.wait(self.reopen_s)
-           return None
-   ```
-
-   **Each line.** The clock fit gets the send time, and only for lines with an echo
-   (decision 4). Every line that fitted the sequence is published, `+inf` included.
-
-   ```python
-       def on_line(self, line, arrival):
-           step = self.sequence.push(line)
-           log = self.get_logger()
-           if step.kind == 'bad':
-               self.bad_total += 1
-               return
-           if step.kind == 'first':
-               log.info(f'{self.port_name} open; first line at seq {line.seq}')
-           elif step.kind == 'reset':
-               self.clock.reset()
-               self.fit_logged = False
-               if time.monotonic() - self.opened < OPEN_RESET_S:
-                   # opening the port resets an Uno; lines from before it can still arrive first
-                   log.info(f'board restarted on open, at seq {line.seq}; clock fit restarted')
-               else:
-                   log.warning(f'restart at seq {line.seq} (board reset, or '
-                               f'{self.sequence.max_bad} lines that did not fit); '
-                               f'clock fit restarted')
-           elif step.kind == 'gap':
-               self.lost_total += step.lost
-               minutes = (time.monotonic() - self.started) / 60
-               log.warning(f'seq {line.seq - step.lost - 1} -> {line.seq}: {step.lost} lines '
-                           f'lost ({self.lost_total} in {minutes:.0f} min)')
-           if line.echo_us > 0:
-               jump = self.clock.add(step.t_s + line.echo_us * 1e-6, arrival)
-               if jump is not None:
-                   log.warning(f'clock refit moved the stamps by {jump * 1e3:+.1f} ms')
-           if self.clock.d_ref is None:        # no echo yet since the (re)start: no clock
-               return
-           is_inf = line.echo_us == 0
-           if len(self.inf) == self.inf.maxlen:
-               self.n_inf -= self.inf[0]
-           self.inf.append(is_inf)
-           self.n_inf += is_inf
-           self.publish(line, step.t_s)
-
-       def publish(self, line, t_trigger):
-           msg = Range()
-           t_water = t_trigger + line.echo_us * 1e-6 / 2          # decision 3
-           msg.header.stamp = Time(nanoseconds=round(self.clock.to_ros(t_water) * 1e9)).to_msg()
-           msg.header.frame_id = self.frame_id
-           msg.radiation_type = Range.ULTRASOUND
-           msg.field_of_view = self.fov
-           msg.min_range, msg.max_range = self.min_range, self.max_range
-           msg.range = range_m(line.echo_us, self.air_temp_c)
-           try:
-               self.pub.publish(msg)
-           except Exception:
-               if self.context.ok():
-                   raise
-               self.stopping.set()  # Ctrl-C shut rclpy down under the thread: stop quietly
-   ```
-
-   - **Ctrl-C:** rclpy's SIGINT handler shuts the context down before `main` gets to
-     `stop()`, and the thread can publish once more in between (`RCLError: publisher's context
-     is invalid`, seen on the RPi4 on 2026-11-23). `publish` stops the thread quietly then, and
+3. **`wave_probe/src/wave_probe_node.py`: done.**
+   - **No locks on the counters.** They are written only by the reader thread and read by the
+     status timer, and they are plain ints. The no-echo share keeps a running count next to
+     its deque, because summing a deque while the other thread appends to it can raise
+     `RuntimeError: deque mutated during iteration`.
+   - **A line without `\n` is a read timeout.** pyserial's `readline` returns what it has when
+     the 0.5 s timeout runs out. If it had bytes, the rest of that line comes in the next read,
+     and that one is dropped too.
+   - **Ctrl-C:** rclpy's SIGINT handler shuts the context down before `main` gets to `stop()`,
+     and the thread can publish once more in between (`RCLError: publisher's context is
+     invalid`, seen on the RPi4 on 2026-11-23). `publish` stops the thread quietly then, and
      still raises while the context is fine. `RCLError` is in a private module, hence
      `except Exception`.
    - **A restart right after opening is logged as info.** The Uno's USB chip still holds lines
      from before the open's reset, so the first lines can be old ones (seq 2854 on the RPi4),
      followed by seq 0 after the bootloader.
-   - Until the first line with an echo after an open or a reset, there is no clock to stamp
-     with (`d_ref` is `None`), so those lines are dropped. On still water that is one line.
+   - **No stamps before the first echo.** Until the first line with an echo after an open or a
+     reset, there is no clock to stamp with (`d_ref` is `None`), so those lines are dropped. On
+     still water that is one line.
+   - **The status timer** (1 s) logs the first fit once, the clock every 5 min, and the no-echo
+     share above `dropout_warn` at most once a minute. Gaps are logged as they come, by the
+     thread.
+   - **`air_temp_c` while running:** the callback checks all parameters first and changes
+     nothing unless all pass. The others are read at start only, so setting them is refused,
+     not silently ignored. A float assignment is atomic, so the next line uses the new value.
 
-   **The status timer** (1 s, in the executor). The gaps are logged as they come, by the thread.
-   The timer logs the first fit once, the clock every 5 min, and the no-echo share when it is
-   above `dropout_warn`, at most once a minute.
-
-   ```python
-       def log_status(self):
-           log = self.get_logger()
-           n = len(self.inf)
-           if n == DROPOUT_LINES and self.n_inf / n > self.dropout_warn:
-               log.warning(f'{100 * self.n_inf / n:.0f} % no echo in the last 60 s',
-                           throttle_duration_sec=60.0)
-           s = self.clock.status()
-           if s['ready'] and not self.fit_logged:
-               self.fit_logged = True
-               log.info(f"clock: first fit, {s['eps_ppm']:+.0f} ppm")
-           if time.monotonic() - self.last_clock_log >= CLOCK_LOG_S:
-               self.last_clock_log = time.monotonic()
-               log.info(f"clock: {s['eps_ppm']:+.0f} ppm, rms {s['rms_s'] * 1e3:.2f} ms over "
-                        f"{s['blocks']} blocks ({s['span_s']:.0f} s), "
-                        f"floor {s['floor_s'] * 1e3:.1f} ms (set); "
-                        f"{self.lost_total} lost, {self.bad_total} bad")
-   ```
-
-   **`air_temp_c` while running.** The callback checks all parameters first and changes
-   nothing unless all pass. The others are read at start only, so setting them is refused,
-   not silently ignored. The thread reads `self.air_temp_c` once per line; a float assignment
-   is atomic, so the next line uses the new value.
-
-   ```python
-       def on_set(self, params):
-           for prm in params:
-               if prm.name != 'air_temp_c':
-                   return SetParametersResult(successful=False,
-                                              reason=f'{prm.name} is read at start only')
-               if not isinstance(prm.value, (int, float)) or not (
-                       AIR_TEMP_RANGE[0] <= prm.value <= AIR_TEMP_RANGE[1]):
-                   return SetParametersResult(successful=False,
-                                              reason=f'air_temp_c must be {AIR_TEMP_RANGE} °C')
-           for prm in params:
-               old, self.air_temp_c = self.air_temp_c, float(prm.value)
-               change = range_m(1, self.air_temp_c) / range_m(1, old) - 1
-               self.get_logger().info(f'air_temp_c {old:g} -> {self.air_temp_c:g} °C '
-                                      f'(ranges {100 * change:+.2f} %)')
-           return SetParametersResult(successful=True)
-   ```
-
-   **Stopping.** The thread sees `stopping` within one read timeout and closes the port in its
-   `finally`. `join` waits a little longer than that.
-
-   ```python
-       def stop(self):
-           self.stopping.set()
-           self.reader.join(timeout=2 * READ_TIMEOUT_S)
-
-
-   def main():
-       rclpy.init()
-       node = WaveProbeNode()
-       try:
-           rclpy.spin(node)
-       except (KeyboardInterrupt, ExternalShutdownException):
-           pass
-       finally:
-           node.stop()
-           node.destroy_node()
-           rclpy.try_shutdown()
-
-
-   if __name__ == '__main__':
-       main()
-   ```
-
-4. **`wave_probe/config/wave_probe.yaml` (new).**
-
-   ```yaml
-   /**/wave_probe_node:
-     ros__parameters:
-       port: /dev/wave_probe
-       baud: 115200
-       frame_id: wp_us1
-       air_temp_c: 20.0
-       min_range_m: 0.02
-       max_range_m: 4.0
-       field_of_view_rad: 0.26
-       fit_window_s: 300.0
-       fit_block_s: 10.0
-       latency_floor_s: 0.002
-       reopen_s: 2.0
-       dropout_warn: 0.10
-   ```
+4. **`wave_probe/config/wave_probe.yaml`: done.**
 
 5. **The probe sketch's change 4 (`rpi/probe.sh`)** runs
    `ros2 run wave_probe wave_probe_node --ros-args -r __ns:=/wavemakers/$RIG_PI --params-file <share>/config/wave_probe.yaml -p air_temp_c:=$AIR_TEMP_C`.
+
+6. **`wave_probe_interfaces/` (new, renamed from `wave_probe/wave_probe interfaces/`)**
+   (decision 9).
+
+   `srv/ZeroMeasurement.srv`:
+
+   ```text
+   # Average the range over duration_s; the mean becomes the zero (still-water range).
+   float64 duration_s        # 1-120 s
+   ---
+   bool success
+   string message            # why it failed, or a one-line summary
+   float64 zero_m            # mean range of the valid echoes
+   float64 std_m
+   uint32 n_used
+   uint32 n_rejected         # no echo, or out of range
+   ```
+
+   `msg/Elevation.msg`:
+
+   ```text
+   std_msgs/Header header    # the stamp of the probe_range sample it comes from
+   float64 elevation_m       # zero_m - range, positive up; nan for no echo or out of range
+   ```
+
+   - `CMakeLists.txt`: `find_package(rosidl_default_generators REQUIRED)`,
+     `find_package(std_msgs REQUIRED)`, and
+     `rosidl_generate_interfaces(${PROJECT_NAME} "srv/ZeroMeasurement.srv" "msg/Elevation.msg" DEPENDENCIES std_msgs)`.
+   - `package.xml`: `<buildtool_depend>rosidl_default_generators</buildtool_depend>`,
+     `<depend>std_msgs</depend>`, `<exec_depend>rosidl_default_runtime</exec_depend>`, and
+     `<member_of_group>rosidl_interface_packages</member_of_group>`.
+   - `wave_probe/package.xml` gets `<exec_depend>wave_probe_interfaces</exec_depend>`. The RPi4
+     builds both: `colcon build --packages-select wave_probe_interfaces wave_probe`, and the
+     `rsync` copies the new folder too.
+
+7. **`wave_probe/src/wave_probe_node.py`: the zero and the elevation** (decision 9).
+
+   **Setup,** in `__init__`:
+
+   ```python
+   from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+   from rclpy.executors import MultiThreadedExecutor
+   from wave_probe_interfaces.msg import Elevation
+   from wave_probe_interfaces.srv import ZeroMeasurement
+
+   ZERO_DURATION_S = (1.0, 120.0)
+
+           self.zero_m = 0.0          # not set; only on_zero sets it, never a parameter
+           self.zero_max_std = p('zero_max_std_m', 0.002)
+           self.zero_lock = threading.Lock()
+           self.collect = None        # list of ranges (None = rejected) while a zero runs
+           self.elev_pub = self.create_publisher(Elevation, 'probe_elevation', qos)
+           self.create_service(ZeroMeasurement, 'zero_measurement', self.on_zero,
+                               callback_group=MutuallyExclusiveCallbackGroup())
+   ```
+
+   **Each line,** at the end of `publish`, with `r = msg.range`:
+
+   ```python
+           valid = line.echo_us > 0 and self.min_range <= r <= self.max_range
+           with self.zero_lock:
+               if self.collect is not None:
+                   self.collect.append(r if valid else None)
+           if self.zero_m > 0.0:
+               elev = Elevation(header=msg.header)
+               elev.elevation_m = self.zero_m - r if valid else math.nan
+               self.elev_pub.publish(elev)
+   ```
+
+   **The service.** It fills `res` and returns it on every path.
+
+   ```python
+       def on_zero(self, req, res):
+           if not ZERO_DURATION_S[0] <= req.duration_s <= ZERO_DURATION_S[1]:
+               return self.zero_failed(res, f'duration_s must be {ZERO_DURATION_S} s')
+           with self.zero_lock:
+               if self.collect is not None:
+                   return self.zero_failed(res, 'a zero is already running')
+               self.collect = []
+           time.sleep(req.duration_s)                    # the reader thread fills collect
+           with self.zero_lock:
+               samples, self.collect = self.collect, None
+           good = [s for s in samples if s is not None]
+           res.n_used, res.n_rejected = len(good), len(samples) - len(good)
+           if not samples:
+               return self.zero_failed(res, 'no samples: is the port open?')
+           if res.n_rejected / len(samples) > self.dropout_warn:
+               return self.zero_failed(res, f'{res.n_rejected} of {len(samples)} rejected')
+           res.zero_m, res.std_m = float(np.mean(good)), float(np.std(good))
+           if res.std_m > self.zero_max_std:
+               return self.zero_failed(res, f'std {res.std_m * 1e3:.1f} mm > '
+                                            f'{self.zero_max_std * 1e3:.1f} mm; water not still?')
+           self.zero_m = res.zero_m        # a float assignment: the reader thread sees it whole
+           res.success = True
+           res.message = (f'zero: {res.zero_m:.4f} m, std {res.std_m * 1e3:.1f} mm, '
+                          f'{res.n_used} used, {res.n_rejected} rejected ({req.duration_s:g} s)')
+           self.get_logger().info(res.message)
+           return res
+
+       def zero_failed(self, res, why):
+           res.success = False
+           res.message = f'zero refused: {why}; zero stays {self.zero_m:.4f} m'
+           self.get_logger().warning(res.message)
+           return res
+   ```
+
+   - **`on_set` is unchanged.** `zero_max_std_m` is start-only like the others.
+   - **`main`** spins a `MultiThreadedExecutor` instead of `rclpy.spin(node)`, so the status
+     timer runs while `on_zero` sleeps:
+
+     ```python
+         executor = MultiThreadedExecutor()
+         executor.add_node(node)
+         executor.spin()
+     ```
+
+   - **`config/wave_probe.yaml`** gets `zero_max_std_m: 0.002`, and no zero.
 
 ## Tests
 
@@ -662,6 +417,17 @@ These are setup steps, not code, but the node's stamps need them:
   - `ros2 param set air_temp_c 30` changes the next ranges by 1.8 %; `air_temp_c 80` and
     `port` are refused. `-p air_temp_c:=21` (an int) starts.
   - SIGINT stops the node within 1 s.
+  - **The zero** (decision 9, change 7):
+    - a constant range: `zero_m` equals it, `std_m` ≈ 0, and the elevation is 0 afterwards;
+    - before any zero, nothing is published on `probe_elevation`;
+    - 20 % `echo_us == 0`: fails, and `zero_m` keeps its old value;
+    - ranges with a 6 mm std: fails as noisy, and `zero_m` keeps its old value;
+    - a second call while one runs: refused;
+    - `duration_s` 0 or 500: refused;
+    - no lines arriving (pty closed): fails with "no samples";
+    - a line with no echo after a zero gives `nan` on `probe_elevation`;
+    - `zero_m` is not a parameter: `ros2 param set zero_m 0.3` is refused;
+    - the status timer keeps firing during a 3 s zero.
 - Docs: `wave_probe/README.md`, a short one: what the node does, its parameters and the line
   format. Link it from the probe sketch, and from `rpi/README.md`'s *The probe Pi*.
 
@@ -686,6 +452,10 @@ These are setup steps, not code, but the node's stamps need them:
    - Press the Arduino's reset button: one `restart at seq 0`, no stamp jump over 5 ms.
 6. **An hour's soak:** no lost lines, and the memory use of the node (`ps -o rss`) is steady.
    This can run alongside the probe sketch's check 3 against WP1.
+7. **The zero, over still water:**
+   - a 10 s zero succeeds with a std below 1 mm, and `probe_elevation` then reads 0 ± 1 mm;
+   - lift the probe 10 mm on its mount: the elevation reads −10 mm ± 1 mm;
+   - stir the water and zero again: refused as noisy, and the old zero stays.
 
 **Results on 2026-11-23,** on the bench: an Uno R3 (serial `55730303137351D031E2`) on the RPi4,
 the HC-SR04 over a still object at about 23 cm, 20 °C set. The bag analysis is from a 10 min
@@ -726,6 +496,8 @@ the HC-SR04 over a still object at about 23 cm, 20 °C set. The bag analysis is 
 - **`latency_floor_s`:** 2 ms is an estimate until Check 3.
 - **Where the air temperature comes from:** a parameter in `/etc/default/probe` for now (the
   probe sketch's *Later* has a DS18B20).
+- **Mean or median for the zero:** the mean, as decided. With the std check, a few spikes can't
+  move it far, but a median would ignore them altogether.
 
 ## Later, not in the first pass
 
