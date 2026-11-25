@@ -96,11 +96,15 @@ behind the wavemaker's drive since 2026-11-10). What to code, and why:
 - [Starting the rigs](STARTUP.md#oscillator-ladertanken), [Done](#done), [Open](#open)
 - [The oscillator drive](#the-oscillator-drive-read-2026-11-06): the parameters
 - [Procedures](#procedures): monitor, brake, test move, dry run, fault timeout, recorded runs
-- [Test 4: speed above 0.3 m/s](#test-4-speed-above-03-ms-passed-2026-11-24)
+- [Test 5: jerk S-0-0193 above 3 m/s³](#test-5-jerk-s-0-0193-above-3-ms³-done-2026-11-25)
+- [Test 6: speed-cap margin](#test-6-speed-cap-margin-done-2026-11-25)
+- [Test 7: speed up to 0.7 m/s](#test-7-speed-up-to-07-ms-planned)
 - [Backups](#backups-usb-stick-laderschtic)
 
 Tests 1-3, the log of 2026-11-09/10 and the PROFIBUS diagnosis (2026-11-06/09) are done; their
-steps, commands and measurements are in `git show c6bba03:COMMISSIONING.md`.
+steps, commands and measurements are in `git show c6bba03:COMMISSIONING.md`. Test 4's steps
+(levels, runs, pass criteria; kept for a repeat with the load) are in
+`git show 824088e:COMMISSIONING.md`.
 
 On the Pi (`ssh ladertanken@ladertanken-rpi.local`), in tmux:
 
@@ -159,9 +163,20 @@ Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
   mechanic, no bags): every run of levels 1-3 (`max_velocity_rpm` 1800, 2400, 2700; up to
   0.36 m at 2.7 s, 0.42 m/s, 2.3 m/s³) without a drive error, new vibration or noise; the
   rejection check at 2700 (0.36 m at 2.4 s, 0.47 m/s) was rejected. The yaml now has 2700
-  (0.45 m/s). Faster goals within ±0.2 m are above the 3 m/s³ jerk limit (S-0-0193), so a
-  higher speed limit gains nothing until the jerk is raised (*Open*). Details:
-  [Test 4](#test-4-speed-above-03-ms-passed-2026-11-24).
+  (0.45 m/s). At the time, faster goals were thought to be capped by the 3 m/s³ jerk
+  limit (S-0-0193); Test 5 showed it has no measurable effect, and Test 7 goes above 0.45 m/s. The installed
+  `oscillator.yaml` is a symlink to `src` since 2026-11-24 (`colcon build --packages-select
+  oscillator_bringup --symlink-install`), so a yaml change needs only a service restart.
+- Test 5, jerk S-0-0193 (done 2026-11-25, naked load, accelerometer): 3000 → 6000 mm/s³ changed
+  nothing measurable in stroke, distortion or vibration (10-100 Hz). At 3000 the stroke depends
+  on the period only (97.6 / 90 / 84 / 72 % at 2 / 1 / 0.8 / 0.6 s), runs above 3 m/s³
+  included. Back at 3000. Details: [Test 5](#test-5-jerk-s-0-0193-above-3-ms³-done-2026-11-25).
+- Test 6, speed-cap margin (done 2026-11-25, bags): 1.2 → 1.5 changed nothing; lag about
+  172 ms at every period. The margin stays 1.2. Details:
+  [Test 6](#test-6-speed-cap-margin-done-2026-11-25).
+- Where the stroke loss is (2026-11-25, oscilloscope, run F): in the drive, between S-0-0258 and
+  S-0-0047 (11 % short and about 140 ms late); the slide follows S-0-0047 exactly. See the lag
+  item in *Open*.
 - Endurance (passed 2026-11-20, naked load, no water; `~/oscillator_sessions/2026-11-20_endurance`
   on the Pi, `Endurance.ASC` on the stick): one `generate_oscillations` file of 30 regular runs,
   each 600 s with 10 s pauses (2.0 s 20 mm, 1.5 s 15 mm, 3.0 s 30 mm, 2.5 s 25 mm, 1.2 s 10 mm,
@@ -186,21 +201,40 @@ Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
   5 and 20 mm at 2 s, then a sweep at a fixed stroke (for example 10 mm at 3, 2, 1.5, 1, 0.8 s; a
   `generate_oscillations` file played with `play_dat`), watching current and torque in IndraWorks.
   All runs so far were unloaded: a baseline, don't tune or compensate from them.
-- [ ] Drive tuning with the drive's owner (Robert, from about 2026-11-23): Kv (S-0-0104 = 1.0),
-  acceleration feedforward, jerk S-0-0193 (3 m/s³) for faster strokes. TODO item 46.
-- [ ] Where the lag comes from, before tuning: in the IndraWorks oscilloscope during 10 mm at 1 s,
+- [ ] Operating mode, with the drive's owner: what in 0x001B makes S-0-0047 smaller and later
+  than S-0-0258 (lag item below), and can the drive run in cyclic position control (0x000B,
+  supported)? That would remove most of the stroke loss and the lag. A change touches P-0-4081,
+  the MGate slave and the IndraDrive driver; first try: switch S-0-0032 in IndraWorks (parameters
+  saved first) and compare the three signals during 10 mm at 2 s. Kv, the feedforward and the
+  jerk limit are ruled out as causes (lag item, Tests 5-6). Replaces "drive tuning" (TODO 46).
+- [x] Where the lag comes from, before tuning: in the IndraWorks oscilloscope during 10 mm at 1 s,
   plot S-0-0258 (target from the bus), S-0-0047 (position command) and S-0-0051 (actual). If
   S-0-0047 already lags S-0-0258, the drive's move planning is the cause (speed cap, S-0-0193); if
   S-0-0051 lags S-0-0047, the loop is (Kv, feedforward, velocity loop). Then the same run with
-  `positioning_velocity_margin` 1.2, 1.5 and 2.0. The cap is also clipped to `max_velocity_rpm`,
-  so goals near 0.45 m/s get almost no margin (0.42 m/s: 1.07 ×).
+  `positioning_velocity_margin` 1.2, 1.5 and 2.0 (done: Test 6, no effect). The cap is also
+  clipped to `max_velocity_rpm`, so goals near the limit get almost no margin.
+  **Done 2026-11-25** (run F, 40 mm at 1 s, naked load; `scope1_scaled.png` on the stick, all
+  three on one scale): S-0-0047 and S-0-0051 lie on top of each other, so the position loop adds
+  nothing. S-0-0047 already has the whole loss: it bottoms out at about −17.8 mm against
+  S-0-0258's −19.9 mm (89 %, as the bag's 89.5 %) and about 140 ms later. The drive's own
+  handling of the cyclic target in 0x001B causes both; the other ~30 ms of the bag's 170 ms are
+  before the drive or the position's age on the way back. Neither jerk (Test 5) nor the speed
+  cap (Test 6) changes it, and S-0-0260 (20 m/s²) is far above the run's 0.8 m/s². Next: ask the
+  drive's owner what in 0x001B smooths the target (P-0-0099 and P-0-0041 read 0); the
+  alternatives are cyclic position control (0x000B with P-0-0187 cubic interpolation, a changed
+  cyclic telegram and driver) or compensating in the motion (stroke × 1/gain, earlier by the
+  lag). 0x000B ("position control, cyclic command, lagless, encoder 1") is in this drive's
+  S-0-0292 as element 3 (read 2026-11-25), so the drive supports it.
 - [ ] With the load: re-run the drive optimisation (P-0-0165…0172) for the velocity loop
   (Kp 0.6 Nm/(rad/s), Tn 3.0 ms today).
 - [ ] Why were the jerk limits set? S-0-0193 = 3 m/s³ and S-0-0349 = 0.1 m/s³ differ from
   Rexroth's default 0 (off), and nothing records who set them or why (mechanics: AT5 belt, ball
-  nut, coupling to the load; or vibration). Ask Robert and whoever commissioned the rig; failing
-  that, check the belt, nut and coupling datasheets. Don't raise either before this is known
-  (2026-11-24).
+  nut, coupling to the load; or vibration). Ask the drive's owner and whoever commissioned the rig; failing
+  that, check the belt, nut and coupling datasheets (2026-11-24). The drive's owner OK'd raising S-0-0193
+  to 6 and 12 m/s³ with vibration measured ([Test 5](#test-5-jerk-s-0-0193-above-3-ms³-done-2026-11-25),
+  2026-11-24); the reason for the limits is still unknown. Leave S-0-0349 as it is. Less urgent
+  since Test 5: S-0-0193 has no measurable effect up to 6 m/s³; Test 7 shows whether it acts at
+  40-110 m/s³.
 - [ ] Drive Halt jerk S-0-0349 = 0.1 m/s³ (the wavemaker has 0, off): check whether
   `IndraDrive::disable()` (Drive Halt, `indradrive.cpp:279`) can start while the slide moves,
   for example a service stop during a run. Measure the stopping distance with one service stop
@@ -237,6 +271,7 @@ Every time: [STARTUP.md, *Oscillator*](STARTUP.md#oscillator-ladertanken).
 | Direction (measured 2026-11-09) | **+ command = down** | The rig uses + = up: `drive_direction: -1` |
 | Scaling check (2026-11-09) | `--move` +5: drive 4.925 mm, sensor 4.940 mm at 1.68 mm/s | `drive_m_per_unit: 0.001` and `drive_velocity_per_unit_per_s: 6.0` confirmed (*First move*) |
 | Power section | Needs mains switched on at the cabinet (button) | Without it the drive stays at A0013 (`bb`) and `enable()` times out waiting for `Ab` |
+| Torque (read 2026-11-25) | Bipolar torque limit 300 %; 100 % = 5.487 Nm (torque/force data scaling); motor peak current 12.4 A eff; motor maximum torque 15 Nm | 300 % = 16.5 Nm, above the motor's 15 Nm, so the motor sets the peak. 100 % (5.487 Nm) is presumably the motor's continuous standstill torque. At 20 mm/rev (screw and belt ≈ 85 % efficient) 1 Nm ≈ 270 N at the slide. The motor's rotor inertia (P-0-0510) and the power section's peak current are not read. Moving load under 50 kg (2026-11-25): at 8.8 m/s² about 5 Nm peak and 3 Nm continuous, at 13.5 m/s² about 7 and 4 Nm (no counterbalance assumed, rotating parts estimated), within 15 and 5.5 Nm |
 
 From the parameter file `Default.par` (IndraWorks export 2026-11-06 10:31), compared with the
 wavemaker's `WMDefault.par`:
@@ -245,7 +280,7 @@ wavemaker's `WMDefault.par`:
 |---|---|---|---|
 | Hardware | FWA MPB-**05**V20, HCS02.1E-W0028, MSK050C-0300 (`-UG1`, brake), CSB01.1**N**-PB | MPB-04V24, HCS03.1E-W0070, MSK071E-0450 (`-UG0`), CSB01.1C-PB | **MPx-05 needs `RX060107.gsd`** (Fail_Safe): the repo's GSD files only cover up to MPB-04. See *PROFIBUS diagnosis log* |
 | P-0-4084 profile | 0xFFFE | 0xFFFE | ✓ |
-| S-0-0032 operating mode | 0x001B | 0x001B | ✓ "Drive controlled interpolation, lagless, encoder 1" (S-0-0292 table, Reference Book p. 218): the drive plans its own move to each cyclic target (S-0-0258), limited by S-0-0259, S-0-0260 and S-0-0193. Lagless: velocity feedforward (P-0-0040) cancels the position loop's lag error |
+| S-0-0032 operating mode | 0x001B | 0x001B | ✓ "Drive controlled interpolation, lagless, encoder 1" (S-0-0292 table, Reference Book p. 218): the drive plans its own move to each cyclic target (S-0-0258), limited by S-0-0259, S-0-0260 and S-0-0193. Lagless: velocity feedforward (P-0-0040) cancels the position loop's lag error. Measured 2026-11-25: this planning makes S-0-0047 11 % short and about 140 ms late at 1 s, the whole stroke loss (lag item in *Open*). 0x000B (cyclic position control) is supported (S-0-0292 element 3) |
 | P-0-4080 inputs | P-0-4078, **S-0-0051**, S-0-0040, S-0-0390 (14 bytes) | P-0-4078, S-0-0386, S-0-0040, S-0-0390 | ✓ length. S-0-0051 is the motor encoder position, the same as S-0-0386 with one encoder |
 | P-0-4081 outputs | P-0-4077, S-0-0258, S-0-0259, S-0-0108 (12 bytes) | the same | ✓ |
 | P-0-4088 master communication config | 0x002A | not in the file (default 0) | Bits 15/14 = 00: commands from PROFIBUS. **Bits 2/1 = 01: a bus failure is only a warning (E4xxx) and the last command is kept** (Reference Book R911297317-08, p. 1335). See *Side findings* |
@@ -260,7 +295,7 @@ wavemaker's `WMDefault.par`:
 | S-0-0055 position polarities | 0x1F (all inverted) | 0x10 | Result: + = down. Left unchanged; the sign is flipped in the controller (`drive_direction: -1`) |
 | S-0-0091 velocity limit | 96 000 mm/min (1.6 m/s) | | — |
 | S-0-0260 positioning acceleration | 20 000 mm/s² (20 m/s²) | 1000 rad/s² | — |
-| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | Expected to limit the oscillation; below 3 m/s³ it did not. Rexroth's default is 0 (filter off, Reference Book p. 189), so 3 m/s³ was set on purpose; why is not known (*Open*). Allows only 6 of the 21 KC runs of 2026-11-24 |
+| S-0-0193 positioning jerk | **3000 mm/s³ (3 m/s³)** | 10 000 rad/s³ | Expected to limit the oscillation, but measured no effect: 3000 → 6000 changed neither stroke nor vibration, also in runs up to 6.1 m/s³ (Test 5, 2026-11-25). Rexroth's default is 0 (filter off, Reference Book p. 189), so 3 m/s³ was set on purpose; why is not known (*Open*). Whether it acts at 40-110 m/s³ is part of Test 7 |
 | P-0-0525 / P-0-0540 holding brake | 0x0004 / **5 Nm** | 0x0000 / 0 Nm | Brake configured; about 1.5 kN at 20 mm/rev |
 | P-0-0119 best possible deceleration | 0 | 0 | On F2/F3/F4 errors: velocity command reset, braking at the torque limit (P-0-0109); the holding brake engages at standstill or after S-0-0273 (Reference Book p. 447). Not yet seen under load (*Open*) |
 | S-0-0273 max drive-off delay | 10 000 ms | | — |
@@ -272,7 +307,7 @@ wavemaker's `WMDefault.par`:
 | S-0-0092, S-0-0082/83, P-0-0109 torque limits | 300 %, ±400 %, 400 % | 400 %, 400 %, 400 % | Not limiting unloaded |
 | P-0-0187 position command processing | 1 (cubic approximation) | 1 | Only used in cyclic position control (e.g. 0x000B, "position mode lagless"), not in 0x001B (Reference Book p. 492) |
 | S-0-0108 feedrate override (stored) | 0 % | | `enable()` writes 100 % (`indradrive.cpp:197`) |
-| S-0-0104 Kv, P-0-0040 velocity feedforward, P-0-0099 command smoothing, P-0-0041 average filter | 1.00 (1000/min), 100 %, 0, 0 | Kv 1.00, P-0-0040 100 % | The tracking lag (*Done*: five waves from the page). In the lagless mode the feedforward cancels Kv's lag error, so the drive's planning of each 20 ms move (speed cap `positioning_velocity_margin` × peak, S-0-0193) is the more likely cause (2026-11-24, not measured) |
+| S-0-0104 Kv, P-0-0040 velocity feedforward, P-0-0099 command smoothing, P-0-0041 average filter | 1.00 (1000/min), 100 %, 0, 0 | Kv 1.00, P-0-0040 100 % | The tracking lag (*Done*: five waves from the page). In the lagless mode the feedforward cancels Kv's lag error, and the oscilloscope confirms it: S-0-0051 follows S-0-0047 exactly, the loss is between S-0-0258 and S-0-0047 (2026-11-25). Neither the speed cap (Test 6) nor S-0-0193 (Test 5) changes it. Kv and the feedforward need no tuning for the lag |
 
 ### Procedures
 
@@ -330,61 +365,227 @@ E-stop within reach for every step that can move the slide.
    ```
 
    Ctrl-C cancels the current run and stops the program. Increase stroke and frequency step by
-   step, watching the stroke and lag. Keep files under 3 m/s³ jerk (`generate_oscillations`
-   warns above it).
+   step, watching the stroke and lag. `generate_oscillations` warns above 3 m/s³ jerk; Test 5
+   showed no effect up to 6 m/s³, so the warning is informational.
 
-### Test 4: speed above 0.3 m/s (passed 2026-11-24)
+### Test 5: jerk S-0-0193 above 3 m/s³ (done 2026-11-25)
 
-**Question:** can `max_velocity_rpm` go above 1800 (0.3 m/s, Test 3)? With S-0-0193 = 3 m/s³
-the slide cannot pass about 0.49 m/s inside ±0.2 m (too little travel to accelerate and brake),
-so the test stops at 0.45 m/s. Raising the speed alone adds none of the KC runs of 2026-11-24:
-the five rejected for speed are also above the jerk limit. Checked visually with the mechanic;
-no bags.
+**Result (2026-11-25):** level 2 (6000 mm/s³) passed and changed nothing measurable: the same
+stroke, distortion and vibration as at 3000. The jerk limit does not limit these runs; the loss
+is in the drive's handling of the target (lag item in *Open*). Level 3 (12 000) dropped: it
+cannot change what 6000 did not. S-0-0193 back to 3000 for Test 6. Whether the limit acts at
+40-110 m/s³ is part of Test 7. The steps below are kept for reference.
 
-**Result (2026-11-24):** levels 1-3 passed without issue and the rejection check at 2700 was
-rejected; the yaml has `max_velocity_rpm: 2700` (0.45 m/s). See *Done*. The steps below are
-kept for a repeat with the load.
+**Question:** can S-0-0193 go from 3 to 6 and 12 m/s³ without adding vibration? A higher limit
+lets more of the KC runs through (6 of 21 at 3 m/s³) and stops the drive rounding off short
+periods: the largest sine stroke is about J·T³/4π³, so 24 / 48 / 97 mm at 1 s and 3 / 6 / 12 mm
+at 0.5 s for 3 / 6 / 12 m/s³. Measured with the 3-axis accelerometer, the position sensor and the
+mechanic, naked load, no water. Stop criterion (email, 2026-11-25): step up gently, from long runs
+with small accelerations, until the measured acceleration or motion becomes clearly choppy or
+non-harmonic. The current experiment keeps today's setup, so nothing waits on this test.
+
+Two effects to tell apart:
+- **The motion's own jerk:** runs above 3 m/s³ get more stroke, so more acceleration; expected.
+- **Rounding off:** above the limit the drive clips the jerk, so the sine loses its shape.
+  This shows as harmonics of the motion (2f-9f, below 10 Hz) in the vertical acceleration
+  and the position, not in 10-100 Hz. Expected in runs E-G at level 1, less at higher levels.
+- **The 20 ms steps:** the jerk filter also smooths the drive's move to each new 50 Hz target
+  (S-0-0258). With less filtering, 50 Hz and its harmonics may reach the slide even in slow runs.
+  Run A (0.17 m/s³) is the control: the motion is the same at every level, so any rise in its
+  vibration comes from the steps, not the motion.
 
 **Before the test:**
-- [ ] The ball nut's maximum speed from its datasheet (about 1.0 m/s assumed).
-- [ ] Ask Robert whether the slide and its mounting are fine at 0.45 m/s and ±180 mm.
-- [ ] Brake test (*Procedures*, step 2), E-stop within reach, the wavemaker stopped.
-- [ ] Don't stop or restart the service while the slide moves: Drive Halt has jerk
-  S-0-0349 = 0.1 m/s³ (*Open*).
+- [x] The drive's owner agrees to 6 and 12 m/s³ (OK given 2026-11-24).
+- [ ] The 3-axis accelerometer on the slide, one axis along the motion (vertical). Glued or
+  screwed, not taped; cable strain-relieved for ±40 mm travel.
+- [ ] catman: the three axes and `6047 Position` in one acquisition at the usual 200 Hz, the
+  amplifier's low-pass filter on (below 100 Hz) so nothing above 100 Hz folds back into the
+  spectrum. That shows 10-100 Hz, including the 50 Hz of the steps; anything higher is left to
+  the mechanic's ear. One file per level.
+- [ ] Save the drive's parameters in IndraWorks (`Jerk_before.par` on the stick); S-0-0193 must
+  read 3000 mm/s³.
+- [ ] Brake test (*Procedures*, step 2), E-stop within reach, the wavemaker stopped, the
+  mechanic present.
+- [ ] Don't stop or restart the service while the slide moves (S-0-0349 = 0.1 m/s³, *Open*).
 
-The installed `oscillator.yaml` is a symlink to `src` since 2026-11-24
-(`colcon build --packages-select oscillator_bringup --symlink-install`, after removing
-`build/oscillator_bringup` and `install/oscillator_bringup`), so a level needs no build.
+**The file** (made once, played unchanged at every level). On the Pi, in
+`~/oscillator_sessions/2026-11-25_jerk/session.csv`:
 
-**Between levels** (on the Pi, the slide at rest):
+```
+kind,period_s,stroke_m,n_periods,sig_stroke_m,tp_s,gamma,duration_s,seed,n_ramp,pause_s
+regular,2.0,0.010,20,,,,,,2,10
+regular,1.0,0.010,20,,,,,,2,10
+regular,1.0,0.020,20,,,,,,2,10
+regular,0.8,0.010,20,,,,,,2,10
+regular,1.0,0.030,20,,,,,,2,10
+regular,1.0,0.040,20,,,,,,2,10
+regular,0.6,0.010,20,,,,,,2,10
+```
 
 ```bash
-nano ~/ros_ws/src/hydrolab_rigs/oscillator_bringup/config/oscillator.yaml   # vertical: max_velocity_rpm
+cd ~/oscillator_sessions/2026-11-25_jerk
+ros2 run rig_controller generate_oscillations vertical session.csv -o jerk_motion --max-jerk-mps3 12
+ros2 run rig_controller play_dat jerk_motion.dat vertical --rig oscillator --dry-run
+```
+
+| Run | Stroke at period | Peak jerk | Note |
+|---|---|---|---|
+| A | 10 mm at 2.0 s | 0.17 m/s³ | Control: the 20 ms steps |
+| B | 10 mm at 1.0 s | 1.3 m/s³ | Below 3 at every level |
+| C | 20 mm at 1.0 s | 2.7 m/s³ | Below 3 at every level |
+| D | 10 mm at 0.8 s | 2.6 m/s³ | Below 3, short period |
+| E | 30 mm at 1.0 s | 4.0 m/s³ | Rounded off at 3 |
+| F | 40 mm at 1.0 s | 5.3 m/s³ | Rounded off at 3 |
+| G | 10 mm at 0.6 s | 6.1 m/s³ | Rounded off at 3 and just above 6 |
+
+The 10 s pauses (drive enabled, at rest) give the noise floor.
+
+**Each level** (the slide at rest, upright):
+1. Write S-0-0193 in IndraWorks (mm/s³) and read it back. If the drive refuses it in operating
+   mode, stop the service first and write it in parameter mode.
+2. Start the catman acquisition, then `play_dat jerk_motion.dat vertical --rig oscillator`
+   (*Procedures*, step 6; record the bag from the PC as well).
+3. After the file: stop catman, note the drive's state and what the mechanic saw and heard.
+
+| Level | S-0-0193 | Runs |
+|---|---|---|
+| 1 | 3000 mm/s³ (no change) | A-G: the baseline |
+| 2 | 6000 mm/s³ | A-G |
+| 3 | 12 000 mm/s³ | A-G, then the KC file if level 3 passed |
+
+**Quick check between levels** (catman, before going higher): for runs A-C compare the
+accelerometer's RMS in 10-100 Hz (the motion's own acceleration is below 10 Hz) and its spectrum
+with level 1. Go on only if the level passed.
+
+**Pass, for each level:**
+- The drive stays in `AF`, no F-error in IndraWorks or the journal.
+- Runs A-D (same motion at every level): RMS in 10-100 Hz on each axis at most 1.5 × level 1,
+  and no new peak in the spectrum (50 Hz or a resonance) more than twice the level-1 value.
+- Runs A-D: the harmonic distortion of the vertical acceleration (2f-9f against f) no higher
+  than at level 1.
+- Runs E-G: stroke closer to the goal and less harmonic distortion than at level 1; vibration
+  noted, judged with the mechanic.
+- The mechanic hears and sees nothing new (knocking from the nut, belt or coupling).
+
+**If a level fails:** *Stop* (the E-stop for anything mechanical), and go no higher. The level
+before is the result. A level that fails only in run A points to the 20 ms steps; tell the drive's owner
+(P-0-0099 command smoothing could take that job instead).
+
+**Afterwards:**
+- Set S-0-0193 to the highest level that passed (or back to 3000), read it back and save the
+  parameters to the stick (`Jerk_after.par`).
+- Per run (ramps skipped): stroke from a sine fit of `6047 Position` (as in the endurance test),
+  harmonic distortion of the vertical acceleration (2f-9f against f), accelerometer RMS in
+  10-100 Hz per axis, and the largest spectral peaks. One table per level here.
+- Update the S-0-0193 row of *The oscillator drive*, the jerk default in
+  `generate_oscillations` (`--max-jerk-mps3`) and README, and TODO 51.
+
+**Results.** Level 1 (3000 mm/s³, 2026-11-25, `jerk_baseline.ASC` on the stick; catman 200 Hz,
+accelerometer Z = vertical, X/Y across). Steady part of each run (ramps and one period skipped);
+stroke and distortion from a fit of harmonics 1-9; RMS from the spectrum, 10-100 Hz.
+
+| Run | Goal | Stroke | Distortion acc Z | Distortion position | RMS 10-100 Hz X / Y / Z [m/s²] | Largest peak Z |
+|---|---|---|---|---|---|---|
+| Pauses | — | — | — | — | 0.033 / 0.033 / 0.033 | 50.0 Hz, 0.04 m/s² |
+| A | 10 mm at 2.0 s | 97.6 % | 3.9 % | 0.62 % | 0.034 / 0.033 / 0.039 | 49.9 Hz, 0.05 |
+| B | 10 mm at 1.0 s | 89.6 % | 2.7 % | 0.76 % | 0.036 / 0.035 / 0.051 | 49.9 Hz, 0.05 |
+| C | 20 mm at 1.0 s | 90.4 % | 2.7 % | 0.47 % | 0.040 / 0.039 / 0.087 | 49.0 Hz, 0.08 |
+| D | 10 mm at 0.8 s | 83.8 % | 2.3 % | 1.15 % | 0.037 / 0.035 / 0.053 | 48.7 Hz, 0.04 |
+| E | 30 mm at 1.0 s | 90.1 % | 2.6 % | 0.51 % | 0.050 / 0.046 / 0.111 | 49.0 Hz, 0.10 |
+| F | 40 mm at 1.0 s | 90.3 % | 2.4 % | 0.35 % | 0.057 / 0.055 / 0.143 | 49.0 Hz, 0.13 |
+| G | 10 mm at 0.6 s | 72.4 % | 4.6 % | 1.54 % | 0.036 / 0.037 / 0.066 | 48.4 Hz, 0.05 |
+
+- **3 m/s³ does not round these runs off.** At 1 s the stroke is 90 % from 10 to 40 mm
+  (1.3-5.3 m/s³), and E and F are no more distorted than B. The stroke depends on the period
+  only (97.6 / 90 / 84 / 72 % at 2 / 1 / 0.8 / 0.6 s): the tracking lag, as in the five waves
+  of *Done*. Expect levels 2-3 to change little in stroke; if they don't, the jerk limit is not
+  what limits short periods, and the lag work (*Open*) is.
+- **Distortion** is mostly the 3rd harmonic (2-4 %), with a 9th in G (2 %).
+- **The 20 ms steps are already visible at 3 m/s³:** in motion, Z has peaks at 49 and 53 Hz,
+  growing with speed (0.05 m/s² in B, 0.13 in F, read behind catman's 20 Hz Butterworth
+  low-pass, not the planned filter below 100 Hz; the real size is larger by an amount that
+  depends on the filter's order, see Test 7 part B). At rest only 50.0 Hz
+  (0.04 m/s²), probably electrical. Watch 49-53 Hz in C, E and F at the next levels.
+- The fundamental of acc Z is 7.5 % below the one from `6047 Position` in every run (sensor
+  tilt is only about 4°): a calibration difference, so compare levels, not absolute values.
+
+Level 2 (6000 mm/s³, 2026-11-25, `level1.ASC` on the stick), against level 1:
+
+| Run | Stroke | Distortion acc Z | RMS 10-100 Hz X / Y / Z [m/s²] | Largest peak Z |
+|---|---|---|---|---|
+| Pauses | — | — | 0.035 / 0.034 / 0.034 | — |
+| A | 97.6 % (=) | 3.7 % | 0.036 / 0.035 / 0.041 | 49.9 Hz, 0.05 |
+| B | 89.6 % (=) | 2.9 % | 0.037 / 0.036 / 0.051 | 49.9 Hz, 0.05 |
+| C | 90.4 % (=) | 2.9 % | 0.040 / 0.039 / 0.087 | 49.0 Hz, 0.08 |
+| D | 83.8 % (=) | 2.7 % | 0.039 / 0.037 / 0.055 | 48.8 Hz, 0.04 |
+| E | 90.1 % (=) | 2.8 % | 0.051 / 0.047 / 0.113 | 49.0 Hz, 0.12 |
+| F | 90.3 % (=) | 2.5 % | 0.060 / 0.058 / 0.143 | 49.0 Hz, 0.15 |
+| G | 72.4 % (=) | 4.8 % | 0.042 / 0.040 / 0.071 | 50.0 Hz, 0.05 |
+
+- **Passed:** RMS at most 1.16 × level 1 (G, X), peaks at most 1.2 × (49 Hz in E and F); the
+  noise floor rose about 5 % as well, so most of it is drift. Drive and mechanic: _note here_.
+- **Nothing else changed:** stroke within 0.02 mm of level 1 in every run, E-G included, and
+  the distortion within 0.4 percentage points. Doubling S-0-0193 does nothing measurable for
+  these runs, so the jerk limit is not what limits short periods; the tracking lag is (*Open*).
+  Level 3 checks only vibration. S-0-0193 read back 6000 in IndraWorks (2026-11-25), so the
+  value was set; open is whether it acts in this mode (S-0-0032 = 0x001B) at all: oscilloscope
+  S-0-0258 against S-0-0047 during run F, looking for rounding at the turning points.
+
+### Test 6: speed-cap margin (done 2026-11-25)
+
+**Result (2026-11-25):** levels 1 (1.2) and 2 (1.5) recorded with bags, no catman. 1.5
+changed nothing: the same stroke within 0.01 mm, the same lag. Level 3 (2.0) dropped. The
+margin stays 1.2; reset the yaml with `git checkout` if it still has 1.5. The steps below are
+kept for reference.
+
+**Question:** does a larger `positioning_velocity_margin` (vertical, 1.2 today) reduce the lag
+without adding hum or overshoot? With every target the controller sends the drive a speed limit
+of the goal's peak speed × the margin, clipped to `max_velocity_rpm`
+(`controller_node.cpp`, `velocity_cap()`). At 1.2 the slide may go only 20 % faster than the
+setpoint at the sine's fastest point, so once behind it has little room to catch up. The
+horizontal oscillator (LinMot) tried this on 2026-10-23: margins 1.2 / 5.0 halved its lag but
+made it hum and overshoot about 3 mm at each end, so it runs 1.0 / 1.0 (`oscillator.yaml`).
+Test 5 ruled out the jerk limit: the stroke is the same at 3 and 6 m/s³. Naked load, no water.
+
+**Before the test:**
+- [x] S-0-0193 back to 3000 mm/s³ in IndraWorks, read back, so only the margin changes.
+- [x] Accelerometer and catman as in Test 5 (3 axes and `6047 Position`, 200 Hz, low-pass on):
+  optional, skipped on 2026-11-25. Without it, hum is judged by the mechanic only; the bag (50 Hz)
+  shows stroke, lag, overshoot and distortion up to 25 Hz, not the 49-53 Hz of the steps.
+- [ ] Bag recorded from the PC for every level (*Procedures*, step 6): setpoint against
+  position gives the lag; catman alone has no setpoint.
+- [ ] Brake test, E-stop within reach, the wavemaker stopped, the mechanic present.
+- [ ] Don't stop or restart the service while the slide moves (S-0-0349, *Open*).
+
+**The file:** `jerk_motion.dat` from Test 5, unchanged (runs A-G). The fastest run, F, peaks at
+0.13 m/s, so even 2.0 × (0.25 m/s) stays below the 0.45 m/s clip.
+
+**Each level** (the slide at rest, upright):
+
+```bash
+nano ~/ros_ws/src/hydrolab_rigs/oscillator_bringup/config/oscillator.yaml   # vertical: positioning_velocity_margin
 sudo systemctl restart oscillator@ladertanken
 ```
 
-Reload the page and press *Return to upright*. **Between runs** of a level: *Stop*, then
-*Return to upright*, on the page. Enter the height (= stroke, m) and period; at least 10 periods
-per run.
+Reload the page, *Return to upright*, start catman and the bag, then
+`play_dat jerk_motion.dat vertical --rig oscillator`.
 
-| Level | `max_velocity_rpm` | Runs, in order (stroke at period) | Peak speed | Peak jerk |
-|---|---|---|---|---|
-| 1 | 1800 (no change) | 0.36 m at 4.0 s (full travel at a tested speed) | 0.28 m/s | 0.7 m/s³ |
-| 2 | 2400 (0.40 m/s) | 0.30 m at 3.0 s, then 0.34 m at 3.0 s | 0.31, 0.36 m/s | 1.4, 1.6 m/s³ |
-| | | Rejection check: 0.36 m at 2.7 s | 0.42 m/s | — |
-| 3 | 2700 (0.45 m/s) | 0.36 m at 2.7 s | 0.42 m/s | 2.3 m/s³ |
-| | | Rejection check: 0.36 m at 2.4 s | 0.47 m/s | — |
+| Level | `positioning_velocity_margin` | Runs |
+|---|---|---|
+| 1 | 1.2 (no change) | A-G: the baseline; Test 5's level 1 can stand in if the setup is unchanged |
+| 2 | 1.5 | A-G |
+| 3 | 2.0 | A-G |
 
-Go on to the next run only if the last one passed. A rejection check must show `Goal rejected by
-controller` on the page, nothing moves, and the journal's `rejecting` line names the level's
-limit.
+**Pass, for each level** (against level 1):
+- The drive stays in `AF`, no F-error.
+- Stroke up, lag down (bag), above all at 0.6-1 s (runs B, D, G).
+- With catman: RMS in 10-100 Hz on each axis at most 1.5 ×, no peak more than 2 × (watch
+  49-53 Hz).
+- Distortion of acc Z and position no higher; no overshoot at the turning points (position
+  beyond the setpoint's extremes in the bag).
+- The mechanic hears and sees nothing new (hum, as on the horizontal oscillator).
 
-**Pass, for each run:** the drive stays in `AF` (no F-error in IndraWorks or the journal); the
-mechanic sees and hears no new vibration or noise; the slide stops and returns to upright as it
-should.
-
-**If a run fails:** *Stop* (the E-stop for anything mechanical), note what was seen, and go no
-higher. The level before is the result.
+**If a level fails:** *Stop*, go no higher; the level before is the result.
 
 **Afterwards:**
 
@@ -393,8 +594,192 @@ cd ~/ros_ws/src/hydrolab_rigs && git checkout -- oscillator_bringup/config/oscil
 sudo systemctl restart oscillator@ladertanken
 ```
 
-Commit the chosen value from the PC, no higher than the highest level that passed, and note
-the result here and in TODO 51.
+Commit the chosen margin from the PC. Note per level: stroke, lag, distortion, RMS and peaks,
+as in Test 5. If no level gains stroke, the lag is in the loop or the drive's interpolation:
+the oscilloscope check and drive tuning in *Open*, or compensation in the motion file.
+
+**Results.** Level 1 (margin 1.2, S-0-0193 = 3000, 2026-11-25, bag `~/bags/margin_1.2` on the
+PC). Setpoint against `oscillator_position`, steady part, fit of harmonics 1-9; overshoot =
+position beyond the setpoint's extremes (negative: none).
+
+| Run | Goal | Stroke | Lag | Distortion position | Overshoot |
+|---|---|---|---|---|---|
+| A | 10 mm at 2.0 s | 97.3 % | 171 ms | 0.34 % | none (−0.14 mm) |
+| B | 10 mm at 1.0 s | 89.5 % | 191 ms | 0.30 % | none |
+| C | 20 mm at 1.0 s | 89.5 % | 172 ms | 0.27 % | none |
+| D | 10 mm at 0.8 s | 83.9 % | 191 ms | 0.16 % | none |
+| E | 30 mm at 1.0 s | 89.5 % | 173 ms | 0.24 % | none |
+| F | 40 mm at 1.0 s | 89.5 % | 173 ms | 0.18 % | none |
+| G | 10 mm at 0.6 s | 72.4 % | 172 ms | 0.49 % | none (−1.34 mm) |
+
+- Stroke matches catman (Test 5 level 1) within 0.3 %.
+- The lag is the same at every period (about 172 ms; B and D 191 ms, one 20 ms cycle more,
+  probably the timing of the messages), while the stroke falls. That fits a pure delay of
+  about 100 ms plus a first-order lag of about 75-90 ms: the lag alone gives 97 / 90 / 72 % at
+  2 / 1 / 0.6 s and 74 ms of phase, the delay the other ~100 ms. A delay costs no stroke; the
+  first-order part does. The margin can only act on the first-order part, so expect the lag to
+  drop by at most about 75 ms. Part of the 100 ms may be the age of the position on the bus,
+  not the slide.
+
+Level 2 (margin 1.5, 2026-11-25, `~/bags/margin_1.5`; the running controller read back 1.5 with
+`ros2 param get`): stroke 97.3 / 89.5 / 89.5 / 83.9 / 89.5 / 89.5 / 72.4 % (A-G), the same as
+level 1 within 0.01 mm; lag 169-173 ms in every run (B and D now 170, so their 191 ms at
+level 1 was message timing); distortion 0.10-0.37 %; no overshoot. **The margin changes
+nothing:** the cap (S-0-0259, sent with every target) is not what limits the slide, nor is the
+jerk (Test 5). What is left is the loop or the drive's interpolation itself, or the position's
+age on the bus: the oscilloscope check in *Open* (S-0-0258, S-0-0047, S-0-0051 during run F)
+decides it. Mechanic: _note here_.
+
+### Test 7: speed up to 0.7 m/s (planned)
+
+**Question:** can the rig do the experiments' largest motion, 55.7 mm amplitude at 0.5 s
+(0.70 m/s, 8.8 m/s², 110 m/s³; asked 2026-11-25)? Two parts in today's drive mode (0x001B):
+A tests the speed with little acceleration, B the experiments' pace. C repeats B after a change
+to cyclic position control (0x000B), if that is decided (lag item in *Open*). Test 4 passed to
+0.45 m/s; `max_velocity_rpm` 4000 (0.67 m/s) also ran on 2026-11-24 without issue, motion not
+recorded. Naked load, no water.
+
+In 0x001B the slide reaches only part of the command at short periods (72 % at 0.6 s, about
+65 % at 0.5 s, extrapolated), so in part B the mechanics see less than the table's numbers; B
+also measures that loss.
+
+**Before the test:**
+- [ ] The drive's owner agrees to go above 0.45 m/s; the mechanic present.
+- [ ] Save the drive's parameters to the stick (`Speed_before.par`). S-0-0193 3000 (or decided
+  otherwise), `positioning_velocity_margin` 1.2.
+- [ ] Recording: **one bag and one catman file per part**, started before the first step and
+  stopped after the last; the steps are found afterwards from the pauses between them.
+  - Bag from the PC (*Procedures*, step 6): `~/bags/speed_A`, `~/bags/speed_B`. Stroke and lag.
+  - catman (accelerometer, 3 axes, and `6047 Position`, 200 Hz, low-pass on, as Test 5): part B
+    only (`speed_B.ASC`); in part A the acceleration is low (under 3 m/s²) and the mechanic
+    covers vibration.
+- [ ] Brake test, E-stop within reach, the wavemaker stopped. Don't stop or restart the service
+  while the slide moves (S-0-0349, *Open*).
+- [ ] `max_velocity_rpm` 4300 (0.717 m/s; 2150 rpm at the motor, below the ball nut's assumed
+  3000). Not 4200: B5 peaks at exactly 0.70 m/s, and the controller adds a 0.01 % margin to
+  its peak-speed check (`wave_trajectory.cpp`, `peak_velocity()`), so 4200 would reject it:
+
+```bash
+nano ~/ros_ws/src/hydrolab_rigs/oscillator_bringup/config/oscillator.yaml   # vertical: max_velocity_rpm 4300
+sudo systemctl restart oscillator@ladertanken
+```
+
+**Each step:** from the page, height (= stroke, m) and period, the number of periods in the
+table; then *Stop* and *Return to upright*, and wait about 10 s at rest before the next step
+(the pause separates the steps in the recordings). Write down the step and the time. Go to the next step only if the step passed.
+
+**Part A: speed at 1.5 s** (little is lost there: the slide reaches about 96 %)
+
+| Step | Stroke at 1.5 s | Commanded speed | Slide (≈96 %) | Acceleration | Periods |
+|---|---|---|---|---|---|
+| A1 | 0.25 m | 0.52 m/s | 0.50 m/s | 2.2 m/s² | 10 |
+| A2 | 0.30 m | 0.63 m/s | 0.60 m/s | 2.6 m/s² | 10 |
+| A3 | 0.334 m | 0.70 m/s | 0.67 m/s | 2.9 m/s² | 10 |
+
+0.334 m stays inside the ±0.2 m travel.
+
+**Results, part A** (2026-11-25, `max_velocity_rpm` 4300, bag `~/bags/speed_A` on the PC; three
+runs, split at the pauses). Setpoint against `oscillator_position`, steady part, fit of
+harmonics 1-9. Slide speed = ω × the position's fundamental (`oscillator_velocity` is the
+command's speed, not the slide's).
+
+| Step | Stroke reached | Slide speed | Lag | Distortion position | Overshoot |
+|---|---|---|---|---|---|
+| A1 | 237.8 mm (95.1 %) | 0.50 m/s | 180 ms | 0.75 % | none (−5.9 mm) |
+| A2 | 285.3 mm (95.1 %) | 0.60 m/s | 182 ms | 0.68 % | none (−7.1 mm) |
+| A3 | 317.2 mm (95.0 %) | 0.66 m/s | 204 ms | 0.76 % | none (−7.9 mm) |
+
+- The stroke is the same at every speed (95.1 %, expected about 96 %): the speed itself costs
+  nothing up to 0.66 m/s at the slide. The loss is the lag seen in Test 6, not a limit.
+- The distortion is almost all the 3rd harmonic (0.67-0.73 %; 2nd under 0.12 %), which means
+  the turning points are rounded evenly. It is higher than in Test 6 (0.16-0.49 % at 10-40 mm),
+  but it doesn't grow with speed.
+- A3's lag (204 ms against 180) is about one 20 ms cycle, probably message timing, as with B
+  and D at Test 6 level 1. A3 ran 12 steady periods, not 10.
+- Drive state, warnings and the mechanic: _note here_.
+
+**Part B: the experiments' pace, 0.5 s**
+
+| Step | Stroke (amplitude) at 0.5 s | Commanded speed | Acceleration | Jerk | Periods |
+|---|---|---|---|---|---|
+| B1 | 0.040 m (20 mm) | 0.25 m/s | 3.2 m/s² | 40 m/s³ | 20 |
+| B2 | 0.060 m (30 mm) | 0.38 m/s | 4.7 m/s² | 60 m/s³ | 20 |
+| B3 | 0.080 m (40 mm) | 0.50 m/s | 6.3 m/s² | 79 m/s³ | 20 |
+| B4 | 0.100 m (50 mm) | 0.63 m/s | 7.9 m/s² | 99 m/s³ | 20 |
+| B5 | 0.1114 m (55.7 mm) | 0.70 m/s | 8.8 m/s² | 110 m/s³ | 20 |
+
+The page takes the stroke in steps of 0.001 m (`rig_web/html/index.html`, `step="0.001"`):
+B5 is 0.112 there (56.0 mm, 0.704 m/s, under the 0.717 m/s of 4300 rpm).
+
+**Results, part B** (2026-11-25, bag `~/bags/speed_B` on the PC, `speed_B.ASC` on the stick;
+catman's clock is about 7.4 min behind the PC, and its position has the opposite sign). B1-B4
+ran; **B5 was refused by the page and skipped**: _reason here_. No *Return to upright* between
+B3 and B4, so B4 blended in from −30.9 mm and has only 9-11 steady periods. Same method as
+part A and Test 5 (catman 200 Hz, **Butterworth low-pass fg = 20 Hz** on all four channels, as
+in Test 5's files). Everything above 20 Hz is attenuated (4th order: 0.25 at 28 Hz, 0.02 at
+52 Hz), so the RMS and peaks below compare steps with each other and with Test 5, but are not
+the slide's real vibration. The stroke and the 3rd harmonic (6 Hz) are unaffected.
+
+| Step | Stroke (bag / catman) | Slide speed / acc. | Lag | Distortion position / acc Z | RMS 10-100 Hz X / Y / Z [m/s²] | Largest peaks |
+|---|---|---|---|---|---|---|
+| Pauses | — | — | — | — | 0.041 / 0.040 / 0.040 | Z 50.0 Hz, 0.03 |
+| B1 | 62.0 / 62.6 % | 0.16 m/s, 2.0 m/s² | 175 ms | 0.51-0.78 % / 5.9 % | 0.079 / 0.077 / 0.199 | Z 52 Hz 0.15; X/Y 28 Hz 0.03 |
+| B2 | 62.1 / 62.6 % | 0.23 m/s, 2.9 m/s² | 177 ms | 0.76-0.82 % / 6.8 % | 0.112 / 0.102 / 0.231 | Z 52 Hz 0.21; X/Y 28 Hz 0.10 |
+| B3 | 61.5 / 62.3 % | 0.31 m/s, 3.9 m/s² | 180 ms | 0.85-1.05 % / 8.2 % | 0.121 / 0.107 / 0.249 | Z 52 Hz 0.23; X/Y 28 Hz 0.12 |
+| B4 | 61.4 / 61.9 % | 0.39 m/s, 4.8 m/s² | 182 ms | 0.96-1.06 % / 9.5 % | 0.124 / 0.105 / 0.278 | Z 52 Hz 0.20; X/Y 28 Hz 0.10 |
+
+- **The slide reaches 62 % at 0.5 s** (not the 65 % extrapolated), the same at every stroke, so
+  the loss is the lag (175-182 ms, as in part A and Test 6), not speed or acceleration. The
+  mechanics saw at most 0.39 m/s and 4.8 m/s² (B4), not the table's 0.63 m/s and 7.9 m/s².
+  B5 would have given about 0.44 m/s and 5.5 m/s². At full size the experiments' motion needs
+  part C (0x000B) or compensation in the motion file (gain 1/0.62 ≈ 1.6 at 0.5 s).
+- **Z:** RMS grows smoothly (0.20 → 0.28). The peaks are 48 and 52 Hz, the 20 ms steps ± 2 Hz,
+  as the 49/53 Hz at 1 s in Test 5. They are level from B2 on. Their real size is unknown: at
+  52 Hz a 4th-order filter passes 2 %, which would put B3's 0.23 at about 10 m/s², and also
+  the 50 Hz at rest at about 1.5 m/s². That is not plausible for a slide at rest, so at least
+  part of the 50 Hz probably enters after the filter.
+- **X and Y: a new line at 28 Hz** (the 14th harmonic of 2 Hz), 0.03 m/s² in B1, 0.10-0.12 from
+  B2, almost none in Z (0.01). It makes X/Y RMS jump from B1 to B2 (0.08 → 0.11), then stays
+  level. That looks like a lateral mode near 28 Hz, excited by a harmonic of the motion. Behind
+  the filter it reads about 3 µm. The real value is 2-15 × that, depending on the filter's order
+  (4th: about 0.4 m/s², 13 µm). Ask the mechanic whether it matches anything they heard. At other
+  periods a different harmonic lands on it.
+- **Distortion of acc Z grows with the acceleration** (5.9 → 9.5 %, mostly the 3rd harmonic,
+  3.7 → 8.0 %): the turning points round off more as the steps grow. The position is still
+  under 1.1 %.
+- The fundamental of acc Z is 7-8 % below ω² × the position, as in Test 5 (calibration).
+- Drive state, warnings and the mechanic: _note here_.
+
+**Pass, for each step:**
+- The drive stays in `AF`, no F-error in IndraWorks or the journal.
+- No torque or current limit warning on the drive (its display or IndraWorks). No oscilloscope:
+  the torque itself is not recorded. With the load under 50 kg the estimate (drive table,
+  *Torque*) is about 5 Nm peak at B5, against 15 Nm.
+- Accelerometer: no new peak in the spectrum; RMS in 10-100 Hz grows smoothly with speed, no
+  jump from one step to the next.
+- The mechanic hears and sees nothing new (belt, nut, coupling, mounting).
+- Recorded: the stroke reached and the distortion of the position (bag): rounding at the
+  turning points shows there as harmonics.
+
+**If a step fails:** *Stop* (the E-stop for anything mechanical), go no higher. The step before
+is the result.
+
+**Part C** (only after a change to 0x000B, with its own parameter backup): part B again from B1.
+If the slide then reaches close to 100 %, B5 is the experiments' motion at full size and the
+mechanics see the full 0.70 m/s and 8.8 m/s² for the first time, so start from B1.
+
+**Afterwards:**
+- Set `max_velocity_rpm` to the highest step that passed (A3 and B5 passed: 4300), or back:
+
+```bash
+cd ~/ros_ws/src/hydrolab_rigs && git checkout -- oscillator_bringup/config/oscillator.yaml
+sudo systemctl restart oscillator@ladertanken
+```
+
+- Note per step: stroke reached, lag, distortion, RMS and peaks in 10-100 Hz (part B), the
+  mechanic's notes. Commit the chosen value from the PC and update TODO 51.
+- The stroke at 0.5 s goes into the gain table (`oscillator_gain_sketch.md`, part C) if the
+  drive stays in 0x001B.
 
 ### Backups (USB stick `LADERSCHTIC`)
 

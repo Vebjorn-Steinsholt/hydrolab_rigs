@@ -585,7 +585,7 @@ ros2 run rig_controller play_dat session_motion.dat vertical --rig oscillator --
 
 | Option | Use |
 |---|---|
-| `--max-jerk-mps3 3.0` | Warn above this peak jerk [m/s³]; default 3.0, the vertical IndraDrive's jerk limit (S-0-0193) |
+| `--max-jerk-mps3 3.0` | Warn above this peak jerk [m/s³]; default 3.0, the vertical IndraDrive's jerk limit (S-0-0193). Informational: the limit had no measurable effect up to 6 m/s³ (COMMISSIONING.md, Test 5) |
 | `--max-velocity-mps` | Override the speed limit from the yaml; the printed `play_dat` command then carries the same value |
 | `--dt 0.01` | Sample interval [s], whole milliseconds; default 0.02 |
 | `--show` / `--no-plot` | Also open the plot in a window / do not write the `.png` |
@@ -601,9 +601,11 @@ ros2 run rig_controller play_dat session_motion.dat vertical --rig oscillator --
 A run outside them is listed as `skipped` with the reason and left out of the file.
 
 **Jerk is a warning, not a skip.** The drive does not refuse a motion with more jerk than its
-limit; it rounds it off, so the slide moves less than asked. The run is kept, its peak jerk is in
-the run table, and the program prints `run N: peak jerk J m/s^3 above 3.0: the drive rounds the
-motion off`. A sine of stroke s and period T has a peak jerk of (s/2)(2π/T)³: 20 mm at 1 s is
+limit. The run is kept, its peak jerk is in the run table, and the program prints `run N: peak
+jerk J m/s^3 above 3.0: the drive rounds the motion off`. Measured on 2026-11-25 (COMMISSIONING.md,
+Test 5), the limit has no effect up to 6 m/s³: runs above it lose no more stroke than runs
+below it at the same period. The vertical oscillator does lose stroke at short periods (90 % at
+1 s, 72 % at 0.6 s), but in the drive's handling of each target, whatever the jerk. A sine of stroke s and period T has a peak jerk of (s/2)(2π/T)³: 20 mm at 1 s is
 2.5 m/s³, 20 mm at 0.8 s is 4.8. Irregular runs reach the limit sooner, because jerk grows with
 f³ and the band reaches 3 fp.
 
