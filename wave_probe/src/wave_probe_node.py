@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
 
 from collections import deque
+import math
 import threading
 import time
 
+import numpy as np
 from probe_serial import ClockFit, parse_line, range_m, Sequence
 from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
 import rclpy
-from rclpy.executors import ExternalShutdownException
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import Range
 import serial
+from wave_probe_interfaces.msg import SurfaceElevation
+from wave_probe_interfaces.srv import ZeroMeasurement
 
 READ_TIMEOUT_S = 0.5
 CLOCK_LOG_S = 300.0
 DROPOUT_LINES = 1200
 OPEN_RESET_S = 3.0          # a restart this soon after opening is the Uno's reset
 AIR_TEMP_RANGE = (-10.0, 50.0)  # Celsius
+ZERO_DURATION = (1.0, 120.0)
 
 
 class WaveProbeNode(Node):
@@ -45,6 +51,7 @@ class WaveProbeNode(Node):
         self.clock = ClockFit(p('fit_window_s', 300.0).double_value,
                               p('fit_block_s', 10.0).double_value,
                               p('latency_floor_s', 0.002).double_value)
+        self.zero_max_std = p('zero_max_std', 0.002).double_value
         self.sequence = Sequence()
         self.add_on_set_parameters_callback(self.on_set)
 
@@ -52,6 +59,13 @@ class WaveProbeNode(Node):
                          history=HistoryPolicy.KEEP_LAST, depth=100,
                          durability=DurabilityPolicy.VOLATILE)
         self.pub = self.create_publisher(Range, 'probe_range', qos)
+        self.elev_pub = self.create_publisher(SurfaceElevation, 'surface_elevation', qos)
+        self.zero = 0.0
+        self.zero_lock = threading.Lock()  # protects self.zero and self.collect
+        self.collect = None         # list of ranges (None = rejected) while a zero runs
+
+        self.create_service(ZeroMeasurement, 'zero_measurement', self.on_zero_measurement,
+                            callback_group=ReentrantCallbackGroup())
 
         self.started = time.monotonic()
         self.opened = time.monotonic()  # when the port was last opened
@@ -160,8 +174,17 @@ class WaveProbeNode(Node):
         msg.field_of_view = self.fov
         msg.min_range, msg.max_range = self.min_range, self.max_range
         msg.range = range_m(line.echo_us, self.air_temp_c)
+        r = msg.range
+        valid = line.echo_us > 0 and self.min_range <= r <= self.max_range
         try:
             self.pub.publish(msg)
+            with self.zero_lock:
+                if self.collect is not None:
+                    self.collect.append(r if valid else None)
+                if self.zero > 0.0:
+                    elev = SurfaceElevation(header=msg.header)
+                    elev.surface_elevation = self.zero - r if valid else math.nan
+                    self.elev_pub.publish(elev)
         except Exception:
             if self.context.ok():
                 raise
@@ -185,6 +208,46 @@ class WaveProbeNode(Node):
                      f'{s["blocks"]} blocks ({s["span_s"]:.0f} s), '
                      f'floor {floor_ms:.1f} ms (set); '
                      f'{self.lost_total} lost, {self.bad_total} bad')
+
+    def on_zero_measurement(self, request, response):
+        lo, hi = ZERO_DURATION
+        if not lo <= request.duration <= hi:
+            return self.zero_failed(response, f'duration must be between {lo:g} and {hi:g} s')
+        with self.zero_lock:
+            if self.collect is not None:
+                return self.zero_failed(response, 'a zero measurement is already running')
+            self.collect = []
+        time.sleep(request.duration)
+        with self.zero_lock:
+            samples, self.collect = self.collect, None
+        good = [s for s in samples if s is not None]
+        response.num_samples = len(good)
+        response.num_rejected_samples = len(samples) - len(good)
+        if not samples:
+            return self.zero_failed(response, 'no samples: is the port open?')
+        if response.num_rejected_samples / len(samples) > self.dropout_warn:
+            return self.zero_failed(
+                response, f'{response.num_rejected_samples} of {len(samples)} samples rejected')
+        response.zero_measurement, response.std = float(np.mean(good)), float(np.std(good))
+        if response.std > self.zero_max_std:
+            return self.zero_failed(
+                response, f'std {response.std * 1e3:.1f} mm > '
+                          f'{self.zero_max_std * 1e3:.1f} mm; water not still?')
+        self.zero = response.zero_measurement
+        response.success = True
+        response.message = (f'zero: {response.zero_measurement:.4f} m, '
+                            f'std {response.std * 1e3:.1f} mm, '
+                            f'{response.num_samples} used, '
+                            f'{response.num_rejected_samples} rejected '
+                            f'({request.duration:g} s)')
+        self.get_logger().info(response.message)
+        return response
+
+    def zero_failed(self, response, reason):
+        response.success = False
+        response.message = f'zero refused: {reason}; zero stays {self.zero:.4f} m'
+        self.get_logger().warning(response.message)
+        return response
 
     def on_set(self, params):
         for param in params:
@@ -211,8 +274,10 @@ class WaveProbeNode(Node):
 def main():
     rclpy.init()
     node = WaveProbeNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:

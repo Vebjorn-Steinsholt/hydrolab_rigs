@@ -12,3 +12,4 @@
     latency_floor_s: 0.002
     reopen_s: 2.0
     dropout_warn: 0.10
+    zero_max_std: 0.002

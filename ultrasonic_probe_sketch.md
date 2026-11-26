@@ -19,7 +19,7 @@ The chain:
 
 ```text
 HC-SR04 ── Arduino ── USB ── RPi4: wave_probe_node ── Ethernet ── RPi5: probe_gain (gain sketch)
-          echo time         probe_range, and probe_elevation      zeroes first, then reads η
+          echo time         probe_range, and surface_elevation    zeroes first, then reads η
                             (η = zero − range, after a zero)
 ```
 
@@ -82,9 +82,9 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
      packets.
 7. **η comes from the node's zero service, called before each run** (2026-11-25; until then η
    was formed in `probe_gain`).
-   - Before each run, `probe_gain` calls `zero_measurement` with `duration_s` = `STILL_S`
+   - Before each run, `probe_gain` calls `zero_measurement` with `duration` = `STILL_S`
      (10 s), the window `check_still` already uses. The node takes the mean range over still
-     water as the zero, and publishes η = zero − range on `probe_elevation`
+     water as the zero, and publishes η = zero − range on `surface_elevation`
      ([wave_probe_node_sketch.md](wave_probe_node_sketch.md), decision 9).
    - One zero, taken one way, whether a person zeroes by hand or `probe_gain` does it before a
      run. That is how the ordinary wave probes are zeroed too.

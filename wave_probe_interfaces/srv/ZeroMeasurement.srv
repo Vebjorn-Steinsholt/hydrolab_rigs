@@ -1,0 +1,9 @@
+# Take the average of the range measurements to determine the zero measurement of sensor.
+float64 duration # The duration of the measurement in seconds.
+---
+bool success
+string message
+float64 zero_measurement # The calculated zero measurement value.
+float64 std
+uint32 num_samples # The number of samples used to calculate the zero measurement.
+uint32 num_rejected_samples # The number of samples that were rejected during the calculation of the zero measurement.

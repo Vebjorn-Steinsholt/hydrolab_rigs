@@ -178,8 +178,8 @@ print the same table.
      `transfer_function.frf` on the setpoint and η, resampled onto one time base.
 
    **The probe** is the HC-SR04 on the RPi4 ([ultrasonic_probe_sketch.md](ultrasonic_probe_sketch.md)).
-   Before each goal the node calls `/wavemakers/<pi>/zero_measurement` with `duration_s` =
-   `STILL_S`, then reads η from `/wavemakers/<pi>/probe_elevation` (the probe sketch's decision
+   Before each goal the node calls `/wavemakers/<pi>/zero_measurement` with `duration` =
+   `STILL_S`, then reads η from `/wavemakers/<pi>/surface_elevation` (the probe sketch's decision
    7; [wave_probe_node_sketch.md](wave_probe_node_sketch.md), decision 9). A refused zero
    (water not still, or too many dropouts) rejects the goal, as `check_still` does.
 
@@ -195,7 +195,7 @@ print the same table.
    moved to `motion_files.py` so a node doesn't import an analysis script.
 
    **Rejects** follow `transfer_function`: `check_still` before the goal, coherence below
-   `COHERENCE_MIN`, more than 10 % probe dropouts (`nan` on `probe_elevation`, or gaps over 3
+   `COHERENCE_MIN`, more than 10 % probe dropouts (`nan` on `surface_elevation`, or gaps over 3
    samples), and a fit rms above 5 % for regular goals.
 
 4. **Stage 2: drive tracking live (no probe needed).** The same node fits setpoint → encoder
