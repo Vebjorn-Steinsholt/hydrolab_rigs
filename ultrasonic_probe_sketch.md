@@ -165,6 +165,11 @@ ros2 topic hz /wavemakers/ladertanken/probe_range          # about 20 Hz
 4. **Where it stops working.** Increase steepness at one period, for example 1.5 s at 1/60,
    1/40 and 1/28 (the series the gain sketch's *Later* wants). Note the steepness at which
    dropouts pass 10 %. Above that, use WP1 or the ADC.
+   - At each steepness, also fit η at the commanded ω, 2ω and 3ω by linear least squares over
+     the finite samples only (the gain sketch, change 3, *Regular goals*). Compare H with WP1's
+     and log the 2ω/ω ratio for both probes. If the HC-SR04's H falls below WP1's while its
+     dropouts are still under 10 %, the echoes are lost at the crests or troughs, not at
+     random, and the probe stops working at a lower steepness than the dropout share says.
 
 ## Open
 

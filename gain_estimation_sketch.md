@@ -172,8 +172,43 @@ print the same table.
    - **The command** comes from `<rig>_setpoint`, published at `controller_node.cpp:1344`. It is
      `std_msgs/Float64` with no stamp, so add a stamped `rig_interfaces/msg/Setpoint.msg`
      (header, setpoint, position) published next to it in the same loop.
+   - **The goal** comes from a new latched topic `<rig>_goal`, published by the controller,
+     since it is the only node that sees every goal, whoever sent it. Today no topic carries
+     the goal: the web page's `period` and `height` are unstamped `Float64`s and reach only the
+     bridge, and `play_dat` sends only `positions` and `sample_interval`
+     (`play_dat.py:338`), so a file's periods exist only in its run table.
+     - **`rig_interfaces/msg/Goal.msg` (new):** `std_msgs/Header header` (stamped when
+       `execute_goal` starts, `controller_node.cpp:1235`), `string kind` (`regular` or
+       `positions`), `float64 height`, `float64 period`, `float64 sample_interval`,
+       `uint32 n_positions`, `string source`.
+     - **`MoveRig.action` gains `string source`** in the goal, left empty by old clients.
+       `play_dat` fills it with the file and run (`check3.dat run 2`), and the bridge with
+       `web`. The controller copies it into `Goal.msg` unchanged.
+     - **Published once per goal,** next to the setpoint publishers
+       (`controller_node.cpp:596`), with QoS reliable, transient local and depth 1, so a node
+       started mid-goal still gets the goal that is running.
+     - **`probe_gain` takes ω** from `period` for a regular goal. For a `positions` goal it
+       reads the run table row named by `source`: `period_s` for a regular run inside a
+       file, `peak_period_s` and the band for an irregular one. A `positions` goal with an
+       empty `source` is logged and skipped.
+     - Considered and not chosen: reading the run table for file goals and the bridge's
+       `<rig>_state` text for web goals. That needs no controller change, but it is two
+       sources, and parsing a text string breaks when its wording changes.
    - **Regular goals:** the three-parameter sine fit at ω gives H. Use RLS, so a live value can
      be logged during the run. g = gain_used × H_meas / H_target.
+     - **Linear, at the commanded ω:** η ≈ a sin ωt + b cos ωt + c, solved by least squares
+       (`np.linalg.lstsq`, or RLS live); H = 2√(a² + b²). Not `scipy.optimize.curve_fit` with ω
+       free: that is non-linear, needs a start guess and can stop at a wrong minimum, and ω is
+       known anyway.
+     - **Dropouts are left out, not filled:** the fit takes only the finite samples at their
+       stamps, so no grid and no interpolation are needed. The FFT path can't do that.
+     - **Add 2ω and 3ω terms** (sin and cos each). H stays the ω term. The ratio
+       √(a₂² + b₂²) / √(a² + b²) is logged per goal as the run's nonlinearity, the amplitude
+       dependence that [drive_correction_sketch.md](drive_correction_sketch.md) names under
+       *Problem*.
+     - **The fit rms** in *Rejects* is the rms of the residual after all terms, over the
+       ω-term amplitude H/2. Above 5 %, the wave isn't a clean regular wave at the probe
+       (reflections, a cross mode, or the probe losing echoes).
    - **File goals (irregular):** at the end of the clean window, the node calls
      `transfer_function.frf` on the setpoint and η, resampled onto one time base.
 
